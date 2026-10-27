@@ -1,0 +1,108 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  runtime-unit:
+    name: runtime unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: runtime
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # Unit tests block network sockets in tests/conftest.py.
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: "0.13.5"
+          working-directory: runtime
+      - run: uv run --frozen pytest tests/unit -q
+
+  cli-unit:
+    name: cli unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        working-directory: clients/cli
+    steps:
+      - uses: actions/checkout@v7.0.1
+      # No test opens a socket: a fake API answers every request (tests/conftest.py).
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: "0.13.5"
+          working-directory: clients/cli
+      - run: uv run --frozen pytest -q
+
+  web:
+    name: web checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: clients/web
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/setup-node@v7.1.0
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: clients/web/package.json
+      - run: bun install --frozen-lockfile
+      - run: bun run lint
+      - run: bun run test
+      - run: bun run build
+
+  secrets:
+    name: secret scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      # Scan every commit reachable from the checked-out push or PR merge commit.
+      - name: Scan Git history with Gitleaks
+        run: >-
+          docker run --rm --user "$(id -u):$(id -g)"
+          -v "$PWD:/repo:ro"
+          ghcr.io/gitleaks/gitleaks:v8.30.1
+          git /repo --log-opts=HEAD --redact --no-banner
+
+  runtime-audit:
+    name: runtime dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: astral-sh/setup-uv@v10.3.2
+        with:
+          version: "0.13.5"
+          working-directory: runtime
+      - name: Audit locked Python dependencies
+        working-directory: runtime
+        run: uv audit --locked
+
+  web-audit:
+    name: web dependency audit
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: oven-sh/setup-bun@v2.2.0
+        with:
+          bun-version-file: clients/web/package.json
+      - name: Audit locked web dependencies
+        working-directory: clients/web
+        run: bun audit

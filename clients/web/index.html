@@ -1,0 +1,38 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <title>Computer Use</title>
+    <!-- Light or dark and that mode's theme colors before the first paint, as src/lib/appearance.ts sets them, so the
+      page never flashes other colors. With none kept, or one that isn't three colors, index.css's default shows. -->
+    <script>
+      try {
+        var mode = localStorage.getItem("mode")
+      } catch (error) {}
+      mode =
+        mode === "light" || mode === "dark"
+          ? mode
+          : matchMedia("(prefers-color-scheme: dark)").matches
+            ? "dark"
+            : "light"
+      document.documentElement.dataset.mode = mode
+      try {
+        var theme = JSON.parse(localStorage.getItem("theme-" + mode) || "null")
+        ;["surface", "ink", "accent"].forEach(function (role) {
+          if (/^#[0-9a-f]{6}$/.test(theme[role]))
+            document.documentElement.style.setProperty(
+              "--theme-" + role,
+              theme[role]
+            )
+        })
+      } catch (error) {}
+    </script>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>

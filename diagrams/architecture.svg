@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 850" width="960" height="850" role="img" aria-label="Architecture: the web UI and the CLI talk to the runtime container, through a sign-in proxy if one is set up, where sign-in names the user before the API server; its agents call the model APIs, run code in the code-runner sandbox and operate the Windows VM over RDP, and each user's runs are kept on the data volume">
+<style>
+  svg { --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #59636e; --node: #f6f8fa; --group: #f6f8fa80; --border: #d1d9e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif }
+  @media (prefers-color-scheme: dark) {
+    svg { --bg: #0d1117; --fg: #f0f6fc; --muted: #9198a1; --line: #9198a1; --node: #151b23; --group: #151b2380; --border: #3d444d }
+  }
+  .bg { fill: var(--bg) }
+  .group { fill: var(--group); stroke: var(--border) }
+  .isolated { fill: none; stroke: var(--muted); stroke-dasharray: 5 4 }
+  .node { fill: var(--node); stroke: var(--border) }
+  .name { fill: var(--fg); font-size: 14px; text-anchor: middle; dominant-baseline: central }
+  .title { fill: var(--muted); font-size: 13px }
+  .note { fill: var(--muted); font-size: 12px }
+  .flow { fill: var(--fg); font-size: 12px }
+  .edge { stroke: var(--line); stroke-width: 1.2; fill: none; marker-end: url(#to) }
+  .head { fill: var(--line) }
+</style>
+<defs>
+  <marker id="to" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path class="head" d="M0,0.5 L8,4 L0,7.5 Z"/></marker>
+  <marker id="from" viewBox="0 0 8 8" refX="1" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path class="head" d="M8,0.5 L0,4 L8,7.5 Z"/></marker>
+</defs>
+<rect class="bg" width="960" height="850"/>
+<rect class="group" x="380" y="16" width="180" height="90" rx="8"/>
+<text class="title" x="394" y="38">Browser</text>
+<rect class="isolated" x="140" y="150" width="520" height="56" rx="8"/>
+<text class="title" x="520" y="172">Sign-in proxy</text>
+<text class="note" x="520" y="190">optional</text>
+<rect class="group" x="300" y="230" width="650" height="480" rx="8"/>
+<text class="title" x="836" y="252">Host machine</text>
+<rect class="group" x="320" y="260" width="290" height="430" rx="8"/>
+<text class="title" x="334" y="282">runtime container</text>
+<rect class="isolated" x="690" y="435" width="240" height="120" rx="8"/>
+<text class="title" x="704" y="457">code-runner container</text>
+<text class="note" x="704" y="475">no network, no secrets</text>
+<rect class="isolated" x="220" y="730" width="380" height="104" rx="8"/>
+<text class="title" x="234" y="752">Windows VM</text>
+<text class="note" x="234" y="770">one per user, on a hypervisor</text>
+<rect class="node" x="400" y="55" width="140" height="42" rx="6"/>
+<text class="name" x="470" y="76">Web UI</text>
+<rect class="group" x="140" y="16" width="160" height="90" rx="8"/>
+<text class="title" x="154" y="38">Terminal</text>
+<rect class="node" x="160" y="55" width="120" height="42" rx="6"/>
+<text class="name" x="220" y="76">CLI</text>
+<path class="edge" style="marker-start: url(#from)" d="M220,97 L220,310 L353,310"/>
+<text class="flow" x="107" y="128">messages, events</text>
+<rect class="node" x="355" y="289" width="230" height="42" rx="6"/>
+<text class="name" x="470" y="310">Sign-in</text>
+<rect class="node" x="355" y="369" width="230" height="42" rx="6"/>
+<text class="name" x="470" y="390">API server</text>
+<rect class="node" x="355" y="489" width="230" height="42" rx="6"/>
+<text class="name" x="470" y="510">Agents</text>
+<rect class="node" x="355" y="609" width="230" height="42" rx="6"/>
+<text class="name" x="470" y="630">Computer</text>
+<rect class="node" x="730" y="489" width="160" height="42" rx="6"/>
+<text class="name" x="810" y="510">Sandbox</text>
+<rect class="isolated" x="715" y="585" width="215" height="90" rx="8"/>
+<text class="title" x="729" y="607">data volume</text>
+<text class="note" x="729" y="625">each user's runs, desktop locks</text>
+<rect class="node" x="30" y="489" width="130" height="42" rx="6"/>
+<text class="name" x="95" y="510">Model APIs</text>
+<rect class="node" x="385" y="780" width="170" height="42" rx="6"/>
+<text class="name" x="470" y="801">Windows desktop</text>
+<path class="edge" d="M463,97 L463,289"/>
+<text class="flow" x="260.7" y="128">messages, approvals, takeover</text>
+<path class="edge" d="M477,289 L477,97"/>
+<text class="flow" x="485" y="128">events (SSE), live view (WebRTC)</text>
+<path class="edge" d="M463,331 L463,369"/>
+<text class="flow" x="366" y="354">messages, user</text>
+<path class="edge" d="M477,369 L477,331"/>
+<text class="flow" x="485" y="354">events</text>
+<path class="edge" d="M463,411 L463,489"/>
+<text class="flow" x="401.4" y="454">messages</text>
+<path class="edge" d="M477,489 L477,411"/>
+<text class="flow" x="485" y="454">events</text>
+<path class="edge" d="M463,531 L463,609"/>
+<text class="flow" x="374.6" y="574">clicks, keys</text>
+<path class="edge" d="M477,609 L477,531"/>
+<text class="flow" x="485" y="574">screenshots</text>
+<path class="edge" d="M463,651 L463,780"/>
+<text class="flow" x="381.3" y="674">input (RDP)</text>
+<path class="edge" d="M477,780 L477,651"/>
+<text class="flow" x="485" y="674">screen (RDP)</text>
+<path class="edge" d="M610,623 L715,623"/>
+<text class="flow" x="643" y="617">writes</text>
+<path class="edge" d="M715,637 L610,637"/>
+<text class="flow" x="645" y="652">reads</text>
+<path class="edge" d="M580,503 L730,503"/>
+<text class="flow" x="636.6" y="497">code</text>
+<path class="edge" d="M730,517 L580,517"/>
+<text class="flow" x="629.9" y="532">output</text>
+<path class="edge" d="M160,503 L360,503"/>
+<text class="flow" x="175.4" y="497">replies, actions</text>
+<path class="edge" d="M360,517 L160,517"/>
+<text class="flow" x="162" y="532">prompts, screenshots</text>
+</svg>

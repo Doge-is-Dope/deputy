@@ -1,0 +1,4 @@
+#!/bin/sh
+# The eval's command line, from anywhere: eval/ev run 11 14, eval/ev report, ... (see README.md)
+here=$(cd "$(dirname "$0")" && pwd)
+exec "$here/../runtime/.venv/bin/python" "$here/eval.py" "$@"

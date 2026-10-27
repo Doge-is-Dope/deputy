@@ -1,0 +1,16 @@
+[
+  { "type": "start", "v": 4, "run": "example", "thread": "example", "goal": "Open the report", "computer": true, "time": 100 },
+  { "type": "note", "code": "goal", "text": "Goal: Open the report", "time": 100 },
+  { "type": "model", "agent": "main", "text": "I will open it.", "tool_calls": [{ "name": "computer_use", "args": { "task": "Open the report" } }], "time": 101 },
+  { "type": "task", "state": "started", "id": "t1", "tool": "computer_use", "brief": "Open the report", "title": "Open the report", "time": 102 },
+  { "type": "action", "agent": "main", "n": 1, "id": "handoff", "tool": "computer_use", "args": { "task": "Open the report" }, "status": "success", "result": "Task started.", "reason": null, "screenshot": null, "time": 102 },
+  { "type": "model", "text": "Open the report window.", "tool_calls": [{ "name": "left_click", "args": { "coordinate": [50, 60] } }], "task": "t1", "time": 103 },
+  { "type": "action", "n": 1, "id": "click-1", "tool": "left_click", "args": { "coordinate": [50, 60] }, "status": "error", "result": "The screen moved; decide again.", "reason": "screenChanged", "screenshot": "001-left_click.png", "task": "t1", "time": 104 },
+  { "type": "note", "code": "userControl", "text": "Desktop paused.", "task": "t1", "time": 105 },
+  { "type": "note", "code": "controlReturned", "data": { "seconds": 4 }, "text": "Desktop resumed.", "task": "t1", "time": 109 },
+  { "type": "model", "text": "The report is open.", "tool_calls": [], "task": "t1", "time": 110 },
+  { "type": "task", "state": "ended", "id": "t1", "tool": "computer_use", "brief": "Open the report", "title": "Open the report", "time": 110 },
+  { "type": "model", "agent": "main", "text": "The report is open.", "tool_calls": [], "time": 111 },
+  { "type": "note", "code": "runFinished", "text": "Finished after 11s.", "time": 111 },
+  { "type": "end", "stop_reason": "replied", "summary": "The report is open.", "time": 111 }
+]

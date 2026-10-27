@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+.venv/
+.pytest_cache/
+
+# Local environment files at any depth; keep credential-free examples trackable
+.env
+.env.*
+!.env.example
+!.env.*.example
+
+# macOS
+.DS_Store
+
+# Docs, research notes and reports stay local
+docs/
+
+# Local Claude Code preview config
+.claude/launch.json

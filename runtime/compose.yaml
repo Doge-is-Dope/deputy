@@ -1,0 +1,68 @@
+# RDP/runtime and isolated code runner. Configuration: .env (see .env.example).
+name: computer-use
+
+services:
+  runtime:
+    build: .
+    image: computer-use:local
+    init: true  # stops promptly: the entrypoint's shell is not PID 1
+    environment:
+      RDP_HOST: ${RDP_HOST:?Set RDP_HOST in .env}
+      RDP_USER: ${RDP_USER:?Set RDP_USER in .env}
+      RDP_PASSWORD: ${RDP_PASSWORD:?Set RDP_PASSWORD in .env}
+      RDP_DOMAIN: ${RDP_DOMAIN:-}
+      RDP_SCREEN_WIDTH: "1280"
+      RDP_SCREEN_HEIGHT: "800"
+      RDP_TYPE_MODE: ${RDP_TYPE_MODE:-paste}
+      CU_DATA_DIR: /app/data
+      # Who may use it (.env.example). "none" is safe only because the ports below are published on 127.0.0.1.
+      CU_AUTH: ${CU_AUTH:-none}
+      CU_AUTH_TOKEN: ${CU_AUTH_TOKEN:-}
+      CU_AUTH_HEADER: ${CU_AUTH_HEADER:-X-Forwarded-User}
+      CU_AUTH_PROXIES: ${CU_AUTH_PROXIES:-127.0.0.1/32,::1/128}
+      CU_MODEL: ${CU_MODEL:-openai:gpt-6.1-terra}
+      CU_EFFORT: ${CU_EFFORT:-medium}
+      CU_MAIN_MODEL: ${CU_MAIN_MODEL:-openai:gpt-6.1-terra}
+      CU_MAIN_EFFORT: ${CU_MAIN_EFFORT:-medium}
+      CU_TITLE_MODEL: ${CU_TITLE_MODEL:-}
+      CU_TURN_URL: turn:localhost:3478?transport=tcp  # as the browser on the host sees it
+      CU_CODE_RUNNER_URL: unix:///run/code-runner/runner.sock
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      LANGSMITH_TRACING: ${LANGSMITH_TRACING:-false}
+      LANGSMITH_API_KEY: ${LANGSMITH_API_KEY:-}
+      LANGSMITH_PROJECT: ${LANGSMITH_PROJECT:-computer-use}
+    ports:
+      - "127.0.0.1:8000:8000"  # HTTP API for the web page and the CLI
+      - "127.0.0.1:8001:8001"  # the eval's server, for the version it tests (eval/README.md)
+      - "127.0.0.1:3478:3478"  # TURN over TCP: the live view's WebRTC media
+    volumes:
+      - ./data:/app/data  # run logs and screenshots, readable from the Mac
+      - code-runner:/run/code-runner  # the code runner's socket
+
+  # Isolated code runner: no network, runtime files or secrets.
+  # The shared socket carries requests; working folders live in memory.
+  code-runner:
+    build: ../code-runner
+    image: computer-use-code-runner:local
+    init: true
+    read_only: true
+    tmpfs:
+      - /workspace:size=512m,uid=1000,gid=1000,mode=0700
+      - /tmp:size=64m,uid=1000,gid=1000,mode=0700
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    pids_limit: 256
+    mem_limit: 1g
+    cpus: 1
+    network_mode: none
+    environment:
+      SOCKET: /run/code-runner/runner.sock
+    volumes:
+      - code-runner:/run/code-runner
+    restart: unless-stopped
+
+volumes:
+  # Holds only the code runner's socket: in memory, the runner's to write, and root's (the runtime's) to use.
+  code-runner:
+    driver_opts: {type: tmpfs, device: tmpfs, o: "uid=1000,gid=1000,mode=0700,size=1m"}

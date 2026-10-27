@@ -1,0 +1,78 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 740" width="980" height="740" role="img" aria-label="Runtime: the web UI and the CLI both reach it through sign-in, which names the user, in front of the API server, whose agents call the model APIs; the runtime keeps each user's runs in the run store, which the API server and the agents read and search, operates the Windows VM through the computer and runs code in the sandbox through the code runner">
+<style>
+  svg { --bg: #ffffff; --fg: #1f2328; --muted: #59636e; --line: #59636e; --node: #f6f8fa; --group: #f6f8fa80; --border: #d1d9e0;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans", Helvetica, Arial, sans-serif }
+  @media (prefers-color-scheme: dark) {
+    svg { --bg: #0d1117; --fg: #f0f6fc; --muted: #9198a1; --line: #9198a1; --node: #151b23; --group: #151b2380; --border: #3d444d }
+  }
+  .bg { fill: var(--bg) }
+  .group { fill: var(--group); stroke: var(--border) }
+  .isolated { fill: none; stroke: var(--muted); stroke-dasharray: 5 4 }
+  .node { fill: var(--node); stroke: var(--border) }
+  .name { fill: var(--fg); font-size: 14px; text-anchor: middle; dominant-baseline: central }
+  .title { fill: var(--muted); font-size: 13px }
+  .note { fill: var(--muted); font-size: 12px }
+  .flow { fill: var(--fg); font-size: 12px }
+  .edge { stroke: var(--line); stroke-width: 1.2; fill: none; marker-end: url(#to) }
+  .both { marker-start: url(#from) }
+  .head { fill: var(--line) }
+</style>
+<defs>
+  <marker id="to" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path class="head" d="M0,0.5 L8,4 L0,7.5 Z"/></marker>
+  <marker id="from" viewBox="0 0 8 8" refX="1" refY="4" markerWidth="8" markerHeight="8" orient="auto"><path class="head" d="M8,0.5 L0,4 L8,7.5 Z"/></marker>
+</defs>
+<rect class="bg" width="980" height="740"/>
+<rect class="node" x="250" y="40" width="140" height="42" rx="6"/>
+<text class="name" x="320.0" y="61">Web UI</text>
+<rect class="node" x="430" y="40" width="140" height="42" rx="6"/>
+<text class="name" x="500.0" y="61">CLI</text>
+<rect class="group" x="60" y="130" width="700" height="460" rx="8"/>
+<text class="title" x="74" y="152">Runtime</text>
+<rect class="node" x="800" y="370" width="160" height="42" rx="6"/>
+<text class="name" x="880.0" y="391">Model APIs</text>
+<rect class="isolated" x="80" y="650" width="200" height="70" rx="8"/>
+<text class="title" x="94" y="672">Data volume</text>
+<text class="note" x="94" y="690">each user's runs</text>
+<rect class="isolated" x="310" y="650" width="200" height="70" rx="8"/>
+<text class="title" x="324" y="672">Windows VM</text>
+<text class="note" x="324" y="690">one per user</text>
+<rect class="isolated" x="540" y="650" width="200" height="70" rx="8"/>
+<text class="title" x="554" y="672">Code sandbox</text>
+<text class="note" x="554" y="690">no network, no secrets</text>
+<rect class="node" x="290" y="170" width="240" height="42" rx="6"/>
+<text class="name" x="410.0" y="191">Sign-in</text>
+<rect class="node" x="290" y="260" width="240" height="42" rx="6"/>
+<text class="name" x="410.0" y="281">API server</text>
+<rect class="node" x="290" y="370" width="240" height="42" rx="6"/>
+<text class="name" x="410.0" y="391">Agents</text>
+<rect class="node" x="90" y="490" width="180" height="42" rx="6"/>
+<text class="name" x="180.0" y="511">Run store</text>
+<rect class="node" x="320" y="490" width="180" height="42" rx="6"/>
+<text class="name" x="410.0" y="511">Computer</text>
+<rect class="node" x="550" y="490" width="180" height="42" rx="6"/>
+<text class="name" x="640.0" y="511">Code runner</text>
+<path class="edge both" d="M320,82 L320,170"/>
+<text class="flow" x="131" y="112">messages, events, live view</text>
+<path class="edge both" d="M500,82 L500,170"/>
+<text class="flow" x="508" y="112">messages, events</text>
+<path class="edge both" d="M410,212 L410,260"/>
+<text class="flow" x="418" y="240">messages, events, user</text>
+<path class="edge both" d="M410,302 L410,370"/>
+<text class="flow" x="418" y="340">messages, events</text>
+<path class="edge both" d="M530,384 L800,384"/>
+<text class="flow" x="660" y="376">prompts, replies</text>
+<path class="edge both" d="M530,402 L640,402 L640,490"/>
+<text class="flow" x="648" y="455">code, output</text>
+<path class="edge both" d="M290,281 L150,281 L150,490"/>
+<text class="flow" x="158" y="340">history, search</text>
+<path class="edge both" d="M290,391 L210,391 L210,490"/>
+<text class="flow" x="218" y="455">events, history, search</text>
+<path class="edge both" d="M410,412 L410,490"/>
+<text class="flow" x="418" y="455">actions, screenshots</text>
+<path class="edge both" d="M180,532 L180,650"/>
+<text class="flow" x="188" y="622">files</text>
+<path class="edge both" d="M410,532 L410,650"/>
+<text class="flow" x="418" y="622">RDP</text>
+<path class="edge both" d="M640,532 L640,650"/>
+<text class="flow" x="648" y="622">Unix socket</text>
+</svg>

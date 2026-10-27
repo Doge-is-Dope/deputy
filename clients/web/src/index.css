@@ -1,0 +1,1144 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "./components/ui/variants.css";
+@import "@fontsource-variable/geist";
+@import "streamdown/styles.css";
+@import "katex/dist/katex.min.css";
+
+/* Streamdown's elements carry Tailwind classes of their own (components/markdown/markdown.tsx); its stylesheet above has the
+   keyframes a reply's words fade in by while it is written. */
+@source "../node_modules/streamdown/dist/*.js";
+
+/* The composer's text box holds U+E000 in place of a mention's @ (components/composer.tsx). This font draws it as
+   nothing, 1.25em wide, where the composer draws the logo; its ascent and descent are Geist's, so lines keep their
+   height. Made by scripts/composer-mention-font.py. */
+@font-face {
+  font-family: "Composer Mention";
+  src: url("./assets/composer-mention.ttf") format("truetype");
+  unicode-range: U+E000;
+  font-display: block;
+}
+
+/* Light or dark as <html data-mode> says: the system's unless chosen in 設定 (lib/appearance.ts). A subtree can set
+   its own, as the previews in 設定 do. The colors are worked out from a theme's three, below. */
+@custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
+
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans:
+    "Geist Variable", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei",
+    sans-serif;
+  --font-composer: "Composer Mention", var(--font-sans);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-link: var(--link);
+  /* A new reply's dot: the send button's color, the theme's ink. */
+  --color-unread: var(--primary);
+  --color-selection: var(--selection);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+  --color-takeover: var(--takeover);
+  --color-takeover-glow: var(--takeover-glow);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* A theme is three colors per mode (lib/themes.ts): the background (surface), the text (ink) and the accent. Every
+   other color is worked out from them here, by the ChatGPT desktop app's own measures (its Zos and $os, at its default
+   contrast, read 2026-10-23): borders, hovers and secondary text are the ink at a strength; the sidebar sits a step
+   darker than the page, menus and the composer a step out from it. The three start as ChatGPT's own; lib/appearance.ts
+   sets a chosen theme's on <html>, and a subtree drawn in another theme (the previews in 設定) sets its own with its
+   data-mode, which these rules then work out again. */
+:root,
+[data-mode="light"] {
+  color-scheme: light;
+  --theme-surface: #ffffff;
+  --theme-ink: #0d0d0d;
+  --theme-accent: #0169cc;
+  --background: var(--theme-surface);
+  --foreground: var(--theme-ink);
+  --card: color-mix(in srgb, var(--theme-surface) 79%, white);
+  --card-foreground: var(--theme-ink);
+  --popover: var(--card);
+  --popover-foreground: var(--theme-ink);
+  --primary: var(--theme-ink);
+  --primary-foreground: var(--theme-surface);
+  --secondary: color-mix(in srgb, var(--theme-surface) 95%, var(--theme-ink));
+  --secondary-foreground: var(--theme-ink);
+  --muted: var(--secondary);
+  --muted-foreground: color-mix(in srgb, var(--theme-ink) 70%, transparent);
+  --accent: color-mix(in srgb, var(--theme-ink) 10%, transparent);
+  --accent-foreground: var(--theme-ink);
+  --border: color-mix(in srgb, var(--theme-ink) 8%, transparent);
+  --input: color-mix(in srgb, var(--theme-ink) 12%, transparent);
+  --ring: var(--theme-accent);
+  --link: var(--theme-accent);
+  --selection: color-mix(
+    in srgb,
+    var(--theme-surface) 87%,
+    var(--theme-accent)
+  );
+  --sidebar: color-mix(in srgb, var(--theme-surface) 96%, var(--theme-ink));
+  --sidebar-foreground: var(--theme-ink);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  /* A hovered or chosen row: ChatGPT's, measured (2026-10-27), half the accent of menus and buttons. */
+  --sidebar-accent: color-mix(in srgb, var(--theme-ink) 5%, transparent);
+  /* The accent as it shows over the sidebar, opaque: what a band laid over a hovered or chosen row matches. */
+  --sidebar-accent-solid: color-mix(in srgb, var(--sidebar), var(--theme-ink) 5%);
+  --sidebar-accent-foreground: var(--theme-ink);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --destructive: oklch(0.577 0.245 27.325);
+  --success: oklch(0.55 0.15 150);
+  --warning: oklch(0.6 0.15 65);
+  --takeover: oklch(0.68 0.06 265);
+  /* The takeover color made to stand out, in every theme: what lights up while the user has the desktop. On light
+       pages dark enough for small text, on dark ones bright enough to glow. */
+  --takeover-glow: oklch(from var(--takeover) min(l, 0.55) max(c, 0.15) h);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --chart-1: oklch(0.87 0 0);
+  --chart-2: oklch(0.556 0 0);
+  --chart-3: oklch(0.439 0 0);
+  --chart-4: oklch(0.371 0 0);
+  --chart-5: oklch(0.269 0 0);
+  --radius: 0.625rem;
+}
+
+[data-mode="dark"] {
+  color-scheme: dark;
+  --theme-surface: #111111;
+  --theme-ink: #fcfcfc;
+  --theme-accent: #0169cc;
+  --background: var(--theme-surface);
+  --foreground: var(--theme-ink);
+  --card: color-mix(in srgb, var(--theme-surface) 87%, var(--theme-ink));
+  --card-foreground: var(--theme-ink);
+  --popover: var(--card);
+  --popover-foreground: var(--theme-ink);
+  --primary: var(--theme-ink);
+  --primary-foreground: var(--theme-surface);
+  --secondary: color-mix(in srgb, var(--theme-surface) 95%, var(--theme-ink));
+  --secondary-foreground: var(--theme-ink);
+  --muted: var(--secondary);
+  --muted-foreground: color-mix(in srgb, var(--theme-ink) 70%, transparent);
+  --accent: color-mix(in srgb, var(--theme-ink) 7%, transparent);
+  --accent-foreground: var(--theme-ink);
+  --border: color-mix(in srgb, var(--theme-ink) 8%, transparent);
+  --input: color-mix(in srgb, var(--theme-ink) 16%, transparent);
+  --ring: var(--link);
+  --link: color-mix(in srgb, var(--theme-accent) 61%, white);
+  --selection: color-mix(in srgb, black 75%, var(--theme-accent));
+  --sidebar: color-mix(in srgb, var(--theme-surface) 84%, black);
+  --sidebar-foreground: var(--theme-ink);
+  --sidebar-primary: var(--primary);
+  --sidebar-primary-foreground: var(--primary-foreground);
+  --sidebar-accent: color-mix(in srgb, var(--theme-ink) 4%, transparent);
+  --sidebar-accent-solid: color-mix(in srgb, var(--sidebar), var(--theme-ink) 4%);
+  --sidebar-accent-foreground: var(--theme-ink);
+  --sidebar-border: var(--border);
+  --sidebar-ring: var(--ring);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.72 0.17 150);
+  --warning: oklch(0.78 0.15 75);
+  --takeover: oklch(0.5 0.07 265);
+  --takeover-glow: oklch(from var(--takeover) max(l, 0.74) max(c, 0.14) h);
+}
+
+@layer base {
+  /* Icons keep their line weight at every size: strokes are in screen pixels, not scaled with the icon. */
+  [data-icon] :is(path, rect, circle, line, polyline, ellipse) {
+    vector-effect: non-scaling-stroke;
+  }
+  /* At 16px and under (the lines of the steps, the status marks, the copy button, a menu's choices) the lines are
+     1.25: the 1.33 the icons are drawn with (icons.tsx), which the 20px ones of the toolbars and buttons keep,
+     reads heavy there, and runs the trash can's lines together. A menu sizes its icons from the item, not by a class on
+     them, so it is named here. */
+  [data-icon]:is(.size-4, .size-3\.5),
+  [data-slot="trace-icon"] [data-icon],
+  [data-slot="dropdown-menu-item"] [data-icon],
+  [data-slot="dropdown-menu-sub-trigger"] [data-icon] {
+    stroke-width: 1.25;
+  }
+  * {
+    @apply border-border outline-ring/50;
+  }
+  /* Selected text on the theme's accent, as the ChatGPT desktop app shows it. */
+  ::selection {
+    background-color: var(--selection);
+  }
+  /* A long URL or path breaks at the edge instead of running out of its box; inherited, so this one rule covers all text. */
+  body {
+    @apply bg-background text-foreground;
+    overflow-wrap: break-word;
+    /* Grayscale antialiasing, as chatgpt.com and claude.ai set: on a Mac the default subpixel smoothing makes text
+       read a weight heavier than it is. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  /* While a conversation or a project is dragged (AppSidebar), the system's closed hand over the whole page, as macOS
+     shows it carrying content, whatever is under it: no pointing hand on a row, no text cursor on the composer. */
+  [data-dragging],
+  [data-dragging] * {
+    cursor: grabbing !important;
+  }
+  html {
+    @apply font-sans;
+  }
+}
+/* The sidebar toggle's icon: the panel's edge (open) and a small handle (closed), morphing with the panel. */
+.sidebar-icon-edge {
+  transition-property: x, y, width, height, rx;
+  transition-duration: 300ms;
+  transition-timing-function: var(--ease-drawer);
+}
+.sidebar-icon-edge[data-open="true"] {
+  x: 9.5px;
+  y: 4px;
+  width: 0.01px;
+  height: 16px;
+  rx: 0px;
+}
+.sidebar-icon-edge[data-open="false"] {
+  x: 7px;
+  y: 8px;
+  width: 1.5px;
+  height: 8px;
+  rx: 0.75px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-icon-edge {
+    transition: none;
+  }
+}
+
+/* Text for work still under way: a lighter band sweeps across it, then rests before the next pass. The band is the
+   surface the text sits on (--shimmer-surface, the page's unless set), laid over it at 70%, and it moves by transform:
+   the compositor draws each frame, nothing is painted again. It travels from half the text's width before it to half
+   after, so it starts and ends off the text, which clips it. */
+@utility shimmer {
+  position: relative;
+  clip-path: inset(0);
+  color: var(--muted-foreground);
+
+  &::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background-image: linear-gradient(
+      90deg,
+      transparent 32%,
+      color-mix(in oklch, var(--shimmer-surface, var(--background)) 70%, transparent) 50%,
+      transparent 68%
+    );
+    animation: shimmer 2.5s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    &::after {
+      content: none;
+    }
+  }
+}
+@keyframes shimmer {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Three small lights lift and brighten in sequence while the main agent thinks, rising and falling on a sine and
+   resting on their line. Beside words that line is the middle of the lowercase letters, which in Geist sits 0.09em
+   below the middle of the line box. The fixed footprint keeps the label still; only transforms and opacity animate.
+   Reduced motion keeps the light passing, without movement. */
+@utility thinking-orbs {
+  display: inline-flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+
+  &:has(+ .shimmer) {
+    translate: 0 0.09em;
+  }
+
+  & > span {
+    width: 4px;
+    height: 4px;
+    border-radius: 50%;
+    background: currentColor;
+    animation: thinking-orb 1.3s cubic-bezier(0.37, 0, 0.63, 1) infinite backwards;
+  }
+  & > span:nth-child(2) {
+    animation-delay: 0.16s;
+  }
+  & > span:nth-child(3) {
+    animation-delay: 0.32s;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    & > span {
+      animation-name: thinking-orb-soft;
+    }
+  }
+}
+@keyframes thinking-orb {
+  0%,
+  60%,
+  100% {
+    transform: scale(0.85);
+    opacity: 0.4;
+  }
+  30% {
+    transform: translateY(-3px) scale(1);
+    opacity: 1;
+  }
+}
+@keyframes thinking-orb-soft {
+  0%,
+  60%,
+  100% {
+    opacity: 0.55;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+/* What arrives while a conversation is open (a message, a reply, a step of work) rises into place out of a slight
+   blur, as transitions.dev's texts reveal does; what was there when the conversation opened is simply there, since it
+   marks itself settled only after drawing it (RunThread). A step is a line of a list: a little closer and quicker. With
+   motion reduced, it only fades in. */
+@utility arrive {
+  transition-property: opacity, translate, filter;
+  transition-duration: 300ms;
+  transition-timing-function: var(--ease-out);
+  [data-settled] & {
+    @starting-style {
+      opacity: 0;
+      translate: 0 8px;
+      filter: blur(3px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition-property: opacity;
+    transition-duration: 150ms;
+  }
+}
+@utility arrive-line {
+  transition-property: opacity, translate, filter;
+  transition-duration: 250ms;
+  transition-timing-function: var(--ease-out);
+  [data-settled] & {
+    @starting-style {
+      opacity: 0;
+      translate: 0 6px;
+      filter: blur(2px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition-property: opacity;
+    transition-duration: 150ms;
+  }
+}
+/* A reply being written opens its room as a row that arrives does (below), without the rise: its words fade in
+   themselves. */
+@utility make-room {
+  transition-property: height, margin-block-end;
+  transition-duration: 300ms;
+  transition-timing-function: var(--ease-out);
+}
+/* A row that arrives in the conversation opens its room as it rises, its gap to what follows too, so what is under it
+   (the thinking row folding shut as the words take its place) moves down with it rather than jumping. Browsers that
+   cannot ease to an auto height open it at once, as before. With motion reduced, the room is just there. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-settled] > :is(.arrive, .arrive-line, .make-room) {
+    interpolate-size: allow-keywords;
+    transition-property: opacity, translate, filter, height, margin-block-end;
+    @starting-style {
+      height: 0;
+      margin-block-end: 0;
+    }
+  }
+}
+/* Words that change in place (what an agent does now) swap as transitions.dev's thinking states does, its values: the
+   old words go up out of sight through a blur as the new ones come up from below a moment later, on top of each other,
+   while the box eases to the new width (its card resize). With motion reduced, the words just change. */
+@utility swap-text {
+  position: relative;
+  display: inline-block;
+  vertical-align: bottom;
+  transition: width 300ms cubic-bezier(0.22, 1, 0.36, 1);
+  & > [data-sizer] {
+    position: absolute;
+    visibility: hidden;
+    white-space: nowrap;
+  }
+  /* Not cut to the box as it eases wider: the line it sits in cuts words too long for it. */
+  & > [data-line] {
+    display: block;
+    white-space: nowrap;
+    transition-property: translate, filter, opacity;
+    transition-duration: 150ms;
+    transition-timing-function: ease-in-out;
+  }
+  & > [data-line="enter"] {
+    transition-delay: 50ms;
+  }
+  /* Only once the conversation has settled: words there when it opened are simply there. */
+  [data-settled] & > [data-line="enter"] {
+    @starting-style {
+      translate: 0 8px;
+      filter: blur(2px);
+      opacity: 0;
+    }
+  }
+  & > [data-line="leave"] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    translate: 0 -8px;
+    filter: blur(2px);
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+    & > [data-line] {
+      transition: none;
+    }
+  }
+}
+/* Lines that come one after another (the agents at work, what each does now) reveal as transitions.dev's texts reveal
+   does, its values: up out of a blur, each held back a little after the one before it (--line). With motion reduced,
+   they only fade in. */
+@utility reveal {
+  transition-property: opacity, translate, filter;
+  transition-duration: 500ms;
+  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  transition-delay: calc(var(--line, 0) * 40ms);
+  [data-settled] & {
+    @starting-style {
+      opacity: 0;
+      translate: 0 12px;
+      filter: blur(3px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition-property: opacity;
+    transition-duration: 150ms;
+    transition-delay: 0s;
+  }
+}
+/* A count that changes pops its digits in from below out of a blur, one after another, overshooting a little
+   (transitions.dev's number pop-in, its values). As each digit comes, once the conversation has settled: a count there
+   when it opened is simply there, and settling plays nothing. With motion reduced, it is just there. */
+@utility pop-in {
+  display: inline-block;
+  transition-property: translate, opacity, filter;
+  transition-duration: 500ms;
+  transition-timing-function: cubic-bezier(0.34, 1.45, 0.64, 1);
+  transition-delay: calc(var(--digit, 0) * 70ms);
+  [data-settled] & {
+    @starting-style {
+      translate: 0 8px;
+      opacity: 0;
+      filter: blur(2px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition: none;
+  }
+}
+/* An agent joining those at work grows in beside them: its room opens as it scales up out of a blur, the others making
+   way, as transitions.dev's icon swap grows an icon. With motion reduced, it only fades in. */
+@utility grow-in {
+  transition-property: width, margin, opacity, scale, filter;
+  transition-duration: 350ms;
+  transition-timing-function: var(--ease-out);
+  [data-settled] & {
+    @starting-style {
+      width: 0;
+      margin-left: 0;
+      opacity: 0;
+      scale: 0.4;
+      filter: blur(2px);
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition-property: opacity;
+    transition-duration: 150ms;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-settled] .grow-in {
+    @starting-style {
+      width: 1.25rem;
+      margin-left: -0.375rem;
+      scale: none;
+      filter: none;
+    }
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  [data-settled] .arrive,
+  [data-settled] .arrive-line,
+  [data-settled] .reveal {
+    @starting-style {
+      translate: none;
+      filter: none;
+    }
+  }
+}
+/* Lines that come with a panel as it opens arrive with it, in its fold: a line still rising below its place would add to
+   the height the panel measures to open to, which it gives back once open, the lines under it springing back. */
+[data-starting-style] :is(.arrive, .arrive-line, .reveal) {
+  @starting-style {
+    opacity: 1;
+    translate: none;
+    filter: none;
+  }
+}
+
+/* Two things in one place, the one without data-hidden shown, crossing over through a blur (transitions.dev's icon
+   swap and text swap): an icon grows out of a small one, words come up from a few pixels below as the old ones go up
+   (data-hidden="before"). With motion reduced, they only cross-fade. */
+@utility swap {
+  position: relative;
+  display: inline-grid;
+  /* The hidden one takes no room, so what follows sits after the one shown. */
+  & > [data-hidden] {
+    position: absolute;
+    top: 0;
+    left: 0;
+    white-space: nowrap;
+  }
+  & > * {
+    grid-area: 1 / 1;
+    transition-property: opacity, scale, translate, filter;
+    transition-duration: 250ms;
+    transition-timing-function: var(--ease-out);
+  }
+  & > :not(svg) {
+    transition-duration: 150ms;
+  }
+  & > [data-hidden] {
+    opacity: 0;
+    filter: blur(2px);
+  }
+  & > svg[data-hidden] {
+    scale: 0.5;
+  }
+  & > :not(svg)[data-hidden] {
+    translate: 0 4px;
+  }
+  & > :not(svg)[data-hidden="before"] {
+    translate: 0 -4px;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    & > * {
+      transition-property: opacity;
+      transition-duration: 150ms;
+    }
+    & > [data-hidden] {
+      scale: none;
+      translate: none;
+      filter: none;
+    }
+  }
+}
+
+/* A shape of a placeholder still loading, and the same pass of light over it as the shimmer's over text: one band
+   sweeping across all the placeholder's shapes as a single light, rather than each shape blinking on its own. Each
+   shape draws its part of the band where the placeholder (a size container: cqw is its width) puts it; a shape that
+   doesn't start at the placeholder's left edge says where it does in --at. The band is three times the placeholder's
+   width, so it crosses in the shimmer's time and rests as long off the edge, and like the shimmer's it moves by
+   transform, so it never repaints. Lighter than the shape in either mode: toward the page in light, toward the text
+   in dark. Still while motion is reduced. */
+@utility skeleton-shape {
+  --sheen: color-mix(in oklch, var(--background) 70%, transparent);
+  position: relative;
+  overflow: hidden;
+  background-color: var(--muted);
+
+  &:where([data-mode="dark"] *) {
+    --sheen: color-mix(in oklch, var(--foreground) 8%, transparent);
+  }
+  &::after {
+    content: "";
+    position: absolute;
+    inset-block: 0;
+    left: calc(-100cqw - var(--at, 0px));
+    width: 300cqw;
+    background-image: linear-gradient(
+      90deg,
+      transparent 44%,
+      var(--sheen) 50%,
+      transparent 56%
+    );
+    animation: skeleton-sweep 2.5s linear infinite;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    &::after {
+      display: none;
+    }
+  }
+}
+@keyframes skeleton-sweep {
+  from {
+    transform: translateX(-100cqw);
+  }
+  to {
+    transform: translateX(100cqw);
+  }
+}
+
+/* The dots after the words for something under way (three <span>s), brightening in turn from left to right.
+   Only their opacity changes, so centered text around them stays still. */
+@utility loading-dots {
+  & > span {
+    animation: loading-dot 1.2s ease-in-out infinite;
+  }
+  & > span:nth-child(2) {
+    animation-delay: 0.2s;
+  }
+  & > span:nth-child(3) {
+    animation-delay: 0.4s;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    & > span {
+      animation: none;
+    }
+  }
+}
+@keyframes loading-dot {
+  0%,
+  60%,
+  100% {
+    opacity: 0.25;
+  }
+  30% {
+    opacity: 1;
+  }
+}
+
+/* Glass, as Apple's liquid glass on ChatGPT's iOS button: a disc of pale, frosted glass floating over the conversation.
+   What passes under it shows through, dimmed to a light grey, so the glass reads as a grey disc even on white; a fine
+   dark line marks its very edge and a bright ring just inside it catches the light at the top and bottom; a faint
+   shadow falls below it. Lensed (lib/liquid-glass.ts, where the browser can), the rim also bends what is under it and
+   the line and ring are the lens's light; elsewhere they are inset shadows. Solid where the browser cannot blur, or
+   the viewer asked for less transparency or more contrast. */
+@utility glass {
+  /* The shadow it casts, faint. */
+  --glass-drop: 0 2px 6px rgb(0 0 0 / 0.03);
+  &:where([data-mode="dark"] *) {
+    --glass-drop: 0 1px 2px rgb(0 0 0 / 0.3), 0 4px 12px -4px rgb(0 0 0 / 0.4);
+  }
+  background-color: var(--background);
+  box-shadow:
+    inset 0 0 0 0.5px color-mix(in oklab, var(--foreground) 10%, transparent),
+    var(--glass-drop);
+
+  @supports (backdrop-filter: blur(0)) {
+    background-color: rgb(246 246 246 / 0.7);
+    backdrop-filter: blur(0.5px);
+    box-shadow:
+      inset 0 0 0 0.5px rgb(0 0 0 / 0.15),
+      inset 0 1.5px 1px -1px rgb(255 255 255),
+      inset 0 -1.5px 1px -1px rgb(255 255 255),
+      var(--glass-drop);
+    &:where([data-mode="dark"] *) {
+      background-color: rgb(40 40 40 / 0.7);
+      box-shadow:
+        inset 0 1.5px 1px -1px rgb(255 255 255 / 0.5),
+        inset 0 -1.5px 1px -1px rgb(255 255 255 / 0.5),
+        var(--glass-drop);
+    }
+    /* The lens drawn (run-view.tsx): the line and ring are its light, laid over what it bends. */
+    &:where([data-lens]) {
+      background-image: var(--glass-glint);
+      background-size: 100% 100%;
+      backdrop-filter: url(#liquid-glass);
+      box-shadow: var(--glass-drop);
+      &:where([data-mode="dark"] *) {
+        background-image: var(--glass-glint-dark);
+      }
+    }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    background-color: var(--background);
+    background-image: none;
+    backdrop-filter: none;
+  }
+  @media (prefers-contrast: more) {
+    background-color: var(--background);
+    background-image: none;
+    backdrop-filter: none;
+    box-shadow: inset 0 0 0 1px var(--foreground);
+  }
+}
+
+/* A rule through a line of text (a flex row), dashed in the text's color on either side of it. The dashes tile outwards
+   from the text, each in the middle of its tile, so both sides leave the text the same way. */
+@utility dashed-rule {
+  &::before,
+  &::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background-image: linear-gradient(
+      to right,
+      transparent 2px,
+      currentColor 2px 6px,
+      transparent 6px
+    );
+    background-size: 8px 1px;
+    background-repeat: repeat-x;
+  }
+  &::before {
+    background-position: right center;
+  }
+}
+
+/* An agent's markdown (components/markdown/markdown.tsx): Streamdown's own look, with this over it, nearer ChatGPT's. Numbers
+   and bullets stand in grey outside the text, so a long item wraps under its own words, and items sit close together;
+   headings are a little larger than the text, not Streamdown's 30px; headings, bold and a table's header are 500, the
+   app's title weight, not Streamdown's 600; quotes stay upright, since Chinese has no
+   italics, only slanted characters; a table is lines alone, one under its header as between its rows, with no fill,
+   its first and last columns in line with the text. A formula wider than the reply (KaTeX's, below) does not run past
+   it: a block of its own scrolls sideways, as a table does; one in a line wraps, a long number too. */
+@utility markdown {
+  & :is(ol, ul) {
+    list-style-position: outside;
+    padding-left: 1.5rem;
+  }
+  & li {
+    padding-block: 0;
+  }
+  & li + li {
+    margin-top: 2px;
+  }
+  & li::marker {
+    color: var(--muted-foreground);
+  }
+  & :is(h1, h2, h3, h4, h5, h6) {
+    font-size: 16px;
+    line-height: 24px;
+  }
+  & :is(h1, h2, h3, h4, h5, h6, th, [data-streamdown="strong"]) {
+    font-weight: 500;
+  }
+  & blockquote {
+    font-style: normal;
+  }
+  & thead {
+    background: none;
+    border-bottom: 1px solid var(--border);
+  }
+  & :is(th, td):first-child {
+    padding-left: 0;
+  }
+  & :is(th, td):last-child {
+    padding-right: 0;
+  }
+}
+/* Unlayered, as KaTeX's stylesheet is, so these win over it. */
+.markdown .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+.markdown .katex .base {
+  width: auto;
+  white-space: normal;
+}
+.markdown .katex .mord {
+  word-break: break-all;
+}
+/* A reply's new characters fade in over 700ms, nearly evenly, opacity only, as ChatGPT's do: with characters let in
+   at a steady pace (Reply), some twenty are fading at once, a soft tail behind the last. Each fades from when it is
+   drawn, not on Streamdown's timing: it sets a character's variables again on every redraw and gives the ones it drew
+   before 0ms, which would cut their fade short as the next come. 700ms is lib/reveal.ts's FADE_MS. A character done
+   fading lets go of its animation (backwards, not both): one held at its end keeps a compositing layer of its own, and
+   a long reply piled up a thousand of them. With motion reduced, the characters come without fading in: Streamdown
+   has no such rule of its own. */
+.markdown [data-sd-animate] {
+  animation: reply-char-in 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) backwards;
+}
+.markdown [data-sd-animate-marker]::marker {
+  animation: sd-markerIn 700ms cubic-bezier(0.37, 0.55, 0.86, 0.88) backwards;
+}
+@keyframes reply-char-in {
+  from {
+    opacity: 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .markdown [data-sd-animate],
+  .markdown [data-sd-animate-marker]::marker {
+    animation: none;
+  }
+}
+
+/* Keep Sonner's upward-growing stack near the top, with the newest notice at its bottom edge. Its measured height
+   shifts the anchor with the same transform transition Sonner uses for expanding and collapsing the stack. */
+.toaster[data-sonner-toaster][data-y-position="bottom"] {
+  top: var(--offset-top);
+  bottom: auto;
+  transform: translate(-50%, var(--notice-stack-height, 0px));
+}
+@media (max-width: 600px) {
+  .toaster[data-sonner-toaster][data-y-position="bottom"] {
+    top: var(--mobile-offset-top);
+    transform: translateY(var(--notice-stack-height, 0px));
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .toaster[data-sonner-toaster] {
+    transition: none;
+  }
+}
+
+/* Follow horizontal dragging directly; a cancelled swipe fades back to full opacity. */
+.toaster [data-notice] {
+  opacity: var(--notice-swipe-opacity, 1);
+  transition: opacity 200ms var(--ease-out);
+}
+.toaster [data-sonner-toast][data-swiping="true"] [data-notice] {
+  transition: none;
+}
+
+/* Headless notices keep their opaque surface in the collapsed stack, but only the front one's content is visible. */
+[data-sonner-toast][data-expanded="false"][data-front="false"]
+  [data-notice-content] {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* shadcn's popups (dialog, select, tooltip) open and close by tw-animate-css keyframes; with motion reduced they only
+   fade, their scale and slide left out. Unlayered, so it wins over those utilities. */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="dialog-content"],
+  [data-slot="select-content"],
+  [data-slot="tooltip-content"] {
+    --tw-enter-scale: 1;
+    --tw-exit-scale: 1;
+    --tw-enter-translate-x: 0;
+    --tw-enter-translate-y: 0;
+    --tw-exit-translate-x: 0;
+    --tw-exit-translate-y: 0;
+  }
+}
+
+/* Enough transparent padding for the pointer's original 1px + 6px shadows. The shader only recolors that mask. */
+.agent-cursor-glow {
+  position: absolute;
+  left: -26px;
+  top: -26px;
+  width: 64px;
+  height: 64px;
+  pointer-events: none;
+}
+/* Replace the blue shadow once the shader is ready; never stack a second glow on top of it. */
+.agent-cursor-glow[data-renderer="webgl"] + svg {
+  filter: none;
+}
+
+/* The live view's takeover. Where the browser can, it is drawn as one liquid surface on a canvas
+   (lib/liquid-takeover.ts, .takeover-canvas); this CSS one is for where it can't, and when motion is reduced, and its
+   pill (background and text) serves both.
+   After the reference recording, as one unfolding. Blue widens out of the pill's button,
+   from the button's own shape to the tab's, up to the screen; as it reaches the tab's ends the frame is drawn on from
+   there, both ways along the screen's bottom edge, round the corners and up the sides, meeting at the top. Returning
+   draws the frame back into the tab's ends, then narrows the blue back into the button's shape, hidden behind it.
+   Each step starts as the one before ends, so nothing waits and nothing jumps. live-view.tsx gives the frame's path
+   and the button's shape within the tab (--fill-from). Transitions, not keyframes, so a quick return reverses from
+   wherever the takeover got to.
+   Takeover: tab 0-220ms, frame 170-690ms. Return: frame 0-380ms, tab 385-645ms. */
+@layer components {
+  .takeover-frame {
+    position: absolute;
+    left: -0.625rem;
+    top: -0.625rem;
+    width: calc(100% + 1.25rem);
+    height: calc(
+      100% + 1.25rem + 1px
+    ); /* 1px under the pill, so no seam shows between frame and tab */
+    overflow: visible;
+    pointer-events: none;
+  }
+  /* Each half of the frame, from one end of the tab to the middle of the top: a dash as long as its path, pushed off
+     the path and drawn back on. Hidden at rest, so the round cap of the empty dash leaves no dot. The gap is twice the
+     path, so no next dash can start at its far end (with a gap of one, it flashed a dot at the top).
+     It starts once the tab is about at its ends (the round cap covers what is left), at speed, and closes at the top
+     without a crawl; drawn back, it speeds up into the tab and is gone at once, so nothing is left hanging or fading
+     to grey beside it. */
+  .takeover-line {
+    fill: none;
+    stroke: var(--takeover);
+    stroke-width: 11px;
+    stroke-linecap: round;
+    stroke-dasharray: 1 2;
+    stroke-dashoffset: 1;
+    opacity: 0;
+    transition:
+      stroke-dashoffset 380ms cubic-bezier(0.3, 0.3, 0.7, 0.6),
+      opacity 0s 380ms;
+  }
+  [data-control="user"] .takeover-line {
+    stroke-dashoffset: 0;
+    opacity: 1;
+    transition:
+      stroke-dashoffset 520ms cubic-bezier(0.3, 0.45, 0.6, 0.8) 170ms,
+      opacity 0s 170ms;
+  }
+
+  .takeover-pill {
+    position: relative;
+    margin-top: 0.625rem;
+    display: flex;
+    height: 3.25rem;
+    align-items: center;
+    padding: 0.375rem 0.375rem 0.375rem 1.25rem;
+    color: var(--foreground);
+    /* Its text goes back as the blue narrows away from it. */
+    transition: color 200ms ease 380ms;
+  }
+  [data-control="user"] .takeover-pill {
+    color: white;
+    transition: color 200ms ease 60ms;
+  }
+  /* The liquid tab (liquid-takeover.ts) covers the label within about 100ms and, returning, has narrowed off it by
+     about 350ms. The text turns quickly while it lies on the blue, so it is never half-grey on the blue, nor white on
+     the page once the blue has gone. */
+  [data-liquid] .takeover-pill {
+    transition: color 120ms ease-out 240ms;
+  }
+  [data-liquid][data-control="user"] .takeover-pill {
+    transition: color 120ms ease-out 40ms;
+  }
+  /* The pill's background, a layer of its own so the blue (fill or canvas) lies between it and the pill's text. At
+     rest there is none, so label and button sit on the page unframed. It turns blue under the blue once that about
+     covers it, as the frame starts, so no sliver of the page shows at the blue's edges; returning, it goes at once,
+     while the blue still covers it. */
+  .takeover-pill-bg {
+    position: absolute;
+    inset: 0;
+    z-index: 1;
+    border-radius: 1.625rem;
+    background: transparent;
+    transition: background-color 0ms;
+  }
+  [data-control="user"] .takeover-pill-bg {
+    background: var(--takeover);
+    transition: background-color 0ms 170ms;
+  }
+  /* The liquid takeover's canvas, over the screen and round it with room for the frame, under the pill's text. */
+  .takeover-canvas {
+    position: absolute;
+    left: -1rem;
+    top: -1rem;
+    z-index: 2;
+    width: calc(100% + 2rem);
+    height: calc(100% + 2rem);
+    pointer-events: none;
+  }
+
+  /* Below 20rem the pill shows only its button (live-view.tsx), so it gets even padding and the button sits in the
+     middle. Same breakpoint as the label's @max-xs:hidden. */
+  @container (width < 20rem) {
+    .takeover-pill {
+      padding-left: 0.375rem;
+    }
+  }
+
+  /* The blue tab: the pill's box and the gap above it, up to the screen, with square top corners so it joins the
+     frame. At rest it is clipped to the button's shape (--fill-from, round as the button) and hidden; it widens to the
+     whole tab, and narrows back into the button's shape before it hides again, so no edge of it shows round the
+     button. */
+  .takeover-fill {
+    position: absolute;
+    inset: -0.625rem 0 0;
+    z-index: 2;
+    border-radius: 0 0 1.625rem 1.625rem;
+    background: var(--takeover);
+    clip-path: inset(
+      var(--fill-from, 1rem 0.375rem 0.375rem 50%) round 1.25rem
+    );
+    opacity: 0;
+    transition:
+      clip-path 260ms cubic-bezier(0.3, 0.6, 0.3, 1) 385ms,
+      opacity 0s 645ms;
+  }
+  [data-control="user"] .takeover-fill {
+    clip-path: inset(0 round 0 0 1.625rem 1.625rem);
+    opacity: 1;
+    transition:
+      clip-path 220ms cubic-bezier(0.2, 0.6, 0.35, 1),
+      opacity 0s;
+  }
+  /* The concave corners where the tab meets the frame's bottom edge, outside the fill's clip. Never faded, which
+     leaves a ghost of the curve: each grows out of its corner (the tab's end on the frame's edge) as the frame starts
+     from there, and shrinks back into it as the frame's last bit comes in, so tab and frame always meet in a curve. */
+  .takeover-pill::before,
+  .takeover-pill::after {
+    --fillet: 1.5rem;
+    content: "";
+    position: absolute;
+    /* The curve leaves the frame's bottom edge (1px below the pill's top) and meets the tab's side tangentially. The
+       box reaches 1px into both, so their antialiased edges don't leave a hairline seam where they meet. */
+    top: 0;
+    z-index: 2;
+    width: calc(var(--fillet) + 1px);
+    height: calc(var(--fillet) + 1px);
+    opacity: 0;
+    transform: scale(0);
+    pointer-events: none;
+    transition:
+      transform 60ms cubic-bezier(0.5, 0, 1, 0.5) 320ms,
+      opacity 0s 380ms;
+  }
+  [data-control="user"] .takeover-pill::before,
+  [data-control="user"] .takeover-pill::after {
+    opacity: 1;
+    transform: scale(1);
+    transition:
+      transform 120ms cubic-bezier(0.2, 0.6, 0.35, 1) 170ms,
+      opacity 0s 170ms;
+  }
+  /* The liquid takeover makes its own curves. */
+  [data-liquid] .takeover-pill::before,
+  [data-liquid] .takeover-pill::after {
+    display: none;
+  }
+  /* A soft 1px edge on the curve, so it looks as smooth as the frame's own rounded corners. */
+  .takeover-pill::before {
+    left: calc(-1 * var(--fillet));
+    transform-origin: 100% 0;
+    background: radial-gradient(
+      circle at 0 100%,
+      transparent calc(var(--fillet) - 0.5px),
+      var(--takeover) calc(var(--fillet) + 0.5px)
+    );
+  }
+  .takeover-pill::after {
+    right: calc(-1 * var(--fillet));
+    transform-origin: 0 0;
+    background: radial-gradient(
+      circle at 100% 100%,
+      transparent calc(var(--fillet) - 0.5px),
+      var(--takeover) calc(var(--fillet) + 0.5px)
+    );
+  }
+
+  /* The screen's shadow would darken the frame's bottom edge but not the tab drawn over it, so it is gone while the
+     tab grows, before the frame starts beside it, and comes back only once the frame is gone. */
+  .takeover-screen {
+    --screen-edge: 0 0 0 1px
+      color-mix(in oklch, var(--foreground) 5%, transparent);
+    box-shadow:
+      var(--screen-edge),
+      0 12px 40px -16px rgb(0 0 0 / 0.18);
+    transition: box-shadow 250ms ease 380ms;
+  }
+  .takeover-screen:where([data-mode="dark"] *) {
+    box-shadow:
+      var(--screen-edge),
+      0 12px 40px -16px rgb(0 0 0 / 0.6);
+  }
+  [data-control="user"] .takeover-screen {
+    box-shadow:
+      var(--screen-edge),
+      0 12px 40px -16px rgb(0 0 0 / 0);
+    transition: box-shadow 160ms ease;
+  }
+
+  /* Reduced motion: no line drawing and no widening tab; the frame and the tab fade in place. */
+  @media (prefers-reduced-motion: reduce) {
+    .takeover-line,
+    [data-control="user"] .takeover-line {
+      stroke-dashoffset: 0;
+      transition: opacity 200ms ease;
+    }
+    .takeover-fill,
+    [data-control="user"] .takeover-fill {
+      clip-path: none;
+      opacity: 0;
+      transition: opacity 200ms ease;
+    }
+    [data-control="user"] .takeover-fill {
+      opacity: 1;
+    }
+  }
+}
+
+/* Steps folding away resize the conversation on every frame, and overlay scrollbars (run-view.tsx) flash at each
+   resize. They take no room, so hiding them meanwhile moves nothing. */
+[data-overlay-scrollbars]:has(
+  [data-slot="collapsible-content"][data-ending-style]
+) {
+  scrollbar-width: none;
+}
+/* So does the composer's question row opening or closing (composer.tsx). Only while it moves: with reduced motion it
+   does not, and no transition ends to say so. */
+@media (prefers-reduced-motion: no-preference) {
+  [data-overlay-scrollbars]:has([data-moving]) {
+    scrollbar-width: none;
+  }
+}
+
+/* While a side panel is being resized (resize-handle.tsx): no width or margin transitions lagging behind the pointer,
+   and no text selection. Unlayered, so it wins over the sidebar's transition utilities. */
+[data-resizing] {
+  cursor: col-resize;
+  user-select: none;
+}
+[data-resizing] [data-slot="sidebar-gap"],
+[data-resizing] [data-slot="sidebar-container"],
+[data-resizing] [data-slot="live-panel"],
+[data-resizing] [data-slot="live-gap"] {
+  transition: none;
+}

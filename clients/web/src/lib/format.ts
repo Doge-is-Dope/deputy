@@ -160,8 +160,7 @@ const KINDS: Record<string, keyof ReturnType<typeof t>["actions"]["kinds"]> = {
 }
 
 /**
- * What a group of steps did, by kind, each once in the order it first came, as Codex sums its tool calls up ("Edited a
- * file, ran commands"): "點擊、輸入文字、按鍵". A batch's actions count each.
+ * What a group of steps did, by kind, each once in the order it first came: "點擊、輸入文字、按鍵". A batch's actions count each.
  */
 export function describeActions(calls: { tool: string; args: Args }[]) {
   const say = t().actions

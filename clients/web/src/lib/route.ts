@@ -13,7 +13,7 @@ export function openRun(run: string | null) {
   window.location.hash = runHref(run).slice(1)
 }
 
-// A project's home, #/project/<name>, where a new conversation begins in it.
+// A project's home, #/project/<id>, where a new conversation begins in it.
 
 export const projectHref = (project: string) =>
   `#/project/${encodeURIComponent(project)}`

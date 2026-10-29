@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { RememberedChip } from "@/components/memory/lines"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
@@ -6,7 +7,7 @@ import { useCopy } from "@/hooks/use-copy"
 import { type Pending } from "@/lib/api"
 import { problemReport, type Problem } from "@/lib/format"
 import { useT } from "@/lib/i18n"
-import { type Item, type Task, type Thread } from "@/lib/thread"
+import { citedMemories, type Item, type Task, type Thread } from "@/lib/thread"
 import { CheckIcon, CopyIcon, NoSignIcon } from "@/components/icons"
 import {
   Commentary,
@@ -200,7 +201,7 @@ export function RunThread({
     : []
   // The task on the computer now, which the user's turns at the desktop and the steps they approve are about.
   const onComputer = working.map(computerTask).find((task) => task) ?? null
-  // Opened while it worked, a work group folds once it is done, as Codex's "Worked for" does.
+  // Opened while it worked, a work group folds once it is done.
   const [under, setUnder] = useState(working.map((item) => item.key))
   if (
     working.length !== under.length ||
@@ -306,7 +307,6 @@ export function RunThread({
       case "message":
         return (
           <UserMessage
-            // By its id, as while it waited below (pending), so it stays in place once read.
             key={item.id}
             text={item.text}
             time={item.time}
@@ -334,11 +334,14 @@ export function RunThread({
                       thread.started === null
                         ? undefined
                         : end.time - thread.started,
+                    cited: citedMemories(thread),
                   }
                 : undefined
             }
             pinned={latest && !writing && item === lastReply}
             rise={!streamed.has(item.at)}
+            // Words before the run's last reply were said on the way: no actions, as under commentary.
+            actions={item === lastReply}
           />
         )
       case "commentary":
@@ -365,6 +368,14 @@ export function RunThread({
             {skippedReason(item.reason, item.result, t)}
           </PlainLine>
         )
+      case "memory":
+        return (
+          <RememberedChip
+            key={item.key}
+            memories={item.memories}
+            updated={item.updated}
+          />
+        )
       case "note":
         return (
           <p
@@ -379,8 +390,7 @@ export function RunThread({
   // In one list with the rows, so a reply keeps its key from draft to logged.
   const all = [
     ...rows,
-    // What the main agent is writing, where it will stay once written: begun before anything still unread was sent,
-    // it goes above that. Without the line break a model ends its words with, which its logged reply drops
+    // What the main agent is writing, where it will stay once written. Without the line break a model ends its words with, which its logged reply drops
     // (lib/thread.ts) and which would be a blank line until then.
     draft ? (
       <Reply
@@ -390,14 +400,8 @@ export function RunThread({
         actions={false}
       />
     ) : null,
-    // Sent while the run works and not read yet: sent all the same, so shown as any message is.
-    ...(active
-      ? pending.map((message) => (
-          <UserMessage key={message.id} text={message.text} />
-        ))
-      : []),
     // The main agent working out what to say, until the first of its words comes; and again once they have stopped
-    // while it still writes. Last of all, under the work under way as ChatGPT's and Codex's indicators are, and
+    // while it still writes. Last of all, under the work under way as ChatGPT's indicator is, and
     // folding open and shut in its place rather than coming and going, so nothing above it moves.
     active ? (
       <ThinkingRow

@@ -7,10 +7,10 @@ export type Conversation = {
   latest: RunSummary
   updated: number // when its latest run started
   title: string | null // its name, made by the runtime from its first message (agent/title.py); null until then
-  project: string | null // the project its first run was started in; null for one the user began on the page
+  project: string | null // the id of the project it is in (Project); null for none
 }
 
-/** The sidebar's sections: each project's conversations under its name, then the rest as recents, each most recently
+/** The sidebar's sections: each project's conversations under its id, then the rest as recents, each most recently
  * active first. Projects in the order their most recent conversation comes. */
 export function sectionsOf(conversations: Conversation[]) {
   const projects = new Map<string, Conversation[]>()

@@ -20,13 +20,14 @@ import { preloadMarkdown } from "@/components/markdown/markdown"
 import { ScreenshotViewer } from "@/components/screenshot-viewer"
 import { setDraft, useDraft } from "@/hooks/use-drafts"
 import { NUDGE_MS } from "@/hooks/use-flash"
-import { type Approval, type Decision } from "@/lib/api"
+import { type Approval, type Decision, type Pending } from "@/lib/api"
 import { useT } from "@/lib/i18n"
 import { isComposing } from "@/lib/keys"
 import { MentionList } from "@/components/composer/mention-list"
 import { MentionLogos, TEXT } from "@/components/composer/mention-logos"
 import { useMentionText } from "@/components/composer/mention-text"
 import { QuestionRow } from "@/components/composer/question-row"
+import { Queue } from "@/components/composer/queue"
 import {
   AnswerPair,
   type Ask,
@@ -72,6 +73,8 @@ export function Composer({
   approval = null,
   onAnswer,
   takeover = null,
+  queued = [],
+  onWithdraw,
   placeholder,
   autoFocus,
   ref,
@@ -87,6 +90,8 @@ export function Composer({
   approval?: Approval | null // the step the open run waits for the user to approve
   onAnswer?: (decision: Decision, note: string) => Promise<boolean> // true once answered
   takeover?: Takeover | null
+  queued?: Pending[] // sent to the run in progress, not read by its agents yet
+  onWithdraw?: (message: Pending) => void
   placeholder: string
   autoFocus?: boolean
   ref?: Ref<HTMLTextAreaElement>
@@ -300,6 +305,11 @@ export function Composer({
           onIndexChange={(index) => setViewing(index !== null)}
         />
       )}
+      <Queue
+        messages={queued}
+        hidden={question !== null || !!asking}
+        onWithdraw={onWithdraw}
+      />
       {/* Opaque, in dark mode too: the muted tint is mixed in, not see-through. */}
       <form
         onSubmit={submit}

@@ -379,7 +379,7 @@ export const CursorEnterIcon = (props: IconProps) => (
 
 // The agents
 
-/** An agent working in the background: a robot's head, as Codex marks what it did with its agents. */
+/** An agent working in the background: a robot's head. */
 export const AgentIcon = (props: IconProps) => (
   <Icon {...props}>
     <rect x="4.5" y="9.5" width="15" height="11" rx="3.5" />
@@ -473,6 +473,16 @@ export const FlagIcon = (props: IconProps) => (
   </Icon>
 )
 
+/** What the agent remembers from the user's steering: a brain, as SF Symbols' brain and ChatGPT's memory mark. Two
+    halves of three lobes each, split down the middle, with one fold running in from where the side and bottom lobes
+    meet. */
+export const MemoryIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M12 4.72A3.14 3.14 0 0 0 6.4 5.84a4.03 4.03 0 0 0-1.68 7.28A5.15 5.15 0 0 0 12 19.84a5.15 5.15 0 0 0 7.28-6.72 4.03 4.03 0 0 0-1.68-7.28A3.14 3.14 0 0 0 12 4.72z" />
+    <path d="M12 4.72v15.12M4.72 13.12a3 3 0 0 0 4.03-1.6M19.28 13.12a3 3 0 0 1-4.03-1.6" />
+  </Icon>
+)
+
 /** Running a program: a terminal's prompt. */
 export const TerminalIcon = (props: IconProps) => (
   <Icon {...props}>
@@ -481,7 +491,7 @@ export const TerminalIcon = (props: IconProps) => (
   </Icon>
 )
 
-/** Reading, as Codex marks a run of reads: an open book. */
+/** A run of reads: an open book. */
 export const BookIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M3.5 4.5h4.5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h4.5a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H16a4 4 0 0 0-4 3 4 4 0 0 0-4-3H3.5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z" />

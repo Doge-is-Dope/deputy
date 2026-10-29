@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/sidebar"
 import { isComposing } from "@/lib/keys"
 import { Spinner } from "@/components/ui/spinner"
+import type { Project } from "@/lib/api"
 import { nameOf, type Conversation } from "@/lib/conversations"
 import { useT } from "@/lib/i18n"
 import { runHref } from "@/lib/route"
@@ -32,11 +33,8 @@ import {
 import { ConversationName } from "@/components/sidebar/conversation-name"
 import { fold } from "@/components/sidebar/motion"
 
-/** Status priority: needs user, running, unread failure/reply, then the menu.
- * Share one trailing slot so status and menu changes do not shift the row.
- * Memoized (memo), its callbacks taking the conversation rather than closing over it: the sidebar renders anew on any
- * change of its state, a drop or a scroll, and its rows, some forty, rendered again with it, for 20-30ms; with their
- * props unchanged they are skipped. */
+/** One trailing slot, by priority: needs user, running, unread, then the menu.
+ * Memoized, its callbacks taking the conversation, so a sidebar re-render skips unchanged rows. */
 export const ConversationItem = memo(function ConversationItem({
   conversation,
   active,
@@ -52,29 +50,27 @@ export const ConversationItem = memo(function ConversationItem({
   onNewProject,
 }: {
   conversation: Conversation
-  inset?: boolean // in a project: its name on the project's name's column, its highlight still the full row's width
-  moving?: "in" | "out" // just moved: into this list, its row opening, or out of it, a copy of its row closing up
+  inset?: boolean // in a project: name indented, highlight full width
+  moving?: "in" | "out" // just moved: its row opens here, or closes up
   active: boolean
-  needsYou: boolean // its run waits for the user (a step to approve, a takeover it asked for), as Grok Bot marks a bot that needs attention
+  needsYou: boolean // its run waits for the user: an approval or a takeover
   fresh: boolean // its latest run ended since the user last saw it
   selected: boolean
-  projects: string[] // every project, for it to be moved to
+  projects: Pick<Project, "id" | "name">[] // move targets
   onDelete: (conversation: Conversation) => void
   onRename: (id: string, title: string) => Promise<{ title: string } | null>
   onMove: (conversation: Conversation, project: string | null) => void
-  onNewProject: (conversation: Conversation) => void // a project to be named, for it to go into
+  onNewProject: (conversation: Conversation) => void // move it into a new project
 }) {
   const t = useT()
   const { isMobile, setOpenMobile } = useSidebar()
   // Enter or blur saves a changed, nonempty title; Escape cancels.
   const [draft, setDraft] = useState<string | null>(null)
-  // The name just given stands from the moment it is, as the runtime saves it and the list comes back with it: the
-  // name it had does not show again meanwhile. It goes once the list has it, or if the rename failed.
+  // The new name shows until the list has it, or the rename fails.
   const [given, setGiven] = useState<string | null>(null)
   if (given !== null && conversation.title === given) setGiven(null)
   const name = given ?? conversation.title
-  // A name the user gives is there at once, not rolled in as one the runtime makes arrives (ConversationName): the
-  // name is drawn anew with it.
+  // A user's rename remounts the name, skipping ConversationName's roll-in.
   const [renames, setRenames] = useState(0)
   const commit = () => {
     if (draft === null) return
@@ -83,7 +79,7 @@ export const ConversationItem = memo(function ConversationItem({
     if (!title || title === (name ?? nameOf(conversation))) return
     setGiven(title)
     setRenames((count) => count + 1)
-    // As the runtime saved it, its spaces collapsed and a long one cut.
+    // As the runtime saved it: spaces collapsed, length capped.
     void onRename(conversation.id, title).then((renamed) =>
       setGiven(renamed?.title ?? null)
     )
@@ -98,17 +94,18 @@ export const ConversationItem = memo(function ConversationItem({
         ? { color: "bg-destructive", label: t.sidebar.failed }
         : { color: "bg-unread", label: t.sidebar.unread }
       : null
-  const actionable = !active && !mark
-  const others = projects.filter((project) => project !== conversation.project)
-  // It can be carried onto a project, or out of one to the recents (AppSidebar), its row staying faded in its place
-  // meanwhile.
+  const actionable = !active
+  const others = projects.filter(
+    (project) => project.id !== conversation.project
+  )
+  const own = projects.find((project) => project.id === conversation.project)
+  // Draggable onto a project or back to the recents (AppSidebar).
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `conversation:${conversation.id}`,
     data: { conversation },
     disabled: draft !== null || moving === "out",
   })
-  // Moved, its row opens where it went and closes up where it was; deleted, it closes up. The only row in its list
-  // fades alone, as the empty list's line takes or gives up its place.
+  // Moved or deleted, the row opens or closes up; the only row in a list fades.
   const item = useRef<HTMLLIElement>(null)
   useLayoutEffect(() => {
     const row = item.current
@@ -121,7 +118,7 @@ export const ConversationItem = memo(function ConversationItem({
       ref={item}
       className={cn(moving === "out" && "pointer-events-none")}
     >
-      {/* Rows of 32px, and of 40px on a touch screen, for a finger to tap. */}
+      {/* 32px rows, 40px on touch screens. */}
       <SidebarMenuButton
         ref={setNodeRef}
         {...listeners}
@@ -134,9 +131,7 @@ export const ConversationItem = memo(function ConversationItem({
         render={<a href={runHref(conversation.id)} />}
         onClick={() => isMobile && setOpenMobile(false)}
       >
-        {/* A long title fades out, without the ellipsis the menu button gives its last span. While something holds the
-            place at the end (a mark, or the delete button: on hover, or always where nothing hovers), the fade starts
-            earlier and ends short of it, leaving a gap. */}
+        {/* A long title fades out instead of an ellipsis, ending short of the trailing slot when it is filled. */}
         <span
           className={cn(
             "min-w-0 flex-1 overflow-hidden mask-[linear-gradient(to_right,#000_calc(100%-2rem),transparent)] text-clip! whitespace-nowrap",
@@ -153,9 +148,15 @@ export const ConversationItem = memo(function ConversationItem({
             naming={active && name === null}
           />
         </span>
-        {/* In the link, so its name says it; placed on the item, where the delete button is. */}
+        {/* Inside the link so its label is announced; on an idle row it gives way to the menu button. */}
         {(mark || active) && (
-          <span className="pointer-events-none absolute inset-y-0 right-0 flex w-8 items-center justify-center">
+          <span
+            className={cn(
+              "pointer-events-none absolute inset-y-0 right-0 flex w-8 items-center justify-center",
+              actionable &&
+                "group-hover/menu-item:opacity-0 group-has-data-popup-open/menu-item:opacity-0 group-has-[:focus-visible]/menu-item:opacity-0 [@media(hover:none)]:opacity-0"
+            )}
+          >
             {mark ? (
               <span
                 role="img"
@@ -180,7 +181,7 @@ export const ConversationItem = memo(function ConversationItem({
           onFocus={(event) => event.currentTarget.select()}
           onBlur={commit}
           onKeyDown={(event) => {
-            // Enter or Esc while an input method composes picks or drops what it composes, as in the composer.
+            // Enter or Esc mid-composition belongs to the input method.
             if (isComposing(event.nativeEvent)) return
             if (event.key === "Enter") commit()
             if (event.key === "Escape") setDraft(null)
@@ -192,9 +193,7 @@ export const ConversationItem = memo(function ConversationItem({
         />
       )}
       {actionable && draft === null && (
-        // Shown on hover where a pointer can hover, and while its menu is open; on a touch screen it stays, as there
-        // is nothing to hover. Keyboard focus shows it too, but not the focus a click leaves behind, so it goes once
-        // the pointer leaves.
+        // Shown on hover, keyboard focus or while open; always on touch screens.
         <DropdownMenu>
           <DropdownMenuTrigger
             aria-label={t.sidebar.more}
@@ -202,18 +201,16 @@ export const ConversationItem = memo(function ConversationItem({
           >
             <EllipsisIcon className="size-[18px]" />
           </DropdownMenuTrigger>
-          {/* From the button's start, out over the page, as ChatGPT's and Claude's sidebar menus open: not held to
-              the sidebar, which is narrow. */}
+          {/* Opens out over the page, not held to the narrow sidebar. */}
           <DropdownMenuContent align="start" finalFocus={false}>
-            {/* The menu does not hand focus back to the button as it closes (finalFocus): the input mounts in the
-                same commit, focused, and would lose that to the button. */}
+            {/* No focus back to the button (finalFocus): the rename input takes it. */}
             <DropdownMenuItem
               onClick={() => setDraft(given ?? nameOf(conversation))}
             >
               <PencilIcon />
               {t.sidebar.renameConversation}
             </DropdownMenuItem>
-            {/* As ChatGPT's: its projects beside the menu, a new one first and out of its own last. */}
+            {/* New project first, removal from its own last. */}
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
                 <FolderIcon />
@@ -233,14 +230,14 @@ export const ConversationItem = memo(function ConversationItem({
                 {others.length > 0 && <DropdownMenuSeparator />}
                 {others.map((project) => (
                   <DropdownMenuItem
-                    key={project}
-                    onClick={() => onMove(conversation, project)}
+                    key={project.id}
+                    onClick={() => onMove(conversation, project.id)}
                   >
                     <FolderIcon />
-                    <span className="truncate">{project}</span>
+                    <span className="truncate">{project.name}</span>
                   </DropdownMenuItem>
                 ))}
-                {conversation.project !== null && (
+                {own !== undefined && (
                   <>
                     <DropdownMenuSeparator />
                     <DropdownMenuItem
@@ -248,7 +245,7 @@ export const ConversationItem = memo(function ConversationItem({
                     >
                       <FolderRemoveIcon />
                       <span className="truncate">
-                        {t.sidebar.removeFromProject(conversation.project)}
+                        {t.sidebar.removeFromProject(own.name)}
                       </span>
                     </DropdownMenuItem>
                   </>

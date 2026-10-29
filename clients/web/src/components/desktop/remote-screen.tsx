@@ -101,6 +101,8 @@ function showPointer(
 ) {
   if (!element) return
   element.toggleAttribute("data-glide", glide && element.style.opacity === "1")
+  const hidden = at === null
+  if (element.hidden !== hidden) element.hidden = hidden
   element.style.opacity = at ? "1" : "0"
   if (at) element.style.transform = `translate(${at.left}px, ${at.top}px)`
 }
@@ -333,6 +335,7 @@ export function RemoteScreen({
       />
       <div
         ref={cursor}
+        hidden
         aria-hidden
         className="pointer-events-none absolute top-0 left-0 opacity-0 will-change-transform data-glide:duration-180 data-glide:ease-(--ease-out) motion-safe:data-glide:transition-transform"
       >

@@ -1,5 +1,10 @@
 # One container: virtual display, RDP session to Windows, the runtime and its HTTP API, and a TURN server that
 # relays the live view's WebRTC stream to the browser.
+FROM python:3.15-slim-trixie AS keyboard-input
+RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev
+COPY keyboard-pipe.c /tmp/keyboard-pipe.c
+RUN cc -shared -fPIC -O2 -Wall -Wextra -Werror /tmp/keyboard-pipe.c -ldl -o /tmp/keyboard-pipe.so
+
 FROM python:3.15-slim-trixie
 
 COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /uvx /bin/
@@ -22,6 +27,7 @@ COPY pyproject.toml uv.lock ./
 RUN apt-get update && apt-get install -y --no-install-recommends gcc libc6-dev \
     && uv sync --locked --no-dev --no-install-project \
     && apt-get purge -y --auto-remove gcc libc6-dev && rm -rf /var/lib/apt/lists/*
+COPY --from=keyboard-input /tmp/keyboard-pipe.so /usr/local/lib/keyboard-pipe.so
 COPY src ./src
 RUN uv sync --locked --no-dev
 COPY entrypoint.sh /usr/local/bin/desktop-entrypoint

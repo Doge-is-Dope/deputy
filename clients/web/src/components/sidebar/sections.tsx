@@ -9,7 +9,7 @@ import { ChevronDownIcon } from "@/components/icons"
 import { carriedBy, RECENTS } from "@/components/sidebar/drag"
 import { FOLD } from "@/components/sidebar/motion"
 
-/** A heading that folds its section away and back, as ChatGPT's and Codex's sidebar headings do: a chevron after the
+/** A heading that folds its section away and back, as ChatGPT's sidebar headings do: a chevron after the
     name on hover, pointing down while the section shows and to the side while it is folded. The rows' size, as
     theirs: only the muted color sets it apart. Lit as a hovered row is while its section would take a carried
     conversation. */

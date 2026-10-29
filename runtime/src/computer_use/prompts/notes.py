@@ -2,6 +2,8 @@
 hand-overs, and for each task, how it opens, with a record of the conversation so far, and how its result reads."""
 
 from collections.abc import Sequence
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
 # Every message from the runtime to the main agent starts so: it comes in the user's turn, as model APIs take it.
 FROM_RUNTIME = "[From the runtime, not the user]"
@@ -58,9 +60,9 @@ UNKNOWN_RESULT = (
     "Check the current screen before doing it again."
 )
 
-# Added after a message for the desktop, as Claude Code and Codex add a word to a turn whose message names an agent or a
-# skill rather than force the tool: forcing computer_use would keep the main agent from handing other work over with it,
-# and Opus and Sonnet 5.5 take no forced tool. If the main agent still does not hand the message over, the runtime does.
+# Added after a message for the desktop rather than forcing the tool: forcing computer_use would keep the main agent
+# from handing other work over with it, and Opus and Sonnet 5.5 take no forced tool. If the main agent still does not
+# hand the message over, the runtime does.
 DESKTOP_ASKED = (
     "The user sent this message to the desktop (@Computer): in this reply, hand its desktop work over with "
     "computer_use, along with any other work it asks for."
@@ -153,10 +155,10 @@ def blackboard(requests: list[str], earlier: list[dict]) -> str:
     return "\n\n".join(parts)
 
 
-def opening(task: str, requests: list[str], board: str = "") -> str:
+def opening(task: str, requests: list[str], board: str = "", taught: str = "") -> str:
     """The first message's text: the task, the user's messages it comes from word for word (exact names, values and
-    wording may matter, and only the user's own words give permission): the run's, and those sent while it worked; and
-    the blackboard."""
+    wording may matter, and only the user's own words give permission): the run's, and those sent while it worked; the
+    rules the user taught that the task was handed over with (memory.prompts.handed); and the blackboard."""
     if len(requests) > 1:
         listed = "\n".join(f"- {request}" for request in requests)
         goal = f"Goal: {task}\n\nThe user's messages this task comes from, word for word, oldest first:\n{listed}"
@@ -164,7 +166,7 @@ def opening(task: str, requests: list[str], board: str = "") -> str:
         goal = f"Goal, in the user's own words: {task}"
     else:
         goal = f"Goal: {task}\n\nThe user's message this task comes from, word for word: {requests[0]}"
-    return f"{goal}\n\n{board}" if board else goal
+    return "\n\n".join(part for part in (goal, taught, board) if part)
 
 
 def told(said: Sequence[str]) -> str:
@@ -196,3 +198,15 @@ def report(name: str, how: str, reply: str, actions: Sequence[str], after: str =
         f"Its actions ({count}):\n{listed}"
     )
     return f"{text}\n\n{after}" if after else text
+
+
+def today(timezone: str | None) -> str:
+    """Today's date as the user's clock says, for words such as "last month" or "this Friday"; the runtime's own
+    clock when the page sent no time zone."""
+    now = datetime.now(ZoneInfo(timezone)) if timezone else datetime.now().astimezone()
+    return f"Today is {now:%A, %Y-%m-%d} ({timezone or now.tzname()})."
+
+
+def following(count: int) -> str:
+    """The note in a task's log that it was handed over with rules the user taught (memoryUsed)."""
+    return f"Following {count} rule{'s' if count != 1 else ''} the user taught."

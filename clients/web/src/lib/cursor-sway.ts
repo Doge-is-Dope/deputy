@@ -21,6 +21,7 @@ export function createCursorSway(element: HTMLElement) {
   let swung = 0 // seconds swung; stopped while it settles, so it comes back without a jerk
   let last = 0
   let frame = 0
+  let visible = true
 
   const draw = (now: number) => {
     const progress = Math.min(
@@ -40,6 +41,22 @@ export function createCursorSway(element: HTMLElement) {
     frame = requestAnimationFrame(draw)
   }
 
+  const observer = new IntersectionObserver(([entry]) => {
+    if (visible === entry.isIntersecting) return
+    visible = entry.isIntersecting
+    if (!visible) {
+      cancelAnimationFrame(frame)
+      frame = 0
+    } else if (on || level > 0) {
+      // Resume from the last drawn position, leaving time spent hidden out of the swing.
+      const now = performance.now()
+      since += now - last
+      last = now
+      frame ||= requestAnimationFrame(draw)
+    }
+  })
+  observer.observe(element)
+
   return {
     set(next: boolean) {
       next &&= !reducedMotion()
@@ -47,10 +64,11 @@ export function createCursorSway(element: HTMLElement) {
       on = next
       from = level
       since = last = performance.now()
-      frame ||= requestAnimationFrame(draw)
+      if (visible) frame ||= requestAnimationFrame(draw)
     },
     dispose() {
       cancelAnimationFrame(frame)
+      observer.disconnect()
       element.style.rotate = ""
     },
   }

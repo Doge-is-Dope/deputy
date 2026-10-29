@@ -1,11 +1,10 @@
-"""Every run store keeps the record the same way: the contract FileRunStore and MemoryRunStore both meet."""
-
 import json
+import threading
 
 import pytest
 
 from computer_use.storage import FORMAT
-from computer_use.storage.files import FileRunStore
+from computer_use.storage.files import FileProjectStore, FileRunStore
 from conftest import MemoryRunStore
 
 
@@ -48,13 +47,13 @@ async def test_only_records_in_the_current_format_are_listed_and_a_conversation_
 
 async def test_a_summary_reads_the_title_project_actions_and_end_off_the_events(store):
     run = await store.create()
-    store.append(run, start(run) | {"project": "eval"})
+    store.append(run, start(run) | {"project": "p1"})
     store.append(run, {"type": "title", "text": "Opening Start"})
     store.append(run, {"type": "action", "n": 1})
     store.append(run, {"type": "action", "agent": "main", "n": 1})
     store.append(run, {"type": "end", "stop_reason": "error"})
     (summary,) = await store.summaries()
-    assert (summary.title, summary.project, summary.actions, summary.failed) == ("Opening Start", "eval", 1, True)
+    assert (summary.title, summary.project, summary.actions, summary.failed) == ("Opening Start", "p1", 1, True)
     assert summary.ended is not None and summary.ended >= summary.started
 
 
@@ -84,7 +83,7 @@ async def test_the_revision_moves_with_the_list_and_not_with_a_runs_other_events
     seen = [await store.revision()]
     run = await store.create()
     seen.append(await store.revision())
-    for event in (start(run), {"type": "title", "text": "Start"}, {"type": "project", "name": "eval"}, {"type": "end"}):
+    for event in (start(run), {"type": "title", "text": "Start"}, {"type": "project", "project": "p1"}, {"type": "end"}):
         store.append(run, event)
         seen.append(await store.revision())
     assert seen == sorted(seen) and len(set(seen)) == len(seen)
@@ -104,6 +103,17 @@ async def test_the_file_store_leaves_out_a_line_cut_off_by_a_crash_and_sees_anot
         file.write(json.dumps({"type": "note", "text": "cut off"}))
     assert [event["type"] for event in await store.events(run)] == ["start", "title", "end"]
     assert store.count(run) == 3
+
+
+async def test_the_file_store_parses_records_off_the_event_loop(tmp_path, monkeypatch):
+    store, parsed_on = FileRunStore(tmp_path), set()
+    parse = FileRunStore._parse
+    monkeypatch.setattr(FileRunStore, "_parse", staticmethod(
+        lambda text, after=-1: parsed_on.add(threading.get_ident()) or parse(text, after)))
+    run = await store.create()
+    store.append(run, start(run, goal="open paint"))
+    assert await store.events(run) and await store.summaries() and await store.search("paint", "local")
+    assert parsed_on and threading.get_ident() not in parsed_on
 
 
 async def test_a_search_finds_conversations_by_what_the_user_and_the_main_agent_said(store):
@@ -154,3 +164,41 @@ async def test_a_conversation_and_its_search_are_its_users_alone(store):
     await store.delete(alices)
     assert await store.conversation(alices, deleted=True, user="bob") == []
     assert await store.conversation(alices, deleted=True, user="alice") == [alices]
+
+
+async def test_projects_are_each_users_own_and_a_name_names_one(tmp_path):
+    projects = FileProjectStore(tmp_path)
+    made = await projects.create("alice", "  客戶  報價 ")
+    assert made.name == "客戶 報價" and await projects.create("alice", "客戶 報價") == made
+    bobs = await projects.create("bob", "客戶 報價")
+    assert bobs.id != made.id and await projects.get("bob", made.id) is None
+    assert [each.id for each in await projects.list("alice")] == [made.id]
+
+
+async def test_a_renamed_project_keeps_its_id_unless_the_name_is_taken(tmp_path):
+    projects = FileProjectStore(tmp_path)
+    first, second = await projects.create("local", "a"), await projects.create("local", "b")
+    assert (await projects.rename("local", first.id, "c")).id == first.id
+    with pytest.raises(ValueError):
+        await projects.rename("local", first.id, "b")
+    assert await projects.rename("local", "nope", "d") is None
+    assert await projects.delete("local", second.id) and not await projects.delete("local", second.id)
+    assert [each.name for each in await FileProjectStore(tmp_path).list("local")] == ["c"]
+    assert await projects.get("local", second.id) is None and await projects.rename("local", second.id, "e") is None
+
+
+async def test_a_deleted_project_comes_back_by_its_id_unless_its_name_was_taken(tmp_path):
+    projects = FileProjectStore(tmp_path)
+    first, second = await projects.create("local", "a"), await projects.create("local", "b")
+    await projects.delete("local", first.id)
+    assert (await projects.create("local", "a")).id != first.id
+    assert await projects.restore("local", first.id) is None
+    await projects.delete("local", second.id)
+    assert (await projects.restore("local", second.id)).id == second.id
+    assert await projects.restore("local", second.id) is None
+    assert [each.name for each in await projects.list("local")] == ["b", "a"]
+
+
+async def test_a_project_store_takes_only_user_ids_as_folders(tmp_path):
+    with pytest.raises(ValueError):
+        await FileProjectStore(tmp_path).create("../x", "a")

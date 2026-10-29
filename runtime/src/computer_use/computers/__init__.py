@@ -69,4 +69,4 @@ def build_computer(settings: Settings) -> Computer:
     # RDP only so far; other backends plug in here behind a setting.
     from computer_use.computers.rdp import RdpComputer
 
-    return RdpComputer(settings.display, settings.type_mode)
+    return RdpComputer(settings.display, settings.keyboard_pipe)

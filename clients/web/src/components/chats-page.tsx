@@ -7,6 +7,7 @@ import { Input } from "@/components/ui/input"
 import { useNow } from "@/hooks/use-now"
 import { useSearch } from "@/hooks/use-search"
 import { nameOf, type Conversation } from "@/lib/conversations"
+import type { Project } from "@/lib/api"
 import { timeAgo } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { runHref } from "@/lib/route"
@@ -16,14 +17,18 @@ import { found } from "@/lib/search"
  * recently active first, with its project and when it was last active. The sidebar lists only the latest few. */
 export function ChatsPage({
   conversations,
+  projects,
   isNew,
   onOpen,
 }: {
   conversations: Conversation[]
+  projects: Project[]
   isNew: (conversation: string, ended: number | null) => boolean
   onOpen?: () => void
 }) {
   const t = useT()
+  const projectName = (id: string | null) =>
+    projects.find((project) => project.id === id)?.name
   const [query, setQuery] = useState("")
   const search = useRef<HTMLInputElement>(null)
   const now = useNow(true, 60_000)
@@ -90,9 +95,9 @@ export function ChatsPage({
                         />
                       )}
                     </span>
-                    {conversation.project && (
+                    {projectName(conversation.project) && (
                       <span className="shrink-0 text-xs text-muted-foreground">
-                        {conversation.project}
+                        {projectName(conversation.project)}
                       </span>
                     )}
                     <span className="shrink-0 text-xs text-muted-foreground">

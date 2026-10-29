@@ -51,8 +51,9 @@ export function AgentsGroup({
   ) => ReactNode
 }) {
   const t = useT()
-  const working = active && tasks.some((task) => task.outcome === "running")
-  const done = tasks.filter((task) => task.outcome !== "running").length
+  const running = tasks.filter((task) => task.outcome === "running").length
+  const working = active && running > 0
+  const done = tasks.length - running
   const now = useNow(working)
   const started = Math.min(...tasks.map((task) => task.started))
   const until = working
@@ -69,11 +70,13 @@ export function AgentsGroup({
   const liveShot = computer?.entries.findLast(
     (entry) => entry.kind === "step" && entry.step.action?.screenshot
   )
+  // Working, the agents still at it (the ones done are counted after it); done, all of them.
+  const count = working ? running : tasks.length
   const title = working
-    ? t.run.agents.working(tasks.length)
-    : t.run.agents.worked(tasks.length)
+    ? t.run.agents.working(count)
+    : t.run.agents.worked(count)
   // The words around the count, which pops in on its own.
-  const [before, after] = title.split(String(tasks.length))
+  const [before, after] = title.split(String(count))
   return (
     <Trace className="arrive-line gap-0">
       <TraceCollapsible open={full} onOpenChange={onFull}>
@@ -102,8 +105,8 @@ export function AgentsGroup({
                   className={cn("reveal", working && "shimmer")}
                 >
                   {before}
-                  <span key={tasks.length} className="inline-flex">
-                    {String(tasks.length)
+                  <span key={count} className="inline-flex">
+                    {String(count)
                       .split("")
                       .map((digit, n) => (
                         <span

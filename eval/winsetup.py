@@ -128,14 +128,14 @@ async def main(marker: str, steps: list[dict]) -> dict:
     from computer_use.config import get_settings
 
     settings = get_settings()
-    computer = RdpComputer(settings.display, settings.type_mode)
+    computer = RdpComputer(settings.display, settings.keyboard_pipe)
     set_clipboard(settings.display, setup_script(steps, marker))
     before = (await computer.screenshot()).png
     await computer.press([["win", "r"]])
     await asyncio.sleep(1.5)
     if (await computer.screenshot()).png == before:
         return {"ok": False, "detail": "the Run dialog did not open"}
-    await computer.type_text(BOOTSTRAP)  # pastes through the clipboard, then puts the script back
+    await computer.type_text(BOOTSTRAP)  # Unicode input leaves the setup script on the clipboard.
     await computer.press([["enter"]])
     deadline = time.monotonic() + REPLY_TIMEOUT
     while time.monotonic() < deadline:

@@ -2,7 +2,7 @@ import { useEffect, useState } from "react"
 
 import { api, type SearchHit } from "@/lib/api"
 
-// Asked once typing pauses this long: between Codex's 100 ms and Claude's 500 ms.
+// Asked once typing pauses this long.
 const PAUSE = 150
 
 /** The conversations whose words hold the query, from the runtime; none for no query or when it cannot answer. Until

@@ -22,7 +22,7 @@ from typing import Annotated
 
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, TodoListMiddleware, hook_config
-from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, SystemMessage, ToolMessage
 from langchain_core.tools import BaseTool, tool
 from pydantic import Field
 
@@ -37,7 +37,11 @@ from computer_use.agent.models import MAIN_AGENT, build_chat_model, chosen
 from computer_use.agent.subagent import StopReason, Subagent
 from computer_use.agent.tools import CallId, not_executed
 from computer_use.agent.tracing import configure_tracing
-from computer_use.storage import LOCAL_USER, RunStore, Thread
+from computer_use.memory import MemoryStore
+from computer_use.memory.context import Recalled
+from computer_use.memory.middleware import MemoryMiddleware
+from computer_use.memory.prompts import handed
+from computer_use.storage import LOCAL_USER, RunStore, Thread, project_in
 from computer_use.agent.trajectory import (
     MAIN,
     Listener,
@@ -47,7 +51,7 @@ from computer_use.agent.trajectory import (
 from computer_use.computers import Computer
 from computer_use.sandbox import CodeRunner
 from computer_use.config import Approvals, Choice, RunChoices, Settings
-from computer_use.agent.history import can_continue, load_conversation
+from computer_use.agent.history import can_continue, cut_off, load_conversation
 from computer_use.prompts import notes
 from computer_use.prompts.main import PLAN_PROMPT, PLAN_TOOL, TITLE, main_prompt
 from computer_use.desktop.control import ControlFile, DesktopBusy, RunLock, hand_over
@@ -59,6 +63,8 @@ SEARCH_CONVERSATIONS = "search_conversations"
 # The most conversations a search tells the main agent of, as Claude desktop's search_session_transcripts.
 SEARCH_HITS = 20
 WRITE_TODOS = "write_todos"  # TodoListMiddleware's tool: the plan
+# What a hand-over's rules argument should say, while the run remembers rules for the user.
+RULES = "The ids of the remembered rules that apply to this task, for its agent to follow; none if none apply."
 # The agents the main agent may hand work to, and the tools that start their work in the background, one each.
 SUBAGENTS: tuple[type[Subagent], ...] = (ComputerAgent, CodingAgent)
 HANDING_OVER = tuple(each.tool for each in SUBAGENTS)
@@ -98,9 +104,18 @@ def unanswered(messages: list[BaseMessage]) -> list[ToolMessage]:
     ]
 
 
-def handover_tools(subagents: Sequence[Subagent], lock: RunLock, background: Background, user: Inbox) -> list[BaseTool]:
+def told_stopped(log: Trajectory, id: str, tool: str, brief: str) -> HumanMessage:
+    """Log, for the main agent, that a task stopped with its run before it ended; the note."""
+    note = runtime_message(notes.task_stopped(id, tool, brief), "task_stopped", id=id, tool=tool)
+    log.input(note, "stopped", MAIN)
+    return note
+
+
+def handover_tools(
+    subagents: Sequence[Subagent], lock: RunLock, background: Background, user: Inbox, recalled: Recalled | None = None
+) -> list[BaseTool]:
     """The tools that hand work over in the background, one per agent, and tell or stop it while it runs."""
-    tools = [handover_tool(each, lock, background, user) for each in subagents]
+    tools = [handover_tool(each, lock, background, user, recalled) for each in subagents]
 
     @tool(TELL_TASK)
     def tell_task(
@@ -168,9 +183,12 @@ def search_tool(store: RunStore, thread: Thread, user: str) -> BaseTool:
     return search_conversations
 
 
-def handover_tool(agent: Subagent, lock: RunLock, background: Background, user: Inbox) -> BaseTool:
+def handover_tool(
+    agent: Subagent, lock: RunLock, background: Background, user: Inbox, recalled: Recalled | None = None
+) -> BaseTool:
     """Build a background delegation tool; each task gets an agent of its own, and desktop tasks, one at a time, hold
-    RunLock until they end."""
+    RunLock until they end. While the run remembers rules for the user (`recalled`), a task is handed over with those
+    that apply to it, by id, and its agent gets them word for word."""
 
     async def hand_task(
         title: Annotated[str, Field(description=TITLE)],
@@ -178,6 +196,18 @@ def handover_tool(agent: Subagent, lock: RunLock, background: Background, user: 
         *,
         call_id: CallId,
     ) -> str | ToolMessage:
+        return await hand(title, task, [], call_id)
+
+    async def hand_task_with_rules(
+        title: Annotated[str, Field(description=TITLE)],
+        task: Annotated[str, Field(description=agent.brief)],
+        rules: Annotated[list[str] | None, Field(description=RULES)] = None,
+        *,
+        call_id: CallId,
+    ) -> str | ToolMessage:
+        return await hand(title, task, rules or [], call_id)
+
+    async def hand(title: str, task: str, rules: list[str], call_id: str) -> str | ToolMessage:
         call = {"id": call_id, "name": agent.tool}
         if agent.uses_computer and (using := background.computer) is not None:
             return not_executed(call, notes.computer_in_use(using.id), "computerInUse")
@@ -192,9 +222,16 @@ def handover_tool(agent: Subagent, lock: RunLock, background: Background, user: 
                 return not_executed(call, notes.DESKTOP_BUSY.removeprefix("Not executed: "), "desktopBusy")
 
         worker = copy.copy(agent)
+        taught = await recalled.use(rules) if recalled is not None and rules else []
+        worker.taught = handed(taught)
 
         async def work(id: str, told: Inbox):
             worker.task = id
+            if taught:  # the page shows them in the task
+                agent.log.note(
+                    notes.following(len(taught)), "memoryUsed",
+                    rules=[{"id": memory.id, "text": memory.text} for memory in taught],
+                )
             try:
                 return await worker.run(task, told)
             finally:
@@ -205,7 +242,8 @@ def handover_tool(agent: Subagent, lock: RunLock, background: Background, user: 
         id = background.start(agent.tool, task, work, worker.steps, len(user.read(MAIN)), agent.uses_computer, title)
         return notes.started(id)
 
-    return tool(agent.tool, description=agent.description)(hand_task)
+    handing = hand_task_with_rules if recalled is not None and recalled.memories else hand_task
+    return tool(agent.tool, description=agent.description)(handing)
 
 
 def under_way(args: dict) -> str | None:
@@ -246,7 +284,7 @@ class ChatMiddleware(AgentMiddleware):
 
     def __init__(
         self, log: Trajectory, inbox: Inbox, background: Background, given: int, to_desktop: set[str], draft: Draft,
-        hand_to_desktop: Callable[[str], Awaitable[ToolMessage]],
+        hand_to_desktop: Callable[[str], Awaitable[ToolMessage]], date: str,
     ):
         super().__init__()
         self.log = log
@@ -255,6 +293,7 @@ class ChatMiddleware(AgentMiddleware):
         self.given = given  # messages the run started with, logged already or in earlier runs
         self.to_desktop = to_desktop  # the ids of the user's messages for the desktop (@Computer) not handed over yet
         self.hand_to_desktop = hand_to_desktop  # hands such messages over when the main agent's reply does not
+        self.date = date  # fixed for the run, appended after the rules and recalled memory
         self.notes: list[HumanMessage] = []  # the runtime's words for its next call, after its last calls' results
         self.draft = draft
         self.busy = False  # whether tasks ran when the main agent's model was last called
@@ -302,8 +341,11 @@ class ChatMiddleware(AgentMiddleware):
 
     async def awrap_model_call(self, request, handler):
         self.busy = self.background.running
+        blocks = list(request.system_message.content_blocks) if request.system_message is not None else []
+        blocks.append({"type": "text", "text": f"\n\n{self.date}"})
         try:
             return await handler(request.override(
+                system_message=SystemMessage(content=blocks),
                 messages=prune_screenshots(request.messages, KEEP_SCREENSHOTS, PRUNE_EVERY)
             ))
         except asyncio.CancelledError:
@@ -403,9 +445,11 @@ async def run_turn(
     approvals: Callable[[], Approvals] | None = None,
     project: str | None = None,
     user: str = LOCAL_USER,
+    memory: MemoryStore | None = None,
 ) -> TurnResult:
     """Answer a message, restoring prior main-agent context when thread is given; the run is `user`'s, whose other
-    conversations alone its search finds.
+    conversations alone its search finds, and in `project` (an id) when it begins a conversation there. With `memory`,
+    the main agent remembers rules from the user's corrections and follows them, as far as `choices` let it.
 
     The computer, the run store and the code runner are the server's, which made them: the run makes none of its own.
     Without a code runner, or with one not connected, there is no coding agent.
@@ -420,10 +464,12 @@ async def run_turn(
     or cancellation stops the task, closes the log with usage, then raises."""
     configure_tracing()
     earlier: list[BaseMessage] = []
+    cut: list[dict] = []
     if thread is not None:
         if not await can_continue(store, thread):
             raise ValueError(f"conversation {thread} is missing or uses an unsupported log format")
         earlier = await load_conversation(store, thread)
+        cut = await cut_off(store, thread)
     main = chosen(settings, MAIN_AGENT, choices.agents)  # the main agent's, for the whole run
     inbox = inbox if inbox is not None else Inbox()
     lock = RunLock(settings.run_lock_path)
@@ -450,9 +496,12 @@ async def run_turn(
         if code_runner is not None and (await code_runner.status()).connected:
             agents.append(CodingAgent(settings, code_runner, log, thread, message, max_steps, inbox, choices))
         try:
+            # A message that continues a conversation is in the conversation's project, as its first run says.
+            if thread != log.run:
+                project = project_in(await store.events(thread))
             reply = await converse(
                 settings, main, message, earlier, agents, lock, log, thread, force_computer, inbox, draft,
-                choices, user,
+                choices, user, memory, project, cut,
             )
         except (asyncio.CancelledError, Exception) as error:
             stopped = isinstance(error, asyncio.CancelledError)
@@ -482,22 +531,32 @@ async def converse(
     draft: Draft,
     choices: RunChoices = RunChoices(),
     user: str = LOCAL_USER,
+    memory: MemoryStore | None = None,
+    project: str | None = None,
+    cut: Sequence[dict] = (),
 ) -> str:
-    """The run itself, once its log has started: the main agent's turns, until the run is quiet; its last reply."""
+    """The run itself, once its log has started: the main agent's turns, until the run is quiet; its last reply. What
+    it remembers is recalled once, as it starts, into its system prompt. `cut` are the tasks the previous run started
+    and the runtime died under (history.cut_off), which the main agent hears of here."""
     log.note(f"Goal: {message}\nWatch: {settings.web_url}\nRun: {log.run}", "goal")
     if unknown := unanswered(earlier):
         log.note(f"The previous run stopped during {', '.join(r.name for r in unknown)}; whether it happened is unknown.",
                  "interrupted", tool=", ".join(r.name for r in unknown))
         for result in unknown:
             log.input(result, "unknown", MAIN)
+    stopped = [told_stopped(log, task["id"], task["tool"], task["brief"]) for task in cut]
     start = HumanMessage(content=message)
     log.input(start, "message", MAIN)
-    given = [*earlier, *unknown, start]
+    given = [*earlier, *unknown, *stopped, start]
     if force_computer:
         given.append(asked := runtime_message(notes.DESKTOP_ASKED, "desktop_asked"))
         log.input(asked, "desktop-asked", MAIN)
     background = Background(log)
-    tools = [*handover_tools(agents, lock, background, inbox), search_tool(log.store, thread, user)]
+    remembering = [
+        MemoryMiddleware(memory, user, project, thread, log.run, learn=choices.learn, use=choices.recall)
+    ] if memory is not None else []
+    recalled = await remembering[0].recalled() if remembering else None
+    tools = [*handover_tools(agents, lock, background, inbox, recalled), search_tool(log.store, thread, user)]
     to_computer = next(each for each in tools if each.name == COMPUTER_USE)
 
     async def hand_to_desktop(text: str) -> ToolMessage:
@@ -511,9 +570,10 @@ async def converse(
         tools,
         system_prompt=main_prompt(MAX_TASKS, [each.prompt for each in agents]),
         middleware=[
-            ChatMiddleware(log, inbox, background, len(given), {start.id} if force_computer else set(), draft,
-                           hand_to_desktop),
             TodoListMiddleware(system_prompt=PLAN_PROMPT, tool_description=PLAN_TOOL),
+            *remembering,
+            ChatMiddleware(log, inbox, background, len(given), {start.id} if force_computer else set(), draft,
+                           hand_to_desktop, notes.today(choices.timezone)),
         ],
     )
     config = {
@@ -543,9 +603,7 @@ async def converse(
             note = runtime_message(notes.REPLY_STOPPED, "reply_stopped")
             log.input(note, "stopped", MAIN)
         for job in background.jobs.values():  # the next run hears of them
-            note = runtime_message(notes.task_stopped(job.id, job.tool, job.brief), "task_stopped",
-                                   id=job.id, tool=job.tool)
-            log.input(note, "stopped", MAIN)
+            told_stopped(log, job.id, job.tool, job.brief)
         raise
     finally:
         draft.clear()  # also a call that failed partway

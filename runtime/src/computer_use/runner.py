@@ -8,6 +8,7 @@ import asyncio
 import traceback
 from dataclasses import dataclass, replace
 
+from computer_use.memory import MemoryStore
 from computer_use.agent.main_agent import forced, run_turn
 from computer_use.agent.draft import Draft
 from computer_use.agent.inbox import Inbox, Message
@@ -20,10 +21,10 @@ from computer_use.config import Approvals, RunChoices, Settings
 
 
 class ConversationBusy(RuntimeError):
-    """The conversation already has a run in progress: `run` is its id, None while it is starting."""
+    """The conversation is occupied: `run` is its id, None while starting or deleting."""
 
     def __init__(self, run: str | None):
-        super().__init__(f"this conversation has a run in progress: {run or 'one that is starting'}")
+        super().__init__(f"this conversation is busy: {run or 'starting or being deleted'}")
         self.run = run
 
 
@@ -44,11 +45,15 @@ class Runner:
     """The runs this server started, while they go on: one per conversation, any number of conversations. Which run
     has the desktop, started here or by another server sharing it, is the run lock's to say."""
 
-    def __init__(self, settings: Settings, computer: Computer, store: RunStore, code_runner: CodeRunner | None = None):
+    def __init__(
+        self, settings: Settings, computer: Computer, store: RunStore, code_runner: CodeRunner | None = None,
+        memory: MemoryStore | None = None,
+    ):
         self.settings = settings
         self.computer = computer
         self.store = store  # where the runs are kept
         self.code_runner = code_runner  # where the coding agent's commands run; None: no coding agent
+        self.memory = memory  # what the agent remembers for each user; None: nothing
         self.runs: dict[str, Running] = {}  # by conversation
         self.error: dict | None = None  # the last run that died with an error: its id and the error
         self.following: set[asyncio.Task] = set()  # runs being started with what an ended run did not read
@@ -93,6 +98,16 @@ class Runner:
         running.choices = replace(running.choices, approvals=approvals)
         return True
 
+    async def delete(self, thread: str) -> list[str]:
+        """Reserve an idle conversation while its records are read and moved to trash."""
+        if thread in self.runs:
+            raise ConversationBusy(self.runs[thread].run)
+        self.runs[thread] = Running(None, None, Inbox(), 0, Draft())
+        try:
+            return await self.store.delete(thread)
+        finally:
+            self.runs.pop(thread, None)
+
     async def start(
         self,
         goal: str,
@@ -126,7 +141,7 @@ class Runner:
             run_turn(
                 self.settings, goal, max_steps, self.computer, self.store, listeners, thread, force_computer,
                 take_control, running.inbox, running.draft, self.code_runner, choices, titles=self.titles,
-                approvals=lambda: running.choices.approvals, project=project, user=user,
+                approvals=lambda: running.choices.approvals, project=project, user=user, memory=self.memory,
             )
         )
         try:
@@ -152,8 +167,7 @@ class Runner:
         if not task.cancelled() and (error := task.exception()) is not None:
             traceback.print_exception(error)
             self.error = {"run": running.run, "message": f"{type(error).__name__}: {error}"}
-        # What the run did not read goes on as the conversation's next message, as Claude Code sends what is queued
-        # when a turn ends or is stopped.
+        # What the run did not read goes on as the conversation's next message, once it ends or is stopped.
         if unread and not self.closing:
             follow = asyncio.get_running_loop().create_task(
                 self._follow(thread, unread, running.max_steps, running.choices, running.user)

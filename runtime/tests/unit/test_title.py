@@ -1,7 +1,3 @@
-"""A conversation is named from its first message by a small model in the background (agent.title): the name goes into
-the run's log, where the page lists the conversation by it; a run never waits for it, one that is stopped or fails still
-gets it, and one that gets none leaves it to the conversation's next run."""
-
 import asyncio
 import json
 

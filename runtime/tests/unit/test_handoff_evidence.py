@@ -44,3 +44,16 @@ def test_checkpoints_keep_pre_entry_full_screens_not_zoom_or_main_images():
     assert text_entry_screens(events) == [(1, "initial.png"), (4, "save-dialog.png")]
     assert text_entry_screens(events, limit=1) == [(4, "save-dialog.png")]
     assert text_entry_screens(events, limit=0) == []
+
+
+def test_the_main_agent_hears_all_a_user_said_declining_a_step_and_how_long_they_took_over():
+    note = "不要寄給全部門，只寄給我主管 " * 20
+    declined = action(1, "key", {"text": "ctrl+enter", "needs_confirmation": True, "consequence": "寄出"},
+                      "Not executed: the user declined this step. " + "x" * 300, status="error") | {"id": "c1"}
+    lines = action_lines([
+        {"type": "decision", "id": "c1", "outcome": "declined", "note": note, "by": "web"},
+        declined,
+        {"type": "note", "code": "controlReturned", "text": "Control returned after 42s", "data": {"seconds": 42.4}},
+    ])
+    assert lines[0].endswith(f"the user declined it, saying: {note.strip()}")
+    assert lines[1] == "The user had the desktop for 42 seconds, then gave it back."

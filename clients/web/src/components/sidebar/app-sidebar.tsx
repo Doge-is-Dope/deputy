@@ -49,7 +49,7 @@ import {
   type Shortcut,
 } from "@/lib/keys"
 import { Skeleton } from "@/components/ui/skeleton"
-import { runningOf, waitingOf, type Status } from "@/lib/api"
+import { runningOf, waitingOf, type Project, type Status } from "@/lib/api"
 import { nameOf, type Conversation } from "@/lib/conversations"
 import { useT } from "@/lib/i18n"
 import { signOut, useSession } from "@/lib/session"
@@ -70,6 +70,7 @@ import {
 } from "@/components/icons"
 import { SearchDialog } from "@/components/search-dialog"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
+import { ProjectMemoryDialog } from "@/components/memory/project-memory"
 import { ConversationItem } from "@/components/sidebar/conversation-item"
 import { UserAvatar } from "@/components/sidebar/user-avatar"
 import { NewProjectRow, ProjectGroup } from "@/components/sidebar/projects"
@@ -96,7 +97,7 @@ import { useSidebarLists } from "@/components/sidebar/use-sidebar-lists"
 const PAGE = 20
 
 // 設定 opens with ⌘ , (Ctrl , off a Mac), as in most apps; 新增 with ⇧ ⌘ O, as ChatGPT's does: ⌘ N is the
-// browser's, for a new window. 搜尋 with ⌘ K, as ChatGPT's and Codex's.
+// browser's, for a new window. 搜尋 with ⌘ K, as ChatGPT's.
 const SETTINGS_SHORTCUT: Shortcut = { key: "," }
 const NEW_SHORTCUT: Shortcut = { key: "o", shift: true }
 const SEARCH_SHORTCUT: Shortcut = { key: "k" }
@@ -125,7 +126,7 @@ function ShortcutItem({
           ),
         }}
         aria-keyshortcuts={shortcutAria(shortcut)}
-        // As high as a conversation's row, as ChatGPT's and Codex's commands are. In the closed rail a 32px square under
+        // As high as a conversation's row, as ChatGPT's commands are. In the closed rail a 32px square under
         // the trigger's middle, so closing the sidebar moves no icon: the margin and padding change together.
         className="h-8 pl-2.5 transition-[width,height,padding,margin] group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-1.5! pointer-coarse:h-10"
         {...props}
@@ -157,6 +158,10 @@ export function AppSidebar({
   onDelete,
   onRename,
   onMove,
+  projects: made,
+  onCreateProject,
+  onRenameProject,
+  onDeleteProject,
   composer,
 }: {
   composer: RefObject<HTMLTextAreaElement | null> // where 新增 puts the caret
@@ -182,6 +187,10 @@ export function AppSidebar({
     conversation: string,
     project: string | null
   ) => Promise<{ project: string | null } | null>
+  projects: Project[] | null // the viewer's, empty ones too
+  onCreateProject: (name: string) => Promise<Project | null>
+  onRenameProject: (project: string, name: string) => Promise<Project | null>
+  onDeleteProject: (project: string) => Promise<unknown>
 }) {
   const t = useT()
   const { isMobile, setOpenMobile, state } = useSidebar()
@@ -206,18 +215,28 @@ export function AppSidebar({
   // The lists as the viewer sees them, and the edits to them.
   const {
     projects,
+    names,
     recents,
     closing,
     left,
     opened,
     setOpened,
-    setMade,
     setOrder,
     remove,
     deleteProject,
     move,
+    createProject,
     renameProject,
-  } = useSidebarLists({ conversations, selectedProject, onDelete, onMove })
+  } = useSidebarLists({
+    conversations,
+    projects: made,
+    selectedProject,
+    onDelete,
+    onMove,
+    onCreateProject,
+    onRenameProject,
+    onDeleteProject,
+  })
   // The project being dragged, until it has landed (DROP) and the lists have unfolded after it (FOLD), dropped or
   // not: what the overlay carries meanwhile, and which lists open at once (ProjectGroup). The drop's own end is not
   // told when it has nothing to animate, so its time is waited for instead; and clearing this renders the whole
@@ -314,7 +333,12 @@ export function AppSidebar({
         conversation.id !== openConversation &&
         isNew(conversation.id, conversation.latest.ended)
     )
-  const names = useMemo(() => projects.map(([project]) => project), [projects])
+  const ids = useMemo(() => projects.map(([project]) => project), [projects])
+  // Every project, for a conversation's menu to move it to.
+  const choices = useMemo(
+    () => ids.map((id) => ({ id, name: names[id] ?? "" })),
+    [ids, names]
+  )
   // The first page of recents. A copy closing up where it was is not counted: the next one comes in under the page,
   // opening as the copy closes (entering), so the list keeps its length. Only the rows between move; those above and
   // the All chats link stay put, rather than the link dropping a row and sliding back, or at the end of the list's
@@ -344,7 +368,7 @@ export function AppSidebar({
       needsYou={conversation.runs.some((run) => run.id === waitingRun)}
       fresh={isNew(conversation.id, conversation.latest.ended)}
       selected={conversation.id === openConversation}
-      projects={names}
+      projects={choices}
       onDelete={remove}
       onRename={onRename}
       onMove={move}
@@ -447,16 +471,18 @@ export function AppSidebar({
           // them otherwise. The drag itself does not need them: dnd-kit's sensors listen on the document, and where
           // the row would land comes from the rows' rectangles, not from what is under the pointer.
           className={cn(
-            "pt-3 group-data-[collapsible=icon]:*:hidden",
+            "overflow-x-hidden pt-2 group-data-[collapsible=icon]:*:hidden",
             (carried || sorting) && "pointer-events-none"
           )}
           ref={list}
           onScroll={measure}
         >
-          <div ref={rows} className="flex flex-1 flex-col gap-5">
+          <div ref={rows} className="flex flex-1 flex-col gap-4">
             {notice && (
-              // Alone in the list's space, so in the middle of it.
-              <p className="m-auto px-4 py-2 text-center text-xs text-balance text-muted-foreground">
+              // Alone in the list's space, so in the middle of it. As wide as the open sidebar, so while it opens the
+              // edge uncovers the notice where it ends up, as it does the labels, instead of wrapping it anew each frame. The
+              // list is a pixel narrower, for the sidebar's border, and clips that pixel rather than scrolling sideways.
+              <p className="m-auto w-(--sidebar-width) shrink-0 px-4 py-2 text-center text-xs text-balance text-muted-foreground">
                 {notice}
               </p>
             )}
@@ -491,7 +517,7 @@ export function AppSidebar({
             )}
             {/* The projects above the rest, each shut unless the viewer opened it: an eval's runs out of the way of
               the user's own conversations. A new one is made from the heading's button, shown while the heading is
-              hovered, as Codex shows it; with none yet, from a row in their place, as ChatGPT lists New project under
+              hovered; with none yet, from a row in their place, as ChatGPT lists New project under
               its Projects. */}
             {conversations !== null && (
               <SidebarGroup className="py-0">
@@ -519,7 +545,7 @@ export function AppSidebar({
                 <Collapsible open={!folded.includes("projects")}>
                   <CollapsibleContent className={FOLD}>
                     <SortableContext
-                      items={names}
+                      items={ids}
                       strategy={verticalListSortingStrategy}
                     >
                       <SidebarMenu className="gap-0.5">
@@ -527,6 +553,7 @@ export function AppSidebar({
                           <ProjectGroup
                             key={project}
                             project={project}
+                            name={names[project] ?? ""}
                             items={items}
                             open={opened.includes(project)}
                             held={sorting && project === dragged}
@@ -540,9 +567,7 @@ export function AppSidebar({
                             failed={unreadOf(items).some(
                               (conversation) => conversation.latest.failed
                             )}
-                            onRename={(name) =>
-                              renameProject(project, items, name)
-                            }
+                            onRename={(name) => renameProject(project, name)}
                             onDelete={() => {
                               // Nothing to ask about an empty project: it goes at once.
                               if (items.length === 0)
@@ -550,7 +575,7 @@ export function AppSidebar({
                               setCondemned([project, items])
                               setAsking(true)
                             }}
-                            leaving={closing.some(([name]) => name === project)}
+                            leaving={closing.some(([id]) => id === project)}
                           >
                             {items.map((conversation) =>
                               row(conversation, true)
@@ -647,7 +672,8 @@ export function AppSidebar({
                   <DropdownMenuItem onClick={() => setSettingsOpen(true)}>
                     <GearIcon />
                     {t.settings.title}
-                    <Kbd className="ml-auto">
+                    {/* No keyboard to press it on a touch screen. */}
+                    <Kbd className="ml-auto pointer-coarse:hidden">
                       {shortcutLabel(SETTINGS_SHORTCUT)}
                     </Kbd>
                   </DropdownMenuItem>
@@ -687,6 +713,8 @@ export function AppSidebar({
         status={status}
         offline={offline}
       />
+      {/* A project's rules, from its menu or a line in the conversation; outside the sheet, as the settings are. */}
+      <ProjectMemoryDialog names={names} />
       {/* Outside it too: in its sheet on a phone they would be dialogs within a dialog, which draw no backdrop of their
           own and leave a press outside them to the sheet. */}
       <CreateProjectDialog
@@ -695,16 +723,14 @@ export function AppSidebar({
           setCreating(open)
           if (!open) setBringing(null)
         }}
-        onCreate={(name) => {
-          setMade(name, true)
-          setOpened(name, true)
+        onCreate={async (name) => {
           // Made for a conversation dropped on the new project row: it goes in, and the page stays as it is.
-          if (bringing) {
-            void move(bringing, name)
-            return
-          }
-          opensMade.current = true
-          openProject(name)
+          const brought = bringing
+          opensMade.current = brought === null
+          const project = await createProject(name)
+          if (project === null) return
+          if (brought) return void move(brought, project)
+          openProject(project)
           if (isMobile) setOpenMobile(false)
         }}
         // Into the new project's composer, to write its first conversation, rather than back to the button that
@@ -717,7 +743,7 @@ export function AppSidebar({
       />
       <DeleteProjectDialog
         open={asking}
-        project={condemned?.[0] ?? ""}
+        project={condemned ? (names[condemned[0]] ?? "") : ""}
         count={condemned?.[1].length ?? 0}
         onOpenChange={setAsking}
         onDelete={() => {
@@ -741,7 +767,7 @@ export function AppSidebar({
           {carried ? (
             <DraggedConversation name={nameOf(carried)} />
           ) : (
-            dragged !== null && <DraggedProject name={dragged} />
+            dragged !== null && <DraggedProject name={names[dragged] ?? ""} />
           )}
         </DragOverlay>,
         document.body

@@ -270,8 +270,8 @@ export function PlainLine({
 }
 
 /**
- * Steps in a row, as Codex shows its tool calls: what the agent said as it took the first, in full, then the steps one
- * by one while they are under way; once done, they fold into one line of what they did by kind, which opens them again.
+ * Steps in a row: what the agent said as it took the first, in full, then the steps one by one while they are under
+ * way; once done, they fold into one line of what they did by kind, which opens them again.
  */
 export function PhaseLine({
   phase,

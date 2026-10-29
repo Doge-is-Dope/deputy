@@ -51,7 +51,8 @@ function DialogContent({
         {...props}
       >
         {children}
-        {/* Its middle 28px in from the top and the right, level with a title row of h-8 under p-3 (the settings'). */}
+        {/* Its middle 28px in from the top and the right, level with a title row of h-8 under p-3 (the settings') or pt-3
+            (a dialog with a title and a list under it). */}
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
@@ -83,9 +84,8 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   )
 }
 
-/** Asks one thing, as Codex's dialogs do: a title, what it needs under it, then Cancel as plain text and the one
- * action at the right, in a row at any width, with no band under them. No close cross: Cancel closes it. The action
- * leaves closing to the caller, which may keep it open (a name still empty). */
+/** Asks one thing: a title, what it needs under it, then Cancel and the one action at the right. Cancel closes it;
+ * the action leaves closing to the caller, which may keep it open (a name still empty). */
 function ActionDialog({
   open,
   onOpenChange,

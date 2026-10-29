@@ -48,6 +48,8 @@ The client keeps choices and sends `agents`, `approvals` and `locale` with each 
 
 **Takeover.** Use the web live view or `computer-use takeover` to take control. The agent sends no input during takeover and observes a fresh screen after control returns. It requests takeover for passwords, CAPTCHAs, administrator prompts and payment details. The runtime enforces ownership for both agent and live-view input.
 
+**Text input.** Both the agent and live view send text through the RDP Unicode keyboard pipe. Select English (US) in the Windows session so an active Chinese IME does not intercept punctuation; Chinese text and emoji still arrive as Unicode. Typing leaves the clipboard untouched. Clipboard redirection remains available for manual copy/paste and eval setup.
+
 **Approvals** (`agent/confirm.py`). Flagged actions wait for approval, rejection with an optional reason, or takeover. The web composer uses Enter to approve and Esc to decline; the CLI uses `approve` and `reject`. Silence never approves.
 
 **Auto review** (`agent/review.py`). Settings → Permissions can send flagged steps to a reviewer first. It allows only low- or medium-risk actions covered by the user's words. High-risk or unclear actions, and failed or timed-out reviews, still go to the user. For deletes and overwrites, the reviewer's target must occur verbatim in user messages or sent action input; this check alone does not prove authorization or target identity.

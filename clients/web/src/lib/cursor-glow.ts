@@ -117,7 +117,7 @@ export function createCursorGlow(canvas: HTMLCanvasElement) {
     gl.uniform2f(renderer.size, size, size)
     gl.uniform1f(renderer.time, elapsed)
     gl.drawArrays(gl.TRIANGLES, 0, 3)
-    canvas.dataset.renderer = "webgl"
+    if (canvas.dataset.renderer !== "webgl") canvas.dataset.renderer = "webgl"
     if (!motion.matches) frame = requestAnimationFrame(draw)
   }
   const wake = () => {

@@ -112,7 +112,6 @@ describe("Pace", () => {
   })
 
   it("evens out batches that come far apart", () => {
-    // 30 characters every 400 ms: let in a few every step, not 30 then nothing.
     const batches = Array.from(
       { length: 8 },
       (_, index) => [index * 400, 30] as [number, number]

@@ -5,6 +5,7 @@ import events from "../../../../runtime/tests/fixtures/events-v4.json"
 import {
   awaitingDesktop,
   buildThread,
+  citedMemories,
   doingNow,
   stepFailed,
   waitingFor,
@@ -245,7 +246,6 @@ describe("v4 event projection", () => {
     ])
     const item = thread.items.at(-1)
     if (item?.kind !== "task") throw new Error("Expected task")
-    // One line, closed, and no note beside it saying the same.
     expect(
       item.task.entries.filter(
         (entry) => entry.kind === "offline" || entry.kind === "note"
@@ -296,7 +296,6 @@ describe("v4 event projection", () => {
       reason: "desktopBusy",
       result: "Busy elsewhere",
     })
-    // Under what the main agent said as it handed it over.
     expect(thread.items.map((item) => item.kind)).toEqual([
       "commentary",
       "held",
@@ -343,6 +342,161 @@ describe("v4 event projection", () => {
     expect(thread.items.at(-1)).toBe(item)
   })
 
+  describe("memory", () => {
+    const remember = (
+      n: number,
+      result: string,
+      time: number,
+      replaces?: string
+    ): RunEvent => ({
+      type: "action",
+      agent: "main",
+      n,
+      id: `call-${n}`,
+      tool: "remember",
+      args: {
+        rule: `Rule ${n}`,
+        why: "said so",
+        applies: "replies",
+        scope: "personal",
+        ...(replaces && { replaces }),
+      },
+      status: "success",
+      result,
+      screenshot: null,
+      time,
+    })
+    const said = (text: string, time: number, calls = false): RunEvent => ({
+      type: "model",
+      agent: "main",
+      text,
+      tool_calls: calls ? [{ name: "remember", args: {} }] : [],
+      time,
+    })
+
+    it("puts a chip where the main agent remembered, before its reply, and hands no work over for it", () => {
+      const thread = buildThread([
+        fixture[0],
+        said("", 101, true),
+        remember(1, "Remembered as m1.", 102),
+        remember(2, "Not remembered: this conversation is in no project.", 103),
+        remember(3, "Remembered as m3.", 104, "m0"),
+        said("Noted.", 105),
+        { type: "message", id: "u1", text: "Also this", time: 106 },
+        said("", 107, true),
+        remember(4, "Remembered as m4.", 108),
+      ])
+      expect(thread.items.map((item) => item.kind)).toEqual([
+        "memory",
+        "reply",
+        "message",
+        "memory",
+      ])
+      expect(thread.items[0]).toMatchObject({
+        memories: [
+          { id: "m1", text: "Rule 1" },
+          { id: "m3", text: "Rule 3" },
+        ],
+        updated: true,
+      })
+      expect(thread.items[3]).toMatchObject({
+        memories: [{ id: "m4", text: "Rule 4" }],
+        updated: false,
+      })
+      expect(thread.tasks.size).toBe(0)
+    })
+
+    it("shows each rule a task was given as a line in it", () => {
+      const thread = buildThread([
+        fixture[0],
+        {
+          type: "task",
+          state: "started",
+          id: "t1",
+          tool: "computer_use",
+          brief: "@Computer send it",
+          title: "send it",
+          time: 102,
+        },
+        {
+          type: "note",
+          text: "Following 2 rules the user taught.",
+          code: "memoryUsed",
+          data: {
+            rules: [
+              { id: "m1", text: "Show me the draft first" },
+              { id: "m2", text: "Use the work account" },
+            ],
+          },
+          task: "t1",
+          time: 102,
+        },
+      ])
+      const item = thread.items.find((each) => each.kind === "task")
+      if (item?.kind !== "task") throw new Error("Expected task")
+      expect(item.task.entries).toEqual([
+        {
+          kind: "memory",
+          key: "2-0",
+          id: "m1",
+          text: "Show me the draft first",
+        },
+        { kind: "memory", key: "2-1", id: "m2", text: "Use the work account" },
+      ])
+    })
+
+    it("cites each rule the run's tasks were given once, in the order first given", () => {
+      const started = (id: string, time: number): RunEvent => ({
+        type: "task",
+        state: "started",
+        id,
+        tool: "computer_use",
+        brief: `@Computer ${id}`,
+        title: id,
+        time,
+      })
+      const used = (
+        task: string,
+        rules: { id: string; text: string }[],
+        time: number
+      ): RunEvent => ({
+        type: "note",
+        text: `Following ${rules.length} rules the user taught.`,
+        code: "memoryUsed",
+        data: { rules },
+        task,
+        time,
+      })
+      const thread = buildThread([
+        fixture[0],
+        started("t1", 102),
+        used(
+          "t1",
+          [
+            { id: "m1", text: "Show me the draft first" },
+            { id: "m2", text: "Use the work account" },
+          ],
+          103
+        ),
+        started("t2", 104),
+        used(
+          "t2",
+          [
+            { id: "m2", text: "Use the work account" },
+            { id: "m3", text: "Reply in English" },
+          ],
+          105
+        ),
+      ])
+      expect(citedMemories(thread)).toEqual([
+        { id: "m1", text: "Show me the draft first" },
+        { id: "m2", text: "Use the work account" },
+        { id: "m3", text: "Reply in English" },
+      ])
+      expect(citedMemories(buildThread(fixture))).toEqual([])
+    })
+  })
+
   it("shows a coding task as the coding agent's, which does not use the computer", () => {
     const thread = buildThread([
       fixture[0],
@@ -380,7 +534,6 @@ describe("v4 event projection", () => {
       outcome: "running",
     })
     expect(item.task.entries).toHaveLength(1)
-    // What the main agent said with it stays in the conversation, where it said it.
     expect(thread.items.map((each) => each.kind)).toEqual([
       "commentary",
       "task",
@@ -429,13 +582,11 @@ describe("v4 event projection", () => {
       return item.task
     }
 
-    // Auto review was on as the step came up: nobody is asked until it has looked.
     const reviewing = task([asked("approval", true, 104)])
     expect(reviewing.entries[0]).toMatchObject({
       step: { approval: { autoReview: true } },
     })
     expect(waitingFor(reviewing)).toBeNull()
-    // The user turned it off while the run worked: the next step is theirs to answer at once.
     expect(waitingFor(task([asked("approval", false, 104)]))).toBe(104)
   })
 

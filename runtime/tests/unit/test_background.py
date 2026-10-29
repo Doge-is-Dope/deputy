@@ -1,6 +1,3 @@
-"""Work in the background: tasks at once while the main agent talks, one of them on the computer, the desktop let go of
-once its task ends, and a task that fails outright failing the run."""
-
 import asyncio
 
 import pytest
@@ -35,13 +32,13 @@ async def test_one_task_uses_the_computer_at_a_time(settings, computer, monkeypa
 
     refused = next(m for m in main_model.received[2] if isinstance(m, ToolMessage) and m.tool_call_id == "m2")
     assert refused.status == "error" and refused.text.startswith("Not executed: task t1 is using the computer")
-    assert len(computer_model.received) == 2 and result.reply == "Start is open."  # one task, two model calls
+    assert len(computer_model.received) == 2 and result.reply == "Start is open."
 
 
 async def test_the_desktop_is_let_go_of_once_its_task_ends(settings, computer, monkeypatch):
     holders = []
 
-    class Watching(ScriptedModel):  # notes who has the desktop as the main agent is asked
+    class Watching(ScriptedModel):
         async def ainvoke(self, input, config=None, **kwargs):
             holders.append(RunLock(settings.run_lock_path).holder())
             return await super().ainvoke(input, config, **kwargs)
@@ -80,7 +77,6 @@ async def test_a_turn_that_hands_work_over_ends_there(settings, computer, monkey
 
     result = await run_turn(settings, "open start", max_steps=10, computer=computer)
 
-    # Asked once to start it and once more when it ended: nothing in between asked it for more.
     assert len(main_model.received) == 2 and result.reply == "Start is open."
     replies = [e["text"] for e in logged(result, "model", MAIN)]
     assert replies == ["Opening Start.", "Start is open."]
@@ -113,7 +109,6 @@ async def test_what_it_is_told_while_it_writes_its_reply_it_reads_before_ending(
 
     result = await run_turn(settings, "open start", max_steps=10, computer=computer, inbox=inbox)
 
-    # Its reply did not end the task: it was asked again, with what it was told, and went on.
     assert len(computer_model.received) == 3
     note = computer_model.received[2][-1]
     assert isinstance(note, HumanMessage) and "Close Start again." in note.text

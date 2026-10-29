@@ -34,7 +34,7 @@ def test_a_message_sends_only_what_was_given(api, client):
                  agents={"main": {"model": "openai:gpt-6-luna"}})
     first, second = (request["body"] for request in api.sent("POST", "/api/runs"))
     assert first == {"goal": "open start", "computer": False}
-    assert second == {"goal": "open start", "computer": True, "thread": "r0", "project": "eval", "max_steps": 5,
+    assert second == {"goal": "open start", "computer": True, "thread": "r0", "project_name": "eval", "max_steps": 5,
                       "agents": {"main": {"model": "openai:gpt-6-luna"}}}
 
 
@@ -57,7 +57,7 @@ def test_the_files_of_a_run_are_those_its_events_name_once_each():
 def test_an_export_writes_the_record_and_the_files_it_names(api, client, tmp_path):
     record = [{"type": "start", "thread": "r1"}, {"type": "action", "screenshot": "001-key.png"},
               {"type": "confirm", "screenshot": "001-confirm.png"}]
-    api.on("GET", "/api/runs/r1/events", raw=sse(*enumerate(record), ("done", {})))
+    api.on("GET", "/api/runs/r1/events?full=1", raw=sse(*enumerate(record), ("done", {})))
     api.on("GET", "/api/runs/r1/files/001-key.png", raw=b"png bytes")
     api.on("GET", "/api/runs/r1/files/001-confirm.png", 404, {"error": "no such screenshot"})
 

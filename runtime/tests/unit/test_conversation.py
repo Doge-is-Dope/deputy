@@ -1,7 +1,3 @@
-"""The current run format is the record: messages keep screenshots as files and unsupported logs cannot continue.
-How the main agent continues a conversation: test_chat.py.
-"""
-
 import json
 
 import pytest
@@ -27,7 +23,6 @@ async def test_screenshots_are_files_and_messages_keep_only_their_names(settings
     files = {block["file"] for event in map(json.loads, log.splitlines()) if "message" in event
              for block in (event["message"]["data"]["content"] if isinstance(event["message"]["data"]["content"], list) else [])
              if block.get("type") == "image"}
-    # The task's first screen, the key's, and the one the main agent checked the task on, from the runtime's message.
     assert files == {"000-observe.png", "001-key.png", "main-001-task-ended.png"}
     assert all((run_dir(settings, result.run) / name).exists() for name in files)
 

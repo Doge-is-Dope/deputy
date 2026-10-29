@@ -82,7 +82,6 @@ def scripted_titles(monkeypatch):
 
 @pytest.fixture
 def fast_polls(monkeypatch):
-    """Waits that poll the desktop or the control file look every 10 ms instead of every second or tenth."""
     monkeypatch.setattr(computer_use.desktop.control, "POLL_SECONDS", 0.01)
     monkeypatch.setattr(computer_use.desktop.control, "APPROVAL_POLL_SECONDS", 0.01)
     monkeypatch.setattr(computer_use.desktop.executor, "RECONNECT_POLL_SECONDS", 0.01)
@@ -105,13 +104,10 @@ def store(settings) -> FileRunStore:
 
 
 async def run_turn(settings: Settings, message: str, **kwargs) -> main_agent.TurnResult:
-    """A run as the server starts one, on its run store: here, the files under the settings' data folder."""
     return await main_agent.run_turn(settings, message, store=FileRunStore(settings.data_dir), **kwargs)
 
 
 class MemoryRunStore:
-    """A run store in memory, for tests that need no files."""
-
     def __init__(self):
         self.listed: dict[str, list[dict]] = {}
         self.deleted: dict[str, list[dict]] = {}
@@ -204,8 +200,6 @@ def settings(tmp_path) -> Settings:
 
 
 class FakeComputer:
-    """Stands in for the Windows desktop behind a backend; records every input."""
-
     CODE = "BLUE-HERON-7"
 
     def __init__(self):
@@ -213,7 +207,7 @@ class FakeComputer:
         self.releases = 0  # times every key and button was let go of
         self.fail_next: str | None = None
         self.connected = True
-        self.screen = lambda: fixture_png(self.CODE)  # the PNG the next screenshot shows
+        self.screen = lambda: fixture_png(self.CODE)
 
     async def status(self):
         return Status(self.connected, f"Test session: {'connected' if self.connected else 'DISCONNECTED'}")
@@ -323,7 +317,7 @@ class StreamingModel(ScriptedModel):
         ]
         pieces = pieces or [AIMessageChunk(content="")]
         pieces[-1].chunk_position = "last"
-        for piece in pieces:  # LangChain hands each on as a new token
+        for piece in pieces:
             await asyncio.sleep(self.pause)
             yield ChatGenerationChunk(message=piece)
 
@@ -336,7 +330,6 @@ def tool_call(call_id, name, **args):
 
 
 def delegate(task="Do it.", call_id="m1") -> AIMessage:
-    """The main agent handing a task to the computer-use agent."""
     return AIMessage(content="", tool_calls=[tool_call(call_id, "computer_use", title="Task", task=task)])
 
 
@@ -372,7 +365,6 @@ def sent_while_pressing(computer, inbox, *texts: str | None, until=None) -> None
 
 
 def telling(monkeypatch) -> list[str]:
-    """What the main agent tells background tasks, as it does."""
     told, tell = [], Background.tell
 
     def recorded(self, id, text):
@@ -384,7 +376,6 @@ def telling(monkeypatch) -> list[str]:
 
 
 def read_events(folder: Path) -> list[dict]:
-    """A run folder's complete events, read straight off its record (what FileRunStore keeps)."""
     try:
         text = (folder / "steps.jsonl").read_text(encoding="utf-8")
     except FileNotFoundError:
@@ -393,7 +384,6 @@ def read_events(folder: Path) -> list[dict]:
 
 
 def run_dir(settings, run: str) -> Path:
-    """Where FileRunStore keeps a run."""
     return settings.data_dir / "runs" / run
 
 
@@ -426,12 +416,10 @@ def computer_use_result(result) -> dict:
 
 
 def handed_back(result) -> dict:
-    """How the first desktop task ended, as the main agent's computer_use result recorded it."""
     return computer_use_result(result)["message"]["data"]["artifact"]
 
 
 def run_folder(settings):
-    """The folder of the run, the only one under the data directory."""
     (folder,) = (settings.data_dir / "runs").iterdir()
     return folder
 
@@ -513,7 +501,6 @@ def executor(computer, control, settings) -> Executor:
 
 @pytest.fixture
 async def observe_conversation(executor):
-    """The tools, plus a prompt, the model's screenshot call, and the real tool result with its screenshot."""
     tools = desktop_tools(executor)
     result = await tools[0].ainvoke(OBSERVE_CALL)
     prompt = "Take a screenshot of the desktop. Then reply with only the fixture code shown on it."

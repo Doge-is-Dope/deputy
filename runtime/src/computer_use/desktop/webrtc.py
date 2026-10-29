@@ -27,8 +27,9 @@ logger = logging.getLogger(__name__)
 # Capture on screen changes, capped by ownership mode; a fixed polling tick adds latency.
 WATCH_FPS = 30
 CONTROL_FPS = 60
-# A still screen still sends a frame this often.
-KEEPALIVE_SECONDS = 1.0
+# Refresh quiet screens often enough to keep sparse updates moving through browser playback.
+KEEPALIVE_SECONDS = 0.1
+TEXT_BATCH_SECONDS = 0.05
 CLOCK_RATE = 90_000  # RTP's video clock
 # Use a fixed bitrate on this local path: aiortc's REMB ramp repeatedly rebuilds the encoder.
 # A deployment across a real network needs congestion control.
@@ -173,7 +174,23 @@ class ScreenShare:
                     await ready.wait()
                     ready.clear()
                     while waiting:
-                        await self.apply(waiting.popleft())
+                        event = waiting.popleft()
+                        if event.get("type") == "text" and isinstance(event.get("text"), str):
+                            # One IME/dictation burst may arrive a character at a time. Send the burst once;
+                            # never merge across a key or pointer event, which may change the insertion point.
+                            parts = [event["text"]]
+                            while True:
+                                while waiting and waiting[0].get("type") == "text" and isinstance(waiting[0].get("text"), str):
+                                    parts.append(waiting.popleft()["text"])
+                                if waiting:
+                                    break
+                                ready.clear()
+                                try:
+                                    await asyncio.wait_for(ready.wait(), TEXT_BATCH_SECONDS)
+                                except TimeoutError:
+                                    break
+                            event = {"type": "text", "text": "".join(parts)}
+                        await self.apply(event)
             finally:  # the page went away: a key or button the user still held would stay down on Windows
                 await release_input(self.control, self.computer, "user")
 

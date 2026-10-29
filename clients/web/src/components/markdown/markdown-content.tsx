@@ -26,7 +26,7 @@ function CodeBlock({ code, language }: { code: string; language: string }) {
   const shown = writing ? code.replace(/(^|\n)(`+|~+)$/, "") : code
   return (
     <div className="overflow-hidden rounded-xl bg-muted [contain-intrinsic-size:auto_120px] [content-visibility:auto]">
-      {/* A block that names no language is plaintext, as ChatGPT's and Codex's say in every language. */}
+      {/* A block that names no language is plaintext, as ChatGPT's says in every language. */}
       <div className="flex h-9 items-center gap-2 pr-1.5 pl-4 font-mono text-xs text-muted-foreground">
         <span className="min-w-0 flex-1 truncate">
           {language || "plaintext"}

@@ -141,18 +141,20 @@ class Client:
         computer: bool = False, agents: dict[str, dict[str, str]] | None = None,
     ) -> dict:
         """Send a message: a new run ({"id", "thread"}), or one handed to its conversation's run in progress (with
-        "message"). `computer` sends it to the desktop; `agents` chooses each agent's model and effort."""
+        "message"). `computer` sends it to the desktop; `agents` chooses each agent's model and effort; `project` names
+        the project a new conversation is begun in, which the runtime makes if there is none by that name."""
         body = {"goal": goal, "computer": computer}
-        for key, value in (("thread", thread), ("project", project), ("max_steps", max_steps), ("agents", agents)):
+        for key, value in (("thread", thread), ("project_name", project), ("max_steps", max_steps), ("agents", agents)):
             if value is not None:
                 body[key] = value
         return self._json("POST", "/api/runs", body)
 
-    def events(self, run: str, after: int = -1) -> Iterator[Event]:
-        """The run's events after index `after`, as they come, until it ends ("done"). A stream that ends without
-        "done" was cut off: ask again from the last index seen."""
+    def events(self, run: str, after: int = -1, full: bool = False) -> Iterator[Event]:
+        """The run's events after index `after`, as they come, until it ends ("done"); `full` keeps the model messages
+        the stream otherwise leaves out. A stream that ends without "done" was cut off: ask again from the last index
+        seen."""
         headers = {"Last-Event-ID": str(after)} if after >= 0 else None
-        stream = self._open("GET", f"/api/runs/{_quoted(run)}/events", headers=headers)
+        stream = self._open("GET", f"/api/runs/{_quoted(run)}/events{'?full=1' if full else ''}", headers=headers)
         try:
             for event in parse_sse(stream):
                 yield event
@@ -165,7 +167,7 @@ class Client:
 
     def record(self, run: str) -> list[dict]:
         """A run's events so far, as its record keeps them."""
-        return [event.data for event in self.events(run) if event.kind == "line"]
+        return [event.data for event in self.events(run, full=True) if event.kind == "line"]
 
     def start_of(self, run: str) -> dict:
         """A run's first event, which says its conversation and message, without waiting for it to end."""

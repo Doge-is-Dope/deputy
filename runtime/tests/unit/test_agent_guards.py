@@ -1,6 +1,3 @@
-"""Agent-side guards: user control, a dropped connection, the screen the model saw, screenshot pruning; and what a
-run's end records."""
-
 import asyncio
 import json
 import os
@@ -47,10 +44,10 @@ def test_a_step_awaiting_approval_is_answered_once_by_its_own_id(tmp_path):
     assert approvals.read() is None and approvals.pending("r1") is None
     approvals.ask(asked())
     assert approvals.pending("r1") == asked()
-    assert approvals.pending("r2") is None  # another run's request: a run that crashed while asking left it
-    assert not approvals.decide("c2", "approve")  # an answer to another step approves nothing
+    assert approvals.pending("r2") is None
+    assert not approvals.decide("c2", "approve")
     assert approvals.decide("c1", "reject", "not now", "cli")
-    assert not approvals.decide("c1", "approve")  # the first answer stands
+    assert not approvals.decide("c1", "approve")
     assert (approvals.read().decision, approvals.read().note, approvals.read().by) == ("reject", "not now", "cli")
     assert approvals.pending("r1") is None
     approvals.clear("c2")
@@ -64,7 +61,7 @@ async def test_waiting_for_approval_ends_with_an_answer_a_takeover_or_a_rejectio
     approvals.ask(asked())
     waiting = asyncio.create_task(approvals.wait("c1", control))
     await asyncio.sleep(0.05)
-    assert not waiting.done()  # no answer never approves
+    assert not waiting.done()
     approvals.decide("c1", "approve", by="web")
     assert (await waiting).decision == "approve"
 
@@ -72,7 +69,7 @@ async def test_waiting_for_approval_ends_with_an_answer_a_takeover_or_a_rejectio
     assert await approvals.wait("c1", control) is None  # taking the desktop answers it too
     control.write("agent")
     approvals.clear("c1")
-    assert (await approvals.wait("c1", control)).decision == "reject"  # a request gone missing is not an approval
+    assert (await approvals.wait("c1", control)).decision == "reject"
 
 
 def test_one_run_has_the_desktop_at_a_time_and_says_which(tmp_path):
@@ -84,7 +81,7 @@ def test_one_run_has_the_desktop_at_a_time_and_says_which(tmp_path):
         assert busy.value.run == "20261007-120000"
         assert second.holder() == {"run": "20261007-120000", "pid": os.getpid()}
     assert second.holder() is None
-    with second:  # free again once the first has let go
+    with second:
         assert second.holder() == {"pid": os.getpid()}
 
 
@@ -108,7 +105,7 @@ def test_prune_removes_the_oldest_screenshots_in_batches_so_the_prompt_prefix_ra
     assert prune_screenshots(conversation(30), 3, 25)[:30] == prune_screenshots(conversation(31), 3, 25)[:30]
     screens = conversation(28)
     assert [bool(image_blocks(m)) for m in prune_screenshots(screens, 3, 25)] == [False] * 25 + [True] * 3
-    assert all(image_blocks(m) for m in screens)  # input untouched
+    assert all(image_blocks(m) for m in screens)
 
 
 async def test_a_continued_conversation_reads_only_the_screenshots_its_next_call_keeps(tmp_path):
@@ -294,7 +291,7 @@ async def test_the_screen_seen_is_the_last_full_screenshot_not_a_zoomed_crop(exe
 
 def test_the_end_event_carries_the_tokens_and_cost_by_kind_in_all_and_by_agent(tmp_path):
     ends = []
-    for computer_model in ("openai:gpt-6.1-sol", "openai:unpriced"):  # the second has no known price
+    for computer_model in ("openai:gpt-6.1-sol", "openai:unpriced"):
         log = new_log(tmp_path)
         log.uses("openai:gpt-6-luna", MAIN)
         log.uses(computer_model, name="computer")

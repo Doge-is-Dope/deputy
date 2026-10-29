@@ -44,7 +44,11 @@ RENDERS = [
     (notes.task_stopped, ("t1", "computer_use", "open Notepad")),
     (notes.blackboard, (["open Notepad"], EARLIER)),
     (notes.opening, ("open Notepad", ["open notepad please"], "Earlier in this conversation")),
+    (notes.opening, ("open Notepad", ["open notepad please"], "", "Rules the user taught")),
     (notes.told, (["and save it"],)),
+    (notes.today, ("Asia/Taipei",)),
+    (notes.today, (None,)),
+    *[(notes.following, (count,)) for count in (1, 2)],
     *[(notes.stopped, (reason, 40)) for reason in ("replied", "step_limit")],
     (notes.report, ("computer-use agent", "it replied", "Done.", STEPS, "The screen now.")),
 ]

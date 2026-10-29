@@ -52,6 +52,10 @@ function usePresence(open: boolean, ms: number) {
 const STICK_PX = 80
 // A message the user sends sits this far below the top of the view, as the conversation's first one does (pt-4).
 const PLACED_PX = 16
+// Where each conversation was left, so it opens there again: the turn at the top of the view and how far into it.
+// Nothing for one left at the end, which opens as any conversation does. Kept while the page is, for the last few dozen.
+const LEFT_AT = new Map<string, { turn: number; into: number }>()
+const LEFT_AT_MAX = 50
 
 const below = (element: HTMLElement) =>
   element.scrollHeight - element.scrollTop - element.clientHeight
@@ -177,6 +181,7 @@ function RunTurn({
 
 /** Stream the conversation's runs in order; follow new events only while at the bottom. */
 export function RunView({
+  thread,
   runs,
   continued,
   listed,
@@ -192,6 +197,7 @@ export function RunView({
   onTitled,
   onOpenLive,
 }: TurnActions & {
+  thread: string
   runs: string[] // oldest first
   continued: ReadonlySet<string> // runs that carry on the one before with the same goal
   listed: boolean // the list of runs has come (or failed to), so `runs` holds all the conversation's runs it knows of
@@ -371,13 +377,22 @@ export function RunView({
     const observer = new ResizeObserver(() => {
       // It goes to the top of the view if the view was at the end, the answer coming in under it and the view
       // holding still; and in place of the skeleton that stood in for it. A conversation opened lands at its end,
-      // unless its last run is still under way. Where the view was is where it last scrolled to: content that got
-      // shorter as this came may have pulled it up since.
+      // unless its last run is still under way, or where it was left. Where the view was is where it last scrolled
+      // to: content that got shorter as this came may have pulled it up since.
       const sent = fresh()
       if (sent) {
         const opening = !opened.current
         opened.current = true
-        if (
+        const left = opening ? LEFT_AT.get(thread) : undefined
+        const back = left && list.children[left.turn]
+        if (back) {
+          // The browser keeps it there as what is above it loads (overflow-anchor).
+          following.current = false
+          element.scrollTop +=
+            back.getBoundingClientRect().top -
+            element.getBoundingClientRect().top +
+            left.into
+        } else if (
           opening
             ? now.current.latestWorking
             : lastHeight.current - lastTop.current - element.clientHeight <
@@ -415,8 +430,32 @@ export function RunView({
     observer.observe(element)
     // The composer is part of what scrolls: a goal growing to more lines is content growing too.
     observer.observe(dock.current)
-    return () => observer.disconnect()
-  }, [])
+    return () => {
+      observer.disconnect()
+      // Where it is left, read while it is still laid out: the turn at the top of the view, unless it is at the end.
+      // One never opened (or set up again at once, as in development) leaves what was kept.
+      if (!opened.current) return
+      LEFT_AT.delete(thread)
+      if (
+        following.current ||
+        placing.current !== null ||
+        below(element) - roomLeft(placed, room) < STICK_PX
+      )
+        return
+      const top = element.getBoundingClientRect().top
+      const all = [...list.children]
+      const turn = all.findIndex(
+        (child) => child.getBoundingClientRect().bottom > top
+      )
+      if (turn < 0) return
+      LEFT_AT.set(thread, {
+        turn,
+        into: top - all[turn].getBoundingClientRect().top,
+      })
+      if (LEFT_AT.size > LEFT_AT_MAX)
+        LEFT_AT.delete(LEFT_AT.keys().next().value!)
+    }
+  }, [thread])
 
   function onScroll() {
     const element = scroller.current!
@@ -462,8 +501,9 @@ export function RunView({
               following.current = false
           }}
           // Growing to fill the view and never shrinking below what it holds: the least height a placed message sets
-          // is a floor under what has come, not a box it overflows.
-          className="mx-auto flex w-full max-w-3xl shrink-0 grow flex-col px-4 pt-4 pb-10"
+          // is a floor under what has come, not a box it overflows. Its px-4 is inside the width, so the words are as
+          // wide as the home's composer, whose px-4 is outside it.
+          className="mx-auto flex w-full max-w-[calc(var(--container-3xl)+2rem)] shrink-0 grow flex-col px-4 pt-4 pb-10"
         >
           {placeholder && (
             <div className="flex flex-1 flex-col items-center justify-center gap-2 pb-[10vh] text-center">
@@ -525,13 +565,14 @@ export function RunView({
         conversation still clears it, and a conversation shorter than the view grows to keep it at the bottom. */}
         <div
           ref={dock}
-          className="sticky bottom-0 mx-auto w-full max-w-3xl px-4 pb-4 before:pointer-events-none before:absolute before:inset-0 before:bg-linear-to-t before:from-background before:to-transparent"
+          className="sticky bottom-0 mx-auto w-full max-w-[calc(var(--container-3xl)+2rem)] px-4 pb-4 before:pointer-events-none before:absolute before:inset-0 before:bg-linear-to-t before:from-background before:to-transparent"
         >
           {/* Down to the latest while it is out of view, glass over the words it floats on, fading in and out as
-          ChatGPT's does. While the agent works down there, the thinking lights pass on it in place of the arrow, which
-          comes back under the pointer. A plain button: the glass is its whole surface, with no variant's to undo. Once
-          the lens is drawn, the glass softens what is under it a touch and bends it with the lens's map, through this
-          filter, and wears the lens's light. */}
+          ChatGPT's does on the even curve (the sharp ones here drop it in a frame or two), shrinking and blurring a
+          little on its way as the plan does. While the agent works down there, the thinking lights pass on it in place of
+          the arrow, which comes back under the pointer. A plain button: the glass is its whole surface, with no
+          variant's to undo. Once the lens is drawn, the glass softens what is under it a touch and bends it with the
+          lens's map, through this filter, and wears the lens's light. */}
           {lens && (
             <svg aria-hidden width={0} height={0} className="absolute">
               <filter
@@ -584,8 +625,9 @@ export function RunView({
                 : undefined
             }
             className={cn(
-              "group/latest absolute bottom-full left-1/2 mb-6 flex size-8 -translate-x-1/2 items-center justify-center rounded-full glass transition-opacity duration-150 ease-in-out outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-              !behind && "pointer-events-none opacity-0"
+              "group/latest absolute bottom-full left-1/2 mb-6 flex size-8 -translate-x-1/2 items-center justify-center rounded-full glass transition-[opacity,scale,filter,visibility] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)] outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+              !behind &&
+                "invisible scale-90 opacity-0 blur-[2px] motion-reduce:scale-100 motion-reduce:blur-none"
             )}
             onClick={() =>
               scroller.current?.scrollTo({
@@ -594,10 +636,15 @@ export function RunView({
               })
             }
           >
-            {behind && working && (
+            {/* What it shows, the orbs or the arrow under the pointer, is kept through the fade out: it turns invisible,
+            and stops taking the pointer, only once faded. The orbs are still while hidden. */}
+            {working && (
               <span
                 aria-hidden
-                className="thinking-orbs group-hover/latest:hidden group-focus-visible/latest:hidden"
+                className={cn(
+                  "thinking-orbs group-hover/latest:hidden group-focus-visible/latest:hidden",
+                  !behind && "[&>span]:[animation-play-state:paused]"
+                )}
               >
                 <span />
                 <span />
@@ -606,8 +653,7 @@ export function RunView({
             )}
             <ArrowDownIcon
               className={cn(
-                behind &&
-                  working &&
+                working &&
                   "hidden group-hover/latest:block group-focus-visible/latest:block"
               )}
             />

@@ -942,23 +942,10 @@
     display: flex;
     height: 3.25rem;
     align-items: center;
-    padding: 0.375rem 0.375rem 0.375rem 1.25rem;
+    /* Even all round: the label's own texts hold its room on the left (live-view.tsx), so without a label the button
+       sits in the middle. Its texts carry their colors, white on the blue, and blur across rather than change color. */
+    padding: 0.375rem;
     color: var(--foreground);
-    /* Its text goes back as the blue narrows away from it. */
-    transition: color 200ms ease 380ms;
-  }
-  [data-control="user"] .takeover-pill {
-    color: white;
-    transition: color 200ms ease 60ms;
-  }
-  /* The liquid tab (liquid-takeover.ts) covers the label within about 100ms and, returning, has narrowed off it by
-     about 350ms. The text turns quickly while it lies on the blue, so it is never half-grey on the blue, nor white on
-     the page once the blue has gone. */
-  [data-liquid] .takeover-pill {
-    transition: color 120ms ease-out 240ms;
-  }
-  [data-liquid][data-control="user"] .takeover-pill {
-    transition: color 120ms ease-out 40ms;
   }
   /* The pill's background, a layer of its own so the blue (fill or canvas) lies between it and the pill's text. At
      rest there is none, so label and button sit on the page unframed. It turns blue under the blue once that about
@@ -985,14 +972,6 @@
     width: calc(100% + 2rem);
     height: calc(100% + 2rem);
     pointer-events: none;
-  }
-
-  /* Below 20rem the pill shows only its button (live-view.tsx), so it gets even padding and the button sits in the
-     middle. Same breakpoint as the label's @max-xs:hidden. */
-  @container (width < 20rem) {
-    .takeover-pill {
-      padding-left: 0.375rem;
-    }
   }
 
   /* The blue tab: the pill's box and the gap above it, up to the screen, with square top corners so it joins the

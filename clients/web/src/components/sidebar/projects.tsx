@@ -28,9 +28,11 @@ import {
   FolderIcon,
   FolderOpenIcon,
   FolderPlusIcon,
+  MemoryIcon,
   PencilIcon,
   TrashIcon,
 } from "@/components/icons"
+import { openProjectMemory } from "@/lib/memory"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -84,13 +86,14 @@ export function NewProjectRow({
   )
 }
 
-/** A project's row and its conversations set in under it, as Codex's sidebar lists a project: a folder (open while
+/** A project's row and its conversations set in under it: a folder (open while
  * its conversations are shown) and its name, a click showing or hiding them, a dot while shut for replies that came
- * meanwhile, and on hover a menu that renames it or deletes it with them, and a link to begin a conversation in it (its
- * home). Dragged by its row, it takes another place in the list, the others making room; a conversation dropped on it
- * goes into it. */
+ * meanwhile, and on hover a menu that renames it, shows its rules or deletes it with them, and a link to begin a
+ * conversation in it (its home). Dragged by its row, it takes another place in the list, the others making room; a
+ * conversation dropped on it goes into it. */
 export function ProjectGroup({
   project,
+  name,
   items,
   open,
   held,
@@ -104,7 +107,8 @@ export function ProjectGroup({
   reading,
   children,
 }: {
-  project: string
+  project: string // its id
+  name: string
   items: Conversation[]
   open: boolean // its conversations shown
   held: boolean // being dragged, until it is dropped
@@ -124,9 +128,9 @@ export function ProjectGroup({
   const [draft, setDraft] = useState<string | null>(null)
   const commit = () => {
     if (draft === null) return
-    const name = draft.split(/\s+/).join(" ").trim()
+    const given = draft.split(/\s+/).join(" ").trim()
     setDraft(null)
-    if (name && name !== project) void onRename(name)
+    if (given && given !== name) void onRename(given)
   }
   // The others make room on the drawer's curve, as the lists fold (FOLD).
   const {
@@ -203,7 +207,7 @@ export function ProjectGroup({
                 "group-hover/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] group-has-data-popup-open/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] group-has-[:focus-visible]/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] [@media(hover:none)]:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))]"
               )}
             >
-              {project}
+              {name}
             </span>
             {mark && (
               <span className="pointer-events-none absolute inset-y-0 right-0 flex w-8 items-center justify-center group-hover/menu-item:opacity-0 group-has-data-popup-open/menu-item:opacity-0 group-has-[:focus-visible]/menu-item:opacity-0 [@media(hover:none)]:opacity-0">
@@ -250,9 +254,18 @@ export function ProjectGroup({
               </DropdownMenuTrigger>
               {/* As a conversation's menu: no focus back to the button, which would take it from the name's field. */}
               <DropdownMenuContent align="start" finalFocus={false}>
-                <DropdownMenuItem onClick={() => setDraft(project)}>
+                <DropdownMenuItem onClick={() => setDraft(name)}>
                   <PencilIcon />
                   {t.sidebar.renameProject}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => {
+                    openProjectMemory(project)
+                    if (isMobile) setOpenMobile(false)
+                  }}
+                >
+                  <MemoryIcon />
+                  {t.sidebar.projectMemory}
                 </DropdownMenuItem>
                 <DropdownMenuItem variant="destructive" onClick={onDelete}>
                   <TrashIcon />

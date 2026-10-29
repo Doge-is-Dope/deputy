@@ -16,7 +16,7 @@ from computer_use.agent.subagent import Result
 from computer_use.agent.trajectory import TASK, Trajectory
 from computer_use.prompts import notes
 
-# Tasks at work at once, as Codex allows agents by default.
+# Tasks at work at once.
 MAX_TASKS = 6
 
 

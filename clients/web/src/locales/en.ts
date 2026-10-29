@@ -71,6 +71,9 @@ export const en: Messages = {
     newReplies: (count) =>
       count === 1 ? "1 new reply" : `${count} new replies`,
     renameProject: "Rename",
+    // A project's menu: the rules the agent keeps for its conversations only, in a dialog titled with its name.
+    projectMemory: "Memory",
+    projectMemoryTitle: (project: string) => `Memory in ${project}`,
     deleteProject: "Delete",
     deleteProjectAsk: (project, count) =>
       count === 1
@@ -113,14 +116,11 @@ export const en: Messages = {
     ],
     placeholderNew: "Ask anything",
     placeholderNext: "What next?",
-    busy: "Another task is using the desktop. Wait for it to finish, or stop it first.",
-    conversationBusy:
-      "This conversation is still working on your last message. Wait for it to finish, or stop it first.",
-    cantContinue:
-      "This conversation can't go on (an old format, or it's gone). Start a new conversation.",
-    deleted: "This conversation wasn't found; it may have been deleted.",
-    offline:
-      "That didn't go through: the service can't be reached. Try again in a moment; if it keeps failing, copy the error details from the live view for your admin.",
+    busy: "Another task is using the desktop",
+    conversationBusy: "Still working on your last message",
+    cantContinue: "Can't continue; start a new chat",
+    deleted: "Conversation not found",
+    offline: "Can't reach the service. Try again.",
     blockedOffline: "Can't reach the service right now",
     liveView: "Live view",
     liveViewWith: (connection) => `Live view, ${connection}`,
@@ -141,6 +141,7 @@ export const en: Messages = {
     stopTask: "Stop this task",
     start: "Start the task",
     send: "Send",
+    withdraw: "Delete",
     mention: {
       list: "Mentions",
       computer: "Use the Windows computer",
@@ -237,6 +238,18 @@ export const en: Messages = {
   },
 
   run: {
+    // What the main agent remembered (under its reply) and the rules a task was given (in the task).
+    memory: {
+      remembered: "Remembered",
+      updated: "Memory updated",
+      rememberedMany: (count: number) => `Remembered ${count}`,
+      deleted: (rule: string) => `Deleted: ${rule}`,
+      following: (rule: string) => `Following: ${rule}`,
+      citations: (count) =>
+        count === 1 ? "1 memory citation" : `${count} memory citations`,
+      cited: "Memories cited",
+      failed: "Couldn't change memory. Try again.",
+    },
     work: {
       working: "Working",
       worked: "Worked",
@@ -259,7 +272,8 @@ export const en: Messages = {
       full: "Show every step's screen",
     },
     agents: {
-      working: (count: number) => `${count} agents working`,
+      working: (count: number) =>
+        count === 1 ? "1 agent working" : `${count} agents working`,
       worked: (count: number) => `${count} agents worked`,
       done: (count: number) => `${count} done`,
     },
@@ -290,8 +304,7 @@ export const en: Messages = {
       cost: "Cost",
       took: "Time",
       unknown: "Unknown",
-      show: "Show details",
-      hide: "Hide details",
+      details: "Usage details",
       input: "Input",
       cached: "Cache read",
       cacheWrite: "Cache write",
@@ -351,6 +364,8 @@ export const en: Messages = {
     you: "You're in\u00a0",
     control: "control",
     takeOver: "Take over",
+    takingOver: "Taking over…",
+    returningControl: "Returning control…",
     returnControl: "Return control",
   },
 
@@ -392,6 +407,33 @@ export const en: Messages = {
     effort: "Reasoning effort",
     byDefault: " (Default)",
     resetModels: "Reset",
+    // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and the two switches
+    // Claude's own memory settings have, one for writing and one for reading.
+    memory: "Memory",
+    memoryModes: {
+      learn: {
+        label: "Learn from my corrections",
+        description: "Save a rule when you correct, decline or take over",
+      },
+      use: {
+        label: "Use memory",
+        description: "Follow the rules you've taught",
+      },
+    },
+    resetMemory: "Delete all memory",
+    resetMemoryAsk: "Delete all memory?",
+    resetMemoryDetail: "This can't be undone.",
+    memoryEmpty: "Nothing remembered yet.",
+    memoryLoadFailed: "Couldn't load memory.",
+    memoryRule: "Rule",
+    memoryWhy: "Why",
+    memoryApplies: "Applies to",
+    memoryFrom: "From",
+    memorySource: "Conversation",
+    editMemory: "Edit",
+    memoryDeleted: "Memory deleted",
+    deleteMemory: "Delete",
+    saveMemory: "Save",
     permissions: "Permissions",
     approvals: "Approvals",
     approvalModes: {

@@ -33,7 +33,6 @@ pytestmark = pytest.mark.usefixtures("the_log_is_the_whole_record")
 
 
 def coding_script(monkeypatch, replies) -> ScriptedModel:
-    """The coding agent's model, sending these replies in turn."""
     model = ScriptedModel(messages=iter(replies), received=[], bindings=[])
     monkeypatch.setattr(coding_agent, "build_chat_model", lambda _spec, _settings: model)
     return model
@@ -48,7 +47,7 @@ async def test_the_coding_agent_is_offered_only_when_the_code_runner_can_be_reac
 ):
     _, main_model = use_script(monkeypatch, [], main=[AIMessage("Hi."), AIMessage("Hi."), AIMessage("Hi.")])
 
-    await run_turn(settings, "hi", max_steps=10, computer=computer)  # no runner at all
+    await run_turn(settings, "hi", max_steps=10, computer=computer)
     code_runner.connected = False
     await run_turn(settings, "hi", max_steps=10, computer=computer, code_runner=code_runner)
     code_runner.connected = True
@@ -72,7 +71,7 @@ async def test_a_coding_task_runs_in_the_conversations_folder_without_the_comput
     lock = RunLock(settings.run_lock_path)
 
     async def held_while_running(script):
-        assert lock.holder() is None  # it never takes the computer
+        assert lock.holder() is None
         return RunOutput(0, "4\n", 0)
 
     code_runner.answer = held_while_running
@@ -83,7 +82,7 @@ async def test_a_coding_task_runs_in_the_conversations_folder_without_the_comput
 
     assert result.reply == "It is 4." and computer.calls == []
     assert code_runner.files == {"add.py": "print(2 + 2)"}
-    assert code_runner.commands == [(result.run, "python3 add.py")]  # the conversation's folder
+    assert code_runner.commands == [(result.run, "python3 add.py")]
     task = coding.received[0][1].text
     assert task.startswith("Goal: Add 2 and 2 with Python.") and "word for word: what is 2 + 2" in task
     ended = tasks(read_events(run_dir(settings, result.run)))
@@ -170,7 +169,7 @@ async def test_the_client_reads_status_seldom_and_tells_refusals_from_failures(t
         await runner.write("t", "../x", "")
     with pytest.raises(CodeRunnerError, match="HTTP 500"):
         await runner.run("t", "true", 5)
-    assert asked == ["/status", "/write", "/run"]  # status was asked once
+    assert asked == ["/status", "/write", "/run"]
 
     def unreachable(request):
         raise httpx.ConnectError("no route")
@@ -199,9 +198,6 @@ async def test_stopping_a_task_stops_its_command_on_the_runner():
     with pytest.raises(asyncio.CancelledError):
         await command
     assert asked == ["/run", "/stop"]
-
-
-# The runner's server, called directly.
 
 
 @pytest.fixture

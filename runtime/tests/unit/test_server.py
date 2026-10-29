@@ -1,5 +1,3 @@
-"""The HTTP API behind the web page, with a scripted model and the fake desktop."""
-
 import asyncio
 from dataclasses import asdict
 import contextlib
@@ -85,8 +83,11 @@ async def test_a_run_streams_its_events_and_shows_in_the_list(client, monkeypatc
     action = next(data for _, data in events if data.get("type") == "action" and data.get("agent") != "main")
     image = await client.get(f"/api/runs/{run}/files/{action['screenshot']}")
     assert (image.status_code, image.headers["content-type"]) == (200, "image/png")
+    assert not any("message" in data for _, data in events)
+    full = sse((await client.get(f"/api/runs/{run}/events?full=1")).text)
+    assert any("message" in data for _, data in full) and len(full) == len(events)
     resumed = sse((await client.get(f"/api/runs/{run}/events", headers={"Last-Event-ID": "2"})).text)
-    assert len(resumed) == len(events) - 3  # only what came after event 2
+    assert len(resumed) == len(events) - 3
     listed = (await client.get("/api/runs")).json()
     # Its actions on the desktop: the key, not the main agent's handing the task over.
     assert listed[0]["ended"] >= listed[0]["started"]
@@ -116,7 +117,6 @@ async def test_the_reply_being_written_follows_the_log_unnumbered_until_it_is_lo
     assert kinds.count("draft") == 1 and kinds.count("delta") > 1 and kinds.index("draft") < kinds.index("delta")
     assert max(n for n, kind in enumerate(kinds) if kind in ("draft", "delta")) < replied
     assert written and reply.startswith(written)
-    # Without numbers: the log's lines keep theirs, for a page that reconnects.
     assert [int(block["id"]) for block in blocks if "id" in block] == list(range(len(lines)))
     assert lines[-1]["type"] == "end" and lines[-1]["summary"] == reply and kinds[-1] == "done"
 
@@ -205,8 +205,10 @@ def test_the_list_names_a_run_by_its_title_once_it_has_one(tmp_path):
 
 
 async def test_a_conversation_begun_in_a_project_on_the_page_is_listed_under_it(client, monkeypatch):
+    project = (await client.post("/api/projects", json={"name": "  客戶  報價 "})).json()
+    assert project["name"] == "客戶 報價"
     use_script(monkeypatch, [AIMessage(content="Done.")])
-    created = await client.post("/api/runs", json={"goal": "reply", "project": "  客戶  報價 "})
+    created = await client.post("/api/runs", json={"goal": "reply", "project": project["id"]})
     assert created.status_code == 201
     await until_idle(client)
     use_script(monkeypatch, [AIMessage(content="Again.")])
@@ -215,13 +217,40 @@ async def test_a_conversation_begun_in_a_project_on_the_page_is_listed_under_it(
     assert (await client.post("/api/runs", json={"goal": "more", "thread": thread, "project": "x"})).status_code == 201
     await until_idle(client)
     listed = sorted((await client.get("/api/runs")).json(), key=lambda item: item["started"])
-    assert [item["project"] for item in listed] == ["客戶 報價", None]
+    assert [item["project"] for item in listed] == [project["id"], None]
+    assert (await client.post("/api/runs", json={"goal": "reply", "project": "nope"})).status_code == 404
+
+
+async def test_the_command_line_names_a_project_which_is_made_once(client, monkeypatch):
+    for goal in ("one", "two"):
+        use_script(monkeypatch, [AIMessage(content="Done.")])
+        assert (await client.post("/api/runs", json={"goal": goal, "project_name": "eval"})).status_code == 201
+        await until_idle(client)
+    (project,) = (await client.get("/api/projects")).json()
+    assert project["name"] == "eval"
+    assert [item["project"] for item in (await client.get("/api/runs")).json()] == [project["id"]] * 2
+
+
+async def test_a_project_keeps_its_id_when_renamed_and_names_are_one_each(client):
+    made = (await client.post("/api/projects", json={"name": "客戶"})).json()
+    other = (await client.post("/api/projects", json={"name": "報價"})).json()
+    assert (await client.post("/api/projects", json={"name": "客戶"})).json() == made
+    renamed = await client.patch(f"/api/projects/{made['id']}", json={"name": "大客戶"})
+    assert renamed.status_code == 200 and renamed.json() == {**made, "name": "大客戶"}
+    assert (await client.patch(f"/api/projects/{made['id']}", json={"name": "報價"})).status_code == 409
+    assert (await client.patch("/api/projects/nope", json={"name": "x"})).status_code == 404
+    assert (await client.post("/api/projects", json={"name": " "})).status_code == 400
+    assert (await client.delete(f"/api/projects/{other['id']}")).status_code == 200
+    assert (await client.delete(f"/api/projects/{other['id']}")).status_code == 404
+    assert [each["name"] for each in (await client.get("/api/projects")).json()] == ["大客戶"]
+    assert (await client.post(f"/api/projects/{other['id']}/restore")).json()["id"] == other["id"]
+    assert (await client.post(f"/api/projects/{other['id']}/restore")).status_code == 404
 
 
 def test_the_list_says_which_project_a_run_was_started_in(tmp_path):
     start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10}
-    assert asdict(summarize("r1", [start]))["project"] is None  # from the page, or from the command line without one
-    assert asdict(summarize("r1", [start | {"project": "eval"}]))["project"] == "eval"
+    assert asdict(summarize("r1", [start]))["project"] is None
+    assert asdict(summarize("r1", [start | {"project": "p1"}]))["project"] == "p1"
 
 
 def test_the_list_says_when_a_run_ended_and_whether_it_failed(tmp_path):
@@ -231,7 +260,6 @@ def test_the_list_says_when_a_run_ended_and_whether_it_failed(tmp_path):
         return {"type": "end", "stop_reason": reason, "time": 25}
 
     runs = [[start], [start, ended("replied")], [start, ended("cancelled")], [start, ended("error")]]
-    # In progress (or never ended), replied, stopped by the user, failed: only the last is a failure.
     assert [(each["ended"], each["failed"]) for each in (asdict(summarize("r1", events)) for events in runs)] == [
         (None, False), (25, False), (25, False), (25, True),
     ]
@@ -271,7 +299,7 @@ async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conve
     assert sorted([first.status_code, second.status_code]) == [201, 409]
     assert busy.status_code == 409 and busy.json() | {"error": ""} == {"error": "", "reason": "desktop", "run": run}
     assert (status["active"], status["running"]) == (run, [{"run": run, "thread": run, "pending": []}])
-    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]  # the refused ones left no log
+    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]
     assert stopped.status_code == 200 and (await until_idle(client))["error"] is None
     ends = [data for _, data in events if data.get("type") == "end"]
     assert [end["stop_reason"] for end in ends] == ["cancelled"] and events[-1][0] == "done"
@@ -282,14 +310,14 @@ async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conve
     again = (await client.post("/api/runs", json={"goal": "open start", "thread": run})).json()["id"]
     await until_idle(client)
     events = [data for _, data in sse((await client.get(f"/api/runs/{again}/events")).text)]
-    assert (events[0]["thread"], events[0]["goal"]) == (run, "open start")  # same conversation
+    assert (events[0]["thread"], events[0]["goal"]) == (run, "open start")
     stopped_with_it = [
-        event for _, event in sse((await client.get(f"/api/runs/{run}/events")).text)
+        event for _, event in sse((await client.get(f"/api/runs/{run}/events?full=1")).text)
         if event.get("message", {}).get("data", {}).get("additional_kwargs", {}).get("runtime", {}).get("event")
         == "task_stopped"
     ]
     assert len(stopped_with_it) == 1  # the next run hears that its task stopped with it
-    assert len(presses) == 1  # not resent
+    assert len(presses) == 1
 
 
 async def test_other_conversations_go_on_while_one_uses_the_desktop(client, settings, computer, monkeypatch):
@@ -317,7 +345,8 @@ async def test_other_conversations_go_on_while_one_uses_the_desktop(client, sett
     forced = await client.post("/api/runs", json={"goal": "@Computer open notepad", "thread": question["thread"]})
 
     answered = sse((await client.get(f"/api/runs/{question['id']}/events")).text)
-    assert answered[-2][1]["summary"] == "Paris."
+    # The run's title is written as it comes, which may be after its end.
+    assert next(data for _, data in answered if data.get("type") == "end")["summary"] == "Paris."
     events = [data for _, data in sse((await client.get(f"/api/runs/{refused.json()['id']}/events")).text)]
     handed = next(event for event in events if event.get("type") == "action")
     assert (handed["status"], handed["result"]) == ("error", notes.DESKTOP_BUSY)
@@ -326,8 +355,8 @@ async def test_other_conversations_go_on_while_one_uses_the_desktop(client, sett
     assert again.status_code == 202 and again.json()["id"] == desktop  # it goes to that run, stopped below
     assert forced.status_code == 409 and forced.json()["reason"] == "desktop"
     assert computer.calls == []  # only the first task's key press, which never finished
-    await client.post(f"/api/runs/{desktop}/stop")
     held.set()
+    await client.post(f"/api/runs/{desktop}/stop")
     await until_idle(client)
 
 
@@ -392,6 +421,25 @@ async def test_a_message_sent_while_the_conversation_works_goes_to_its_run(
     assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]  # the main agent read it in time
 
 
+async def test_a_message_the_run_has_not_read_can_be_taken_back(client, monkeypatch):
+    main = gated_main_agent(monkeypatch, "Paris.")
+    run = (await client.post("/api/runs", json={"goal": "capital of France?"})).json()["id"]
+    await main.asked.wait()  # its only model call has begun: it reads nothing until it replies
+    message = (await client.post("/api/runs", json={"goal": "and Italy?", "thread": run})).json()["message"]
+
+    withdrawn = await client.delete(f"/api/runs/{run}/messages/{message}")
+    again = await client.delete(f"/api/runs/{run}/messages/{message}")
+    waiting = (await client.get("/api/status")).json()["running"]
+    main.gate.set()
+    (only,) = await until_runs(client, 1)  # nothing was left over to start the next run with
+
+    assert withdrawn.status_code == 200 and again.status_code == 409
+    assert waiting == [{"run": run, "thread": run, "pending": []}]
+    events = [data for _, data in sse((await client.get(f"/api/runs/{run}/events")).text)]
+    assert only["id"] == run and not [event for event in events if event.get("type") == "message"]
+    assert (await client.delete(f"/api/runs/20991231-235959/messages/{message}")).status_code == 404
+
+
 class GatedModel(ScriptedModel):
     """A main agent that, asked, waits to reply until `gate` is set; `asked` once it has been."""
 
@@ -414,7 +462,6 @@ def gated_main_agent(monkeypatch, *replies: str) -> GatedModel:
 
 
 async def until_runs(client, count: int) -> list[dict]:
-    """The list once it has `count` runs and none is in progress."""
     for _ in range(200):
         runs = (await client.get("/api/runs")).json()
         status = (await client.get("/api/status")).json()
@@ -525,7 +572,6 @@ async def test_a_message_the_run_had_not_read_as_its_main_agent_replied_is_answe
     (only,) = await until_runs(client, 1)
 
     assert sent.status_code == 202 and only["id"] == run
-    # The run goes on until it is quiet: the main agent takes another turn for it.
     assert [m.text for m in main.received[1] if isinstance(m, HumanMessage)] == ["capital of France?", "and Italy?"]
     events = [data for _, data in sse((await client.get(f"/api/runs/{run}/events")).text)]
     assert [e["text"] for e in events if e.get("type") == "model"] == ["Paris.", "Rome."]
@@ -578,7 +624,7 @@ async def test_what_runs_did_not_read_goes_nowhere_as_the_server_shuts_down(sett
 
 
 async def test_stopping_with_no_runs_or_two(settings, computer, monkeypatch):
-    await Runner(settings, computer, FileRunStore(settings.data_dir)).stop()  # nothing to stop
+    await Runner(settings, computer, FileRunStore(settings.data_dir)).stop()
     held, pressing, _ = blocking_press(computer)
     use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")])])
     runner = Runner(settings, computer, FileRunStore(settings.data_dir))
@@ -617,9 +663,9 @@ async def test_a_run_of_another_server_sharing_the_desktop_holds_it_and_shows_wh
 
     assert (status["active"], status["running"]) == (run, [])  # running: this server's runs
     assert (busy.status_code, busy.json()["reason"], busy.json()["run"]) == (409, "desktop", run)
-    assert events == [("message", start), ("done", {})]  # what it has logged so far
+    assert events == [("message", start), ("done", {})]
     assert stopped.status_code == 409  # its own server stops it
-    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]  # the refused run left no log
+    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]
 
 
 async def test_a_follow_up_continues_the_conversation(client, monkeypatch):
@@ -677,6 +723,37 @@ async def test_deleting_a_conversation_moves_its_runs_to_the_trash_and_restoring
     await until_idle(client)
 
 
+async def test_a_message_cannot_start_a_run_while_its_conversation_is_being_deleted(client, monkeypatch):
+    use_script(monkeypatch, [], main=[AIMessage("Hi.")])
+    thread = (await client.post("/api/runs", json={"goal": "hello"})).json()["id"]
+    await until_idle(client)
+    main = gated_main_agent(monkeypatch, "Done.")
+    entered, resume = asyncio.Event(), asyncio.Event()
+    delete = FileRunStore.delete
+
+    async def paused_delete(store, thread):
+        entered.set()
+        await resume.wait()
+        return await delete(store, thread)
+
+    monkeypatch.setattr(FileRunStore, "delete", paused_delete)
+    deleting = asyncio.create_task(client.delete(f"/api/conversations/{thread}"))
+    try:
+        await asyncio.wait_for(entered.wait(), 5)
+        started = await client.post("/api/runs", json={"goal": "continue", "thread": thread})
+    finally:
+        resume.set()
+        deleted = await deleting
+        restored = await client.post(f"/api/conversations/{thread}/restore")
+        main.gate.set()
+        await until_idle(client)
+
+    assert (started.status_code, deleted.status_code, restored.status_code) == (409, 200, 200)
+    assert started.json()["reason"] == "conversation"
+    assert (await client.post("/api/runs", json={"goal": "continue", "thread": thread})).status_code == 201
+    await until_idle(client)
+
+
 async def test_renaming_a_conversation_lists_it_by_the_users_title_over_the_runtimes(client, settings, monkeypatch):
     use_script(monkeypatch, [AIMessage(content="Done.")])
     first = (await client.post("/api/runs", json={"goal": "open notepad"})).json()["id"]
@@ -700,7 +777,7 @@ async def test_a_deleted_runs_events_and_screenshots_are_not_served_until_it_is_
     use_script(monkeypatch, [AIMessage(content="Done.")])
     run = (await client.post("/api/runs", json={"goal": "open notepad"})).json()["id"]
     await until_idle(client)
-    shot = next(name for name in (await client.get(f"/api/runs/{run}/events")).text.split('"') if name.endswith(".png"))
+    shot = next(name for name in (await client.get(f"/api/runs/{run}/events?full=1")).text.split('"') if name.endswith(".png"))
     assert (await client.get(f"/api/runs/{run}/files/{shot}")).status_code == 200
     assert (await client.delete(f"/api/conversations/{run}")).status_code == 200
     assert (await client.get(f"/api/runs/{run}/events")).status_code == 404
@@ -712,32 +789,34 @@ async def test_a_deleted_runs_events_and_screenshots_are_not_served_until_it_is_
 
 async def test_moving_a_conversation_lists_it_under_another_project_or_none(client, settings, monkeypatch):
     use_script(monkeypatch, [AIMessage(content="Done.")])
-    first = (await client.post("/api/runs", json={"goal": "quote", "project": "客戶"})).json()["id"]
+    client_project = (await client.post("/api/projects", json={"name": "客戶"})).json()["id"]
+    quote = (await client.post("/api/projects", json={"name": "報價 單"})).json()["id"]
+    first = (await client.post("/api/runs", json={"goal": "quote", "project": client_project})).json()["id"]
     await until_idle(client)
     use_script(monkeypatch, [AIMessage(content="Again.")])
     await client.post("/api/runs", json={"goal": "more", "thread": first})
     await until_idle(client)
 
-    moved = await client.patch(f"/api/conversations/{first}", json={"project": "  報價  單 "})
-    assert moved.status_code == 200 and moved.json() == {"thread": first, "project": "報價 單"}
+    moved = await client.patch(f"/api/conversations/{first}", json={"project": quote})
+    assert moved.status_code == 200 and moved.json() == {"thread": first, "project": quote}
     # Its first run carries the move, which the page lists the conversation by.
     listed = sorted((await client.get("/api/runs")).json(), key=lambda item: item["started"])
-    assert listed[0]["project"] == "報價 單"
+    assert listed[0]["project"] == quote
     last = json.loads((settings.data_dir / "runs" / first / "steps.jsonl").read_text().splitlines()[-1])
-    assert (last["type"], last["name"], last["by"]) == ("project", "報價 單", "user")
+    assert (last["type"], last["project"], last["by"]) == ("project", quote, "user")
 
     out = await client.patch(f"/api/conversations/{first}", json={"project": None})
     assert out.json() == {"thread": first, "project": None}
     assert sorted((await client.get("/api/runs")).json(), key=lambda item: item["started"])[0]["project"] is None
-    assert (await client.patch(f"/api/conversations/{first}", json={"project": 3})).status_code == 400
+    assert (await client.patch(f"/api/conversations/{first}", json={"project": 3})).status_code == 404
     assert (await client.patch(f"/api/conversations/{first}", json={})).status_code == 400
 
 
 def test_a_runs_project_is_the_last_it_was_moved_to(tmp_path):
-    start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10, "project": "eval"}
-    moved = {"type": "project", "name": "probe", "by": "user", "time": 11}
-    assert asdict(summarize("r1", [start, moved]))["project"] == "probe"
-    assert asdict(summarize("r1", [start, moved, {**moved, "name": None}]))["project"] is None
+    start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10, "project": "p1"}
+    moved = {"type": "project", "project": "p2", "by": "user", "time": 11}
+    assert asdict(summarize("r1", [start, moved]))["project"] == "p2"
+    assert asdict(summarize("r1", [start, moved, {**moved, "project": None}]))["project"] is None
 
 
 def test_the_users_title_stands_over_the_runtimes_whichever_came_last(tmp_path):
@@ -755,7 +834,7 @@ async def test_a_message_for_the_desktop_is_recorded_as_one(client, monkeypatch)
 
     first = sse((await client.get(f"/api/runs/{run}/events")).text)[0][1]
     assert (first["goal"], first["computer"]) == ("@Computer open start", True)
-    assert notes.DESKTOP_ASKED in main_model.received[0][-1].text  # the runtime's word that it is for the desktop
+    assert notes.DESKTOP_ASKED in main_model.received[0][-1].text
 
 
 async def test_a_message_sent_for_the_desktop_goes_to_it_without_mentioning_it(client, monkeypatch):
@@ -766,7 +845,7 @@ async def test_a_message_sent_for_the_desktop_goes_to_it_without_mentioning_it(c
 
     first = sse((await client.get(f"/api/runs/{run}/events")).text)[0][1]
     assert (first["goal"], first["computer"]) == ("open start", True)
-    assert notes.DESKTOP_ASKED in main_model.received[0][-1].text  # the runtime's word that it is for the desktop
+    assert notes.DESKTOP_ASKED in main_model.received[0][-1].text
 
 
 async def test_the_screen_now_comes_as_a_png_or_says_why_it_cannot(client, computer):
@@ -785,7 +864,7 @@ async def test_the_screen_now_comes_as_a_png_or_says_why_it_cannot(client, compu
 async def test_control_and_bad_requests(client, computer):
     taken = await client.post("/api/control", json={"owner": "user"})
 
-    assert taken.json()["owner"] == "user" and computer.releases == 1  # no key the agent held stays down
+    assert taken.json()["owner"] == "user" and computer.releases == 1
     status = (await client.get("/api/status")).json()
     assert status["control"]["owner"] == "user"
     assert (await client.post("/api/runs", json={"goal": " "})).status_code == 400
@@ -818,7 +897,7 @@ async def test_a_step_awaiting_approval_shows_in_the_status_and_is_answered_from
     assert nowhere.status_code == 400
     answered = await client.post("/api/approval", json={"id": "c1", "decision": "approve", "by": "cli"})
     again = await client.post("/api/approval", json={"id": "c1", "decision": "reject"})
-    assert (answered.status_code, again.status_code) == (200, 409)  # the first answer stands
+    assert (answered.status_code, again.status_code) == (200, 409)
 
     assert (await until_idle(client))["approval"] is None
     events = [data for _, data in sse((await client.get(f"/api/runs/{run}/events")).text)]
@@ -830,11 +909,11 @@ async def test_the_status_keeps_no_users_choices_and_says_how_the_settings_start
     status = (await client.get("/api/status")).json()
 
     assert "agents" not in status and "approvals" not in status
-    assert status["title_model"] == {"model": "openai:gpt-6-luna", "effort": "low"}  # whatever the agents' are
+    assert status["title_model"] == {"model": "openai:gpt-6-luna", "effort": "low"}
     assert status["defaults"] == {
         "main": {"model": "openai:gpt-6.1-terra", "effort": "medium"},
-        "computer": {"model": "openai:gpt-6.1-terra", "effort": "medium"},  # its own, from the settings
-        "coding": {"model": "follow", "effort": "follow"},  # the main agent's
+        "computer": {"model": "openai:gpt-6.1-terra", "effort": "medium"},
+        "coding": {"model": "follow", "effort": "follow"},
     }
     models = {each["id"]: each["efforts"] for each in status["models"]}
     assert models["openai:gpt-6.1-sol"] == ["low", "medium", "high", "xhigh", "max"]
@@ -856,10 +935,8 @@ async def test_a_run_works_with_the_choices_sent_with_its_message_and_the_runtim
         "designer": {"model": "openai:gpt-6-luna"},  # an agent the runtime does not have: not refused
     })
     assert (chose["main_model"], chose["model"], chose["approvals"]) == ("openai:gpt-6-luna", "openai:gpt-6.1-sol", "auto")
-    # The next message, sent without them, works with the settings' own: nothing was kept.
     plain = await started(thread=chose["thread"])
     assert (plain["main_model"], plain["model"], plain["approvals"]) == ("openai:gpt-6.1-terra", "openai:gpt-6.1-terra", "ask")
-    # Only the runs' logs, and when the list last changed.
     assert [path for path in settings.data_dir.iterdir() if path.is_file()] == [settings.data_dir / "revision"]
 
     for bad in ({"approvals": "always"}, {"agents": ["main"]}, {"agents": {"main": {"temperature": "1"}}},
@@ -896,7 +973,6 @@ def no_candidates(monkeypatch):
 
 
 async def offer() -> RTCPeerConnection:
-    """The page's peer, offering to receive the screen and to open the input channel."""
     page = RTCPeerConnection(RTCConfiguration(iceServers=[]))
     page.addTransceiver("video", direction="recvonly")
     page.createDataChannel("input")
@@ -926,7 +1002,7 @@ async def test_the_live_view_answers_the_pages_offer_with_the_screen(client, no_
     directions = [transceiver.currentDirection for transceiver in page.getTransceivers()]
     await page.close()
 
-    assert directions == ["recvonly"]  # the runtime sends the screen
+    assert directions == ["recvonly"]
 
 
 async def test_the_live_view_tells_the_page_the_agents_pointer_and_takes_the_users_input(computer, control, no_candidates):
@@ -935,7 +1011,7 @@ async def test_the_live_view_tells_the_page_the_agents_pointer_and_takes_the_use
     (peer,) = share.peers
     tracks = [type(sender.track) for sender in peer.getSenders()]
 
-    peer.emit("datachannel", channel)  # the page's channel opens
+    peer.emit("datachannel", channel)
     agents_pointer = await asyncio.wait_for(channel.received.get(), 10)
     control.write("user")
     users_turn = await asyncio.wait_for(channel.received.get(), 10)
@@ -959,7 +1035,7 @@ async def test_the_live_view_tells_the_page_the_agents_pointer_and_takes_the_use
         await asyncio.sleep(0.01)
     await asyncio.gather(share.close(), page.close())
 
-    assert computer.releases == 1  # let go of when the page went away
+    assert computer.releases == 1
 
     assert tracks == [ScreenTrack]
     assert agents_pointer == {"type": "pointer", "point": [640, 400]}  # screen captures leave it out: the page draws it
@@ -976,10 +1052,66 @@ async def test_live_view_input_is_dropped_while_the_agent_has_control(computer, 
 
     await share.apply({"type": "key", "key": "a", "down": True})
     control.write("user")
-    await share.apply({"type": "key", "key": "nonsense", "down": True})  # unknown keys are dropped too
+    await share.apply({"type": "key", "key": "nonsense", "down": True})
     await share.apply({"type": "move", "x": "1", "y": 2})
 
     assert computer.calls == []
+
+
+async def test_live_text_bursts_are_merged_without_crossing_a_key_or_pointer_event(computer, control):
+    share, channel = ScreenShare(computer, control), PageChannel()
+    control.write("user")
+    share._take_input(channel)
+    for event in [
+        *({"type": "text", "text": ch} for ch in "abcdefghij"),
+        {"type": "key", "key": "Left", "down": True},
+        {"type": "key", "key": "Left", "down": False},
+        {"type": "text", "text": "中文"},
+        {"type": "text", "text": "🙂"},
+        {"type": "button", "button": "left", "down": True},
+        {"type": "button", "button": "left", "down": False},
+        {"type": "text", "text": "最後"},
+    ]:
+        channel.emit("message", json.dumps(event))
+    for _ in range(100):
+        if len(computer.calls) == 7:
+            break
+        await asyncio.sleep(0.01)
+    channel.emit("close")
+    for _ in range(100):
+        if computer.releases:
+            break
+        await asyncio.sleep(0.01)
+
+    assert computer.calls == [
+        ("type_text", "abcdefghij"), ("key_state", "left", True), ("key_state", "left", False),
+        ("type_text", "中文🙂"), ("mouse_button", True), ("mouse_button", False), ("type_text", "最後"),
+    ]
+    assert computer.releases == 1
+
+
+async def test_live_text_waits_for_the_end_of_a_continuous_burst(computer, control, monkeypatch):
+    import computer_use.desktop.webrtc as live
+
+    monkeypatch.setattr(live, "TEXT_BATCH_SECONDS", 0.03)
+    share, channel = ScreenShare(computer, control), PageChannel()
+    control.write("user")
+    share._take_input(channel)
+    # The whole burst lasts longer than the batching interval; the interval restarts with each character.
+    for char in "逐字中文輸入":
+        channel.emit("message", json.dumps({"type": "text", "text": char}))
+        await asyncio.sleep(0.01)
+    assert computer.calls == []
+    for _ in range(100):
+        if computer.calls:
+            break
+        await asyncio.sleep(0.01)
+    channel.emit("close")
+    for _ in range(100):
+        if computer.releases:
+            break
+        await asyncio.sleep(0.01)
+    assert computer.calls == [("type_text", "逐字中文輸入")]
 
 
 async def test_status_hands_the_page_the_turn_server_with_its_password(settings, computer):
@@ -1040,8 +1172,8 @@ async def test_a_frame_waits_for_the_screen_to_change(owner, computer, control, 
 
     # A frame comes no sooner than the frame rate allows, then as soon as the screen changes or the keepalive is due.
     interval = 1 / (webrtc.CONTROL_FPS if owner == "user" else webrtc.WATCH_FPS)
-    assert still - first == pytest.approx(interval + webrtc.KEEPALIVE_SECONDS, abs=1e-4)  # nothing changed
-    assert changed - still == pytest.approx(interval + 0.05, abs=1e-4)  # sent right after the change
+    assert still - first == pytest.approx(interval + webrtc.KEEPALIVE_SECONDS, abs=1e-4)
+    assert changed - still == pytest.approx(interval + 0.05, abs=1e-4)
 
 
 def test_vp8_video_is_encoded_with_screen_settings_that_aiortc_keeps():
@@ -1069,3 +1201,8 @@ async def test_a_search_finds_a_conversation_by_what_was_said_in_it(client, monk
     ]
     assert (await client.get("/api/search", params={"q": "記事本"})).json() == []
     assert (await client.get("/api/search", params={"q": "  "})).json() == []
+
+
+async def test_a_message_says_the_users_time_zone_and_whether_memory_learns_and_is_used(client):
+    for wrong in ({"timezone": "Mars/Base"}, {"memory": {"learn": "yes"}}, {"memory": {"forget": True}}):
+        assert (await client.post("/api/runs", json={"goal": "reply"} | wrong)).status_code == 400

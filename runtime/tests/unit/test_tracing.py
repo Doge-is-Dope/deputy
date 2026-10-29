@@ -1,6 +1,3 @@
-"""LangSmith traces carry no screenshots or encrypted reasoning, and graph nodes only a conversation's newest message
-and the tools' names."""
-
 import base64
 from unittest.mock import MagicMock
 
@@ -66,7 +63,7 @@ def test_node_output_is_traced_without_encrypted_reasoning():
 
 
 def test_model_call_is_traced_whole_without_screenshots_or_encrypted_reasoning():
-    client = MagicMock(spec=langsmith.Client)  # receives the runs as LangChain hands them to LangSmith
+    client = MagicMock(spec=langsmith.Client)
     model = GenericFakeChatModel(messages=iter([AIMessage("Saved.")]))
     model.invoke(conversation(), config={"callbacks": [LangChainTracer(client=client)]})
 
@@ -74,6 +71,6 @@ def test_model_call_is_traced_whole_without_screenshots_or_encrypted_reasoning()
     traced = for_trace(inputs)
 
     assert screenshots_in(inputs) == list(SCREENS) and ENCRYPTED in str(inputs)
-    assert len(traced["messages"][0]) == 3  # every message the model saw
+    assert len(traced["messages"][0]) == 3
     assert screenshots_in(traced) == [] and ENCRYPTED not in str(traced)
     assert "Saving." in str(traced) and "Pressed ctrl+s." in str(traced)

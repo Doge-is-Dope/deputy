@@ -26,7 +26,7 @@ def test_anthropic_puts_image_inside_tool_result(settings, observe_conversation)
     # Thinking blocks whose conversation changed under them (pruned screenshots) are dropped, not an error.
     assert payload["thinking"]["block_binding"] == {"prefix_mismatch_behavior": "drop_block"}
     assert payload["betas"] == ["thinking-binding-controls-2026-08-01"]
-    assert payload["cache_control"] == {"type": "ephemeral"}  # the prompt is cached up to its last block
+    assert payload["cache_control"] == {"type": "ephemeral"}
     tool_result = payload["messages"][-1]["content"][0]
     assert tool_result["type"] == "tool_result"
     assert tool_result["tool_use_id"] == "call_observe"

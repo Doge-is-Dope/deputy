@@ -47,7 +47,9 @@ export function QuestionRow({
         <div
           className={cn(
             "flex shrink-0 items-center gap-2.5 px-4 pt-3.5 transition-[opacity,translate] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
-            !question && "translate-y-2 opacity-0"
+            // Closing, its words fade in half the fold, so the shrinking row never cuts through them.
+            !question &&
+              "translate-y-2 opacity-0 [transition-duration:150ms,300ms]"
           )}
         >
           {/* The agent's pointer coming into the screen, as the return-control button shows it; or a hand held up, as

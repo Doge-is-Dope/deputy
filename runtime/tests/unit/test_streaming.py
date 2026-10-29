@@ -1,5 +1,3 @@
-"""The viewer must not lose a short reply, completion, or another viewer's events."""
-
 import asyncio
 
 from computer_use.agent.draft import Draft

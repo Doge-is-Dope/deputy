@@ -1,6 +1,3 @@
-"""Who may use the runtime: each request proves who sent it on its own, by a token or a sign-in proxy's header, or
-needs nothing on the loopback address; the runtime keeps no session."""
-
 import asyncio
 
 import httpx

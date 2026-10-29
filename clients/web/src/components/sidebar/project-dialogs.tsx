@@ -6,7 +6,7 @@ import { ActionDialog } from "@/components/ui/dialog"
 import { useT } from "@/lib/i18n"
 import { FolderIcon } from "@/components/icons"
 
-/** Asks a new project's name, as Codex does: the name alone. Enter or 建立 makes it; an empty name makes nothing. */
+/** Asks a new project's name alone. Enter or 建立 makes it; an empty name makes nothing. */
 export function CreateProjectDialog({
   open,
   onOpenChange,
@@ -44,8 +44,8 @@ export function CreateProjectDialog({
       finalFocus={finalFocus}
       className="sm:max-w-md"
     >
-      {/* As Codex's Create project dialog (measured 2026-10-22): a 38px field with a folder in its own cell at the
-          start, divided from the name, a thin ring as it focuses. The divider stands inside the field's border, and
+      {/* A 38px field with a folder in its own cell at the start, divided from the name, a thin ring as it
+          focuses. The divider stands inside the field's border, and
           the folder in the middle of the space the borders leave (pl-px for the field's own on the left). */}
       <div className="relative">
         <span className="pointer-events-none absolute inset-y-px left-0 flex w-9 items-center justify-center border-r border-input pl-px text-muted-foreground">

@@ -25,7 +25,7 @@ def test_a_run_goes_to_the_desktop_shows_its_steps_and_says_how_its_task_ended(a
                      "high"], client) == code
 
     (sent,) = api.sent("POST", "/api/runs")
-    assert sent["body"] == {"goal": "open start", "computer": True, "project": "eval", "max_steps": 9,
+    assert sent["body"] == {"goal": "open start", "computer": True, "project_name": "eval", "max_steps": 9,
                             "agents": {"computer": {"model": "openai:gpt-6-luna", "effort": "high"}}}
     out = capsys.readouterr().out
     assert '[  1] key {"text": "win"}' in out and "Agent: Start is open." in out
@@ -43,7 +43,7 @@ def test_ctrl_c_stops_the_run_and_shows_how_it_ended(api, client, capsys):
 
     assert len(api.sent("POST", "/api/runs/r1/stop")) == 1
     again = api.sent("GET", "/api/runs/r1/events")[-1]
-    assert again["headers"]["Last-Event-ID"] == "0"  # carries on after what it had shown
+    assert again["headers"]["Last-Event-ID"] == "0"
     assert "Stopped." in capsys.readouterr().err
 
 
@@ -143,4 +143,4 @@ def test_a_run_whose_stream_drops_carries_on_from_its_last_step(api, client, cap
 
     assert cli.main(["run", "open start"], client) == 0
     assert api.sent("GET", "/api/runs/r1/events")[-1]["headers"]["Last-Event-ID"] == "0"
-    assert capsys.readouterr().out.count("Goal: open start") == 1  # nothing shown twice
+    assert capsys.readouterr().out.count("Goal: open start") == 1

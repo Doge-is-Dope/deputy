@@ -76,8 +76,13 @@ const MAIN_MIN = 560
 
 export default function App() {
   const say = useT()
-  const { status, offline, refresh: refreshStatus } = useStatus()
-  const { runs, failed: runsFailed, refresh: refreshRuns } = useRuns()
+  const {
+    status,
+    offline,
+    refresh: refreshStatus,
+    confirmControl,
+  } = useStatus()
+  const { runs, projects, failed: runsFailed, refresh: refreshRuns } = useRuns()
   // The address names a conversation by its first run, or by any of its runs (an older link).
   const [opened, open] = useOpenRun()
   const project = useOpenProject() // whose home is open: a new conversation begins in it
@@ -146,7 +151,6 @@ export default function App() {
 
   const {
     input,
-    notice,
     current,
     takesMessages,
     approval,
@@ -155,10 +159,15 @@ export default function App() {
     asking,
     start,
     stop,
+    withdraw,
     remove,
     restore,
     rename,
     move,
+    createProject,
+    renameProject,
+    deleteProject,
+    restoreProject,
     setControl,
     takeOver,
     skip,
@@ -175,9 +184,12 @@ export default function App() {
       if (focus) setFocusScreen(true)
     },
     refreshStatus,
+    confirmControl,
     refreshRuns,
   })
   const running = current !== null
+  const projectName = (id: string) =>
+    projects?.find((each) => each.id === id)?.name
   const userHasControl = status?.control.owner === "user"
   const connection = connectionOf(status, offline)
 
@@ -351,12 +363,14 @@ export default function App() {
             text={
               from === null
                 ? say.sidebar.deleted
-                : say.sidebar.deletedProject(from)
+                : say.sidebar.deletedProject(projectName(from) ?? "")
             }
             action={say.sidebar.restore}
             onDismiss={() => toast.dismiss(id)}
             onAction={async () => {
               toast.dismiss(id)
+              // The project first, for them to come back under.
+              if (from !== null) await restoreProject(from)
               if ((await restore(deleted)) && opened) open(opened)
             }}
           />
@@ -379,42 +393,34 @@ export default function App() {
   }
 
   const composer = (
-    <>
-      {notice && (
-        <p
-          role="alert"
-          className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          {notice}
-        </p>
-      )}
-      <Composer
-        draftKey={draftKey}
-        onSubmit={(goal) => {
-          void preloadMarkdown()
-          return start(goal)
-        }}
-        // Unread messages continue in the next run.
-        onStop={stop}
-        running={running}
-        takesMessages={takesMessages}
-        blocked={blocked}
-        handover={handover}
-        approval={approval}
-        onAnswer={answer}
-        takeover={takeover}
-        // A project's home is headed by its name already, and the home by the greeting's question.
-        placeholder={
-          approval
-            ? say.composer.approval.placeholder
-            : thread
-              ? say.home.placeholderNext
-              : say.home.placeholderNew
-        }
-        autoFocus={!thread}
-        ref={input}
-      />
-    </>
+    <Composer
+      draftKey={draftKey}
+      onSubmit={(goal) => {
+        void preloadMarkdown()
+        return start(goal)
+      }}
+      // Unread messages continue in the next run.
+      onStop={stop}
+      running={running}
+      takesMessages={takesMessages}
+      blocked={blocked}
+      handover={handover}
+      approval={approval}
+      onAnswer={answer}
+      takeover={takeover}
+      queued={pending}
+      onWithdraw={withdraw}
+      // A project's home is headed by its name already, and the home by the greeting's question.
+      placeholder={
+        approval
+          ? say.composer.approval.placeholder
+          : thread
+            ? say.home.placeholderNext
+            : say.home.placeholderNew
+      }
+      autoFocus={!thread}
+      ref={input}
+    />
   )
 
   const liveView = (
@@ -426,7 +432,6 @@ export default function App() {
       focusScreen={focusScreen}
       onScreenFocused={() => setFocusScreen(false)}
       approval={approval}
-      notice={notice}
       onAnswer={answer}
       {...(isMobile || cramped
         ? { onClose: () => setLiveOpen(false) }
@@ -493,6 +498,10 @@ export default function App() {
         onDelete={deleteConversations}
         onRename={rename}
         onMove={move}
+        projects={projects}
+        onCreateProject={createProject}
+        onRenameProject={renameProject}
+        onDeleteProject={deleteProject}
         composer={input}
       />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
@@ -609,6 +618,7 @@ export default function App() {
             {thread ? (
               <RunView
                 key={thread}
+                thread={thread}
                 runs={turns}
                 continued={continued}
                 listed={runs !== null || runsFailed}
@@ -625,14 +635,18 @@ export default function App() {
                 onClosePlan={closePlan}
               />
             ) : chatsOpen ? (
-              <ChatsPage conversations={conversations ?? []} isNew={isNew} />
+              <ChatsPage
+                conversations={conversations ?? []}
+                projects={projects ?? []}
+                isNew={isNew}
+              />
             ) : (
               <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 pb-[10vh]">
                 {/* A project's home is headed by its name, as ChatGPT's is, with no suggestions: what is begun here
                     is the project's own. */}
                 {project ? (
                   <h2 className="mb-7 text-center text-2xl tracking-tight">
-                    {project}
+                    {projectName(project)}
                   </h2>
                 ) : (
                   <Greeting />

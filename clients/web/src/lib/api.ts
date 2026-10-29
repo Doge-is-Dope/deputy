@@ -74,8 +74,15 @@ export type RunSummary = {
   actions: number // on the desktop
   ended: number | null // when it ended; null while it runs, or if it never ended (the runtime stopped under it)
   failed: boolean // it ended in an error, not a reply or the user's stop
-  project: string | null // the project it was started in (`computer-use run --project`); null from the page
+  project: string | null // the id of the project its conversation is in (Project); null for none
   user: string // whose it is (the signed-in user's id); the runtime lists only the asker's
+}
+
+/** A project of the viewer's, which conversations are listed under; its id stays when it is renamed. */
+export type Project = {
+  id: string
+  name: string
+  created: number
 }
 
 /** Stable runtime note codes; the display text is never used to infer behavior. */
@@ -95,6 +102,7 @@ export type NoteCode =
   | "runStopped"
   | "runFailed"
   | "goal"
+  | "memoryUsed"
 
 /** Why an action was held back; an error without a reason is an execution failure. */
 export type ActionReason =
@@ -128,10 +136,15 @@ export type RunEvent = { time: number; task?: string } & (
       type: "note"
       text: string
       code?: NoteCode | null
-      data?: { seconds?: number; count?: number; tool?: string }
+      data?: {
+        seconds?: number
+        count?: number
+        tool?: string
+        rules?: { id: string; text: string }[] // memoryUsed: the rules the user taught that a task was given
+      }
     }
-  // Persisted model input, used by the runtime to restore the conversation.
-  | { type: "input"; agent?: "main"; message: Record<string, unknown> }
+  // A message the runtime gave an agent; what it said stays in the runtime, which restores the conversation from it.
+  | { type: "input"; agent?: "main" }
   // A message the user sent while the run worked, logged once an agent read it (agent/inbox.py)
   | { type: "message"; id: string; text: string }
   // The conversation's name, made from its first message in the background (agent/title.py)
@@ -249,7 +262,7 @@ export class ApiError extends Error {
   }
 }
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
     headers: init?.body ? { "Content-Type": "application/json" } : undefined,
@@ -273,6 +286,22 @@ const post = <T>(path: string, body: object = {}) =>
 export const api = {
   status: () => request<Status>("/api/status"),
   runs: () => request<RunSummary[]>("/api/runs"),
+  projects: () => request<Project[]>("/api/projects"),
+  // A project by this name: the viewer's own if they have one by it already.
+  createProject: (name: string) => post<Project>("/api/projects", { name }),
+  renameProject: (project: string, name: string) =>
+    request<Project>(`/api/projects/${project}`, {
+      method: "PATCH",
+      body: JSON.stringify({ name }),
+    }),
+  // The project only: its conversations are deleted first (useSidebarLists).
+  deleteProject: (project: string) =>
+    request<{ deleted: string }>(`/api/projects/${project}`, {
+      method: "DELETE",
+    }),
+  // A deleted project back, for its conversations brought back from the trash to list under.
+  restoreProject: (project: string) =>
+    post<Project>(`/api/projects/${project}/restore`),
   // The conversations whose words hold the query (storage.said), most recently active first, one hit each.
   search: (query: string, signal?: AbortSignal) =>
     request<SearchHit[]>(`/api/search?q=${encodeURIComponent(query)}`, {
@@ -280,7 +309,7 @@ export const api = {
     }),
   // Start or continue a conversation; steer its active web run when one exists.
   // takeControl transfers ownership only after acquiring the desktop.
-  // Send browser choices and locale with each message.
+  // Send browser choices, locale and time zone with each message.
   // A new conversation begins in `project` when given; a message into a conversation stays in its own.
   start: (
     goal: string,
@@ -295,8 +324,15 @@ export const api = {
       ...(project && !thread && { project }),
       ...currentChoices(),
       locale: locale(),
+      // Today's date, for the agents, as the user's clock says it.
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
   stop: (run: string) => post(`/api/runs/${run}/stop`),
+  // Takes back a message sent to a run in progress, while none of its agents has read it (409 once one has).
+  withdraw: (run: string, message: string) =>
+    request<{ withdrawn: boolean }>(`/api/runs/${run}/messages/${message}`, {
+      method: "DELETE",
+    }),
   // Moves every run of the conversation to the runtime's data/trash, out of the list.
   deleteConversation: (thread: string) =>
     request<{ deleted: string[] }>(`/api/conversations/${thread}`, {
@@ -311,7 +347,7 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ title }),
     }),
-  // Moves the conversation into a project, or out of the one it is in (null).
+  // Moves the conversation into a project (its id), or out of the one it is in (null).
   moveConversation: (thread: string, project: string | null) =>
     request<{ thread: string; project: string | null }>(
       `/api/conversations/${thread}`,

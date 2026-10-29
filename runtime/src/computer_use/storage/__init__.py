@@ -2,7 +2,7 @@
 
 The record's shape is the agents' (agent.trajectory writes it, history reads it); a store only keeps it. A run is
 named by its id, never by a path. FileRunStore (storage.files) keeps runs as folders under data/runs; a database
-plugs in here behind a setting."""
+plugs in here behind a setting. A ProjectStore keeps each user's projects, which runs name by id."""
 
 import re
 from collections.abc import Iterable, Iterator
@@ -18,9 +18,9 @@ FORMAT = 4
 MAIN = "main"
 # Whose a run is when nobody signed in to start it (auth.LOCAL), and of a run from before runs recorded it.
 LOCAL_USER = "local"
-# A search finds this many conversations at most, as Claude's Code tab does.
+# A search finds this many conversations at most.
 MAX_HITS = 50
-# A hit's snippet: this many characters before the match and after it, as Claude's Code tab cuts it.
+# A hit's snippet: this many characters before the match and after it.
 BEFORE, AFTER = 20, 80
 
 RunId = str  # e.g. "20261023-131500" or "20261023-131500-2": sorts by when the run started
@@ -50,6 +50,37 @@ class Hit:
 
     thread: Thread
     snippet: str
+
+
+@dataclass(frozen=True)
+class Project:
+    """A user's project, which the page lists conversations under; a run names it by its id, which a rename keeps."""
+
+    id: str
+    name: str
+    created: float
+    deleted: float | None = None  # when, until it is restored: kept, as a deleted conversation is
+
+
+class ProjectStore(Protocol):
+    """Each user's projects, apart from everyone else's."""
+
+    async def list(self, user: str) -> list[Project]:
+        """The user's projects, oldest first; not those deleted."""
+
+    async def get(self, user: str, id: str) -> Project | None: ...
+
+    async def create(self, user: str, name: str) -> Project:
+        """A new project by this name, or the user's project that already has it: a name names one project."""
+
+    async def rename(self, user: str, id: str, name: str) -> Project | None:
+        """None when the user has no such project; ValueError when another of theirs has the name."""
+
+    async def delete(self, user: str, id: str) -> bool:
+        """The project only: its conversations stay, and list without one while it is deleted."""
+
+    async def restore(self, user: str, id: str) -> Project | None:
+        """A deleted project back, by its id, for its conversations brought back with it to list under."""
 
 
 class RunStore(Protocol):
@@ -126,9 +157,9 @@ def project_name(name: object) -> str | None:
 
 
 def project_in(events: list[Event]) -> str | None:
-    """The last project the user moved the run to, else the one it was started in."""
+    """The id of the last project the user moved the run to, else of the one it was started in."""
     moves = [event for event in events if event["type"] == "project"]
-    return moves[-1]["name"] if moves else events[0].get("project")
+    return moves[-1].get("project") if moves else events[0].get("project")
 
 
 def summarize(run: RunId, events: list[Event]) -> RunSummary:
@@ -150,7 +181,7 @@ def summarize(run: RunId, events: list[Event]) -> RunSummary:
 
 def said(events: list[Event]) -> Iterator[str]:
     """What a search reads of a run: the user's messages and the main agent's words, as the page shows them; not
-    tools' results, subagents' words or reasoning (as Codex and Claude's Code tab search)."""
+    tools' results, subagents' words or reasoning."""
     for event in events:
         match event["type"]:
             case "start":
@@ -177,3 +208,9 @@ def build_run_store(settings: Settings) -> RunStore:
     from computer_use.storage.files import FileRunStore
 
     return FileRunStore(settings.data_dir)
+
+
+def build_project_store(settings: Settings) -> ProjectStore:
+    from computer_use.storage.files import FileProjectStore
+
+    return FileProjectStore(settings.data_dir)

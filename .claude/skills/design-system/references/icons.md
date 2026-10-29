@@ -24,9 +24,8 @@ drawn locally rather than copied from an icon library. Provider logos are the ex
 | 24px | The composer's send arrow, in its 32px button. |
 | 20px | Toolbar and header buttons, the composer's stop (a 10px square in its 32px button), the live view's corners and take-over pill, the sidebar's menu buttons, banners. The default for a `Button` icon with no size class (`button.tsx`), for `Spinner` and for `Icon`. |
 | 18px | The sidebar row's "more" ellipsis. |
-| 16px | Step lines and status marks (`TraceIcon`), menu items, copy buttons, the settings navigation, select chevrons, the notice's close cross. |
+| 16px | Step lines and status marks (`TraceIcon`), menu items, provider marks in the usage details, copy buttons, the settings navigation, select chevrons, the notice's close cross. |
 | 14px | Row chevrons that fold a step open, the stacked agent heads. |
-| 12px | Provider marks in the usage popover. |
 | 1em | The @Computer logo in a message and the composer: the size of the text around it. |
 
 Set a size with a `size-*` class on the icon, or let the container's rule size it; do not pass `width`/`height`.

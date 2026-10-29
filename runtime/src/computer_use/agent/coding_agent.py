@@ -20,7 +20,7 @@ from computer_use.prompts.coding import (
     ABOUT, BRIEF, CODING_PROMPT, DESCRIPTION, runner_unusable, stopped,
 )
 
-# How long one command may run, as Claude Code and Anthropic's computer use demo give a shell command.
+# How long one command may run, as Anthropic's computer use demo gives a shell command.
 RUN_SECONDS = 120
 
 

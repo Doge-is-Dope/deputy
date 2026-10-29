@@ -1,6 +1,7 @@
 import type { ReactNode } from "react"
+import { toast } from "sonner"
 
-import { CloseIcon } from "@/components/icons"
+import { CloseIcon, WarningIcon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { useT } from "@/lib/i18n"
 
@@ -54,5 +55,24 @@ export function Notice({
         </div>
       </div>
     </div>
+  )
+}
+
+/** Why what the user asked did not go through, as a notice with the others: one at a time, a new one in its place. */
+export function showError(text: string) {
+  toast.custom(
+    (id) => (
+      <Notice
+        icon={
+          <WarningIcon
+            aria-hidden
+            className="size-5 shrink-0 text-destructive"
+          />
+        }
+        text={text}
+        onDismiss={() => toast.dismiss(id)}
+      />
+    ),
+    { id: "error", className: "w-full" }
   )
 }

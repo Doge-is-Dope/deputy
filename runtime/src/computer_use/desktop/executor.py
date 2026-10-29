@@ -145,7 +145,7 @@ class Executor:
         return self._count_unchanged(name, args, result)
 
     async def _failed(self, reason: str) -> ActionResult:
-        """Input that failed, or may not have arrived (a paste Windows did not confirm): why, with the screen as it
+        """Input that failed, or may not have arrived: why, with the screen as it
         is now, so the model decides again from it rather than from the screen before; only why when the screen cannot
         be seen either."""
         try:

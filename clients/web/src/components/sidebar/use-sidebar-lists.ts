@@ -1,23 +1,30 @@
 import { useMemo, useState } from "react"
 
+import type { Project } from "@/lib/api"
 import { sectionsOf, type Conversation } from "@/lib/conversations"
 import { reducedMotion } from "@/lib/motion"
-import { openProject, openRun } from "@/lib/route"
+import { openRun } from "@/lib/route"
 import { DROP } from "@/components/sidebar/motion"
 import { useStoredNames } from "@/hooks/use-stored-names"
 
 /**
  * The sidebar's projects and recents as the viewer sees them, and the edits to them. An edit shows at once, before the
  * runtime has made it, while the rows it takes away close up where they were (`left`, `closing`); one that fails goes
- * back. Which projects the viewer opened, made and put in order is kept in this browser.
+ * back. Projects are the runtime's, by id; which the viewer opened and the order they put them in are kept in this
+ * browser.
  */
 export function useSidebarLists({
   conversations,
+  projects: made,
   selectedProject,
   onDelete,
   onMove,
+  onCreateProject,
+  onRenameProject,
+  onDeleteProject,
 }: {
   conversations: Conversation[] | null
+  projects: Project[] | null // the viewer's, empty ones too
   selectedProject: string | null // the project whose home is open
   onDelete: (
     conversations: string[],
@@ -27,29 +34,29 @@ export function useSidebarLists({
     conversation: string,
     project: string | null
   ) => Promise<{ project: string | null } | null>
+  onCreateProject: (name: string) => Promise<Project | null>
+  onRenameProject: (project: string, name: string) => Promise<Project | null>
+  onDeleteProject: (project: string) => Promise<unknown>
 }) {
-  // Which projects the viewer unfolded, and which they made here that have no conversation yet (a project is
-  // otherwise only what its runs carry): both kept in this browser.
+  // Which projects the viewer unfolded, by id, kept in this browser.
   const [opened, setOpened] = useStoredNames("opened-projects")
-  const [made, setMade] = useStoredNames("made-projects")
   // The projects' order, kept in this browser: as the viewer dragged them, a new one first. A conversation moving into
   // or out of one leaves it where it is.
   const [order, , setOrder] = useStoredNames("project-order")
-  // Projects being renamed, old name to new: listed by the new name from the moment it is given, open as they were,
-  // while their conversations move one by one. Each goes once the list has none left under the old name.
+  // Projects being renamed, id to new name: listed by it from the moment it is given. Each goes once the runtime's
+  // list has it, or if the rename failed.
   const [renamed, setRenamed] = useState<Record<string, string>>({})
-  const stale = Object.keys(renamed).filter(
-    (old) =>
-      !conversations?.some((conversation) => conversation.project === old)
+  const named = Object.keys(renamed).filter(
+    (id) => made?.find((project) => project.id === id)?.name === renamed[id]
   )
-  if (stale.length > 0)
+  if (named.length > 0)
     setRenamed((map) =>
       Object.fromEntries(
-        Object.entries(map).filter(([old]) => !stale.includes(old))
+        Object.entries(map).filter(([id]) => !named.includes(id))
       )
     )
-  // Conversations being moved, each to its project (null: the recents): listed there from the moment they are moved,
-  // as a renamed project is. Each goes once the list has it there, or is gone, or if the move failed.
+  // Conversations being moved, each to its project (null: the recents): listed there from the moment they are moved.
+  // Each goes once the list has it there, or is gone, or if the move failed.
   const [placed, setPlaced] = useState<Record<string, string | null>>({})
   const landed = Object.keys(placed).filter((id) => {
     const listed = conversations?.find((conversation) => conversation.id === id)
@@ -72,13 +79,25 @@ export function useSidebarLists({
   )
   if (purged.length > 0)
     setRemoved((ids) => ids.filter((id) => !purged.includes(id)))
-  // Projects being deleted, as they were with their conversations, listed in their place a moment longer while they
-  // fold shut (ProjectGroup's leaving).
-  const [closing, setClosing] = useState<[string, Conversation[]][]>([])
+  // Projects being deleted, as they were with their conversations and name, listed in their place a moment longer
+  // while they fold shut (ProjectGroup's leaving).
+  const [closing, setClosing] = useState<[string, Conversation[], string][]>([])
+  // Each project's name by id: as just renamed, else the runtime's, else as it was while it folds shut.
+  const names = useMemo(
+    () =>
+      Object.fromEntries([
+        ...closing.map(([id, , name]) => [id, name]),
+        ...(made ?? []).map((project) => [project.id, project.name]),
+        ...Object.entries(renamed),
+      ]) as Record<string, string>,
+    [closing, made, renamed]
+  )
   const { projects: listed, recents } = useMemo(() => {
+    const known = new Set((made ?? []).map((project) => project.id))
     const kept = (conversations ?? []).filter(
       (conversation) => !removed.includes(conversation.id)
     )
+    // In the recents, one whose project is gone.
     const shown = kept.map((conversation) => {
       const project =
         conversation.id in placed
@@ -86,29 +105,30 @@ export function useSidebarLists({
           : conversation.project
       return {
         ...conversation,
-        project:
-          project !== null && project in renamed ? renamed[project] : project,
+        project: project !== null && known.has(project) ? project : null,
       }
     })
     const sections = sectionsOf(
       [...shown, ...left].toSorted((a, b) => b.updated - a.updated)
     )
-    const listed = new Set(sections.projects.map(([name]) => name))
-    // Those made here and still empty too.
-    const empty = made
-      .filter((name) => !listed.has(name))
-      .map((name): [string, Conversation[]] => [name, []])
+    const listed = new Set(sections.projects.map(([id]) => id))
+    // Those with no conversation too.
+    const empty = [...known]
+      .filter((id) => !listed.has(id))
+      .map((id): [string, Conversation[]] => [id, []])
     const standing = [...sections.projects, ...empty].filter(
-      ([name]) => !closing.some(([shut]) => shut === name)
+      ([id]) => !closing.some(([shut]) => shut === id)
     )
-    return { ...sections, projects: [...standing, ...closing] }
-  }, [closing, conversations, left, made, placed, removed, renamed])
-  const unordered = listed
-    .map(([name]) => name)
-    .filter((name) => !order.includes(name))
+    const shutting = closing.map(([id, items]): [string, Conversation[]] => [
+      id,
+      items,
+    ])
+    return { ...sections, projects: [...standing, ...shutting] }
+  }, [closing, conversations, left, made, placed, removed])
+  const unordered = listed.map(([id]) => id).filter((id) => !order.includes(id))
   if (unordered.length > 0)
     setOrder((list) => [
-      ...unordered.filter((name) => !list.includes(name)),
+      ...unordered.filter((id) => !list.includes(id)),
       ...list,
     ])
   // Memoized by hand: the compiler does not keep toSorted's result, so each render made a new list, and from it new
@@ -134,90 +154,72 @@ export function useSidebarLists({
     setPlaced((map) => ({ ...map, [conversation.id]: project }))
     leave(conversation)
   }
-  // Gone from the list at once, its row closing up as a moved one's does, rather than when the list comes back. Its
-  // project stays should it be the last there, as when it moves out.
+  // Gone from the list at once, its row closing up as a moved one's does, rather than when the list comes back.
   const remove = async (conversation: Conversation) => {
-    if (conversation.project !== null) setMade(conversation.project, true)
     setRemoved((ids) => [...ids, conversation.id])
     leave(conversation)
     if (!(await onDelete([conversation.id], null)))
       setRemoved((ids) => ids.filter((id) => id !== conversation.id))
   }
   // All of it at once: its conversations out of the list and its row folding shut with them, rather than each going
-  // as its delete is done; then the project itself. Those that fail to go come back.
+  // as its delete is done; then the project itself, once they are all gone. Those that fail to go come back, and the
+  // project stays with them.
   const deleteProject = async (project: string, items: Conversation[]) => {
     const ids = items.map((conversation) => conversation.id)
     setRemoved((list) => [...list, ...ids])
     if (project === selectedProject) openRun(null)
     const forget = () => {
-      setClosing((list) => list.filter(([name]) => name !== project))
-      setMade(project, false)
+      setClosing((list) => list.filter(([id]) => id !== project))
+      setOpened(project, false)
       setOrder((list) => list.filter((each) => each !== project))
     }
     if (reducedMotion()) forget()
     else {
-      setClosing((list) => [...list, [project, items]])
+      setClosing((list) => [...list, [project, items, names[project] ?? ""]])
       setTimeout(forget, DROP.duration)
     }
-    if (ids.length > 0 && !(await onDelete(ids, project)))
+    if (ids.length > 0 && !(await onDelete(ids, project))) {
       setRemoved((list) => list.filter((id) => !ids.includes(id)))
+      return
+    }
+    await onDeleteProject(project)
   }
-  // It goes back should the move fail. A project stays when its last conversation moves out, as one made here and still
-  // empty does.
+  // It goes back should the move fail. A project stays when its last conversation moves out.
   const move = async (conversation: Conversation, project: string | null) => {
     const from = conversation.project
     if (from === project) return
-    if (from !== null) setMade(from, true)
     shift(conversation, project)
     if ((await onMove(conversation.id, project)) === null)
       shift({ ...conversation, project }, from)
   }
-  // Every conversation in it moved to the new name; this browser's lists follow, and its home if open. All of it shows
-  // at once: the list does not wait for the moves (renamed).
-  const renameProject = async (
-    project: string,
-    items: Conversation[],
-    name: string
-  ) => {
-    if (items.length > 0) setRenamed((map) => ({ ...map, [project]: name }))
-    // In its place: into the place of the name it takes, should that be another project's.
-    setOrder((list) =>
-      list.includes(name)
-        ? list.filter((each) => each !== project)
-        : list.map((each) => (each === project ? name : each))
-    )
-    if (made.includes(project)) {
-      setMade(project, false)
-      setMade(name, true)
-    }
-    if (opened.includes(project)) {
-      setOpened(project, false)
-      setOpened(name, true)
-    }
-    if (project === selectedProject) openProject(name)
-    let moved = true
-    for (const conversation of items)
-      moved = (await onMove(conversation.id, name)) !== null && moved
-    // One that did not move stays under the old name, which shows again.
-    if (!moved)
+  // The project's id once made, unfolded; null if it was not.
+  const createProject = async (name: string) => {
+    const project = await onCreateProject(name)
+    if (project === null) return null
+    setOpened(project.id, true)
+    return project.id
+  }
+  // Listed by the new name at once; its id, and so its conversations, its place and its home, stay as they are.
+  const renameProject = async (project: string, name: string) => {
+    setRenamed((map) => ({ ...map, [project]: name }))
+    if ((await onRenameProject(project, name)) === null)
       setRenamed((map) =>
-        Object.fromEntries(
-          Object.entries(map).filter(([old]) => old !== project)
-        )
+        Object.fromEntries(Object.entries(map).filter(([id]) => id !== project))
       )
   }
   return {
     projects,
+    names,
     recents,
     closing,
     left,
     opened,
     setOpened,
-    setMade,
     setOrder,
     remove,
     deleteProject,
     move,
+    createProject,
     renameProject,
   }
 }

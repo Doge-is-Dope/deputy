@@ -10,6 +10,7 @@ import type {
 } from "@/lib/api"
 import { describeAction, formatDuration } from "@/lib/format"
 import { t } from "@/lib/i18n"
+import type { Remembered } from "@/lib/memory"
 
 export type Step = {
   key: string
@@ -40,6 +41,8 @@ export type TaskEntry =
   // The desktop was gone and the agent waited for it: one line, from the runtime's note that it went to its note that it
   // is back, with how long it was gone (null while it is); or to its note that it gave up waiting, which ends the task.
   | { kind: "offline"; key: string; seconds: number | null; gaveUp?: true }
+  // A rule the user taught that the task was handed over with (the runtime's memoryUsed note): one line each.
+  | { kind: "memory"; key: string; id: string; text: string }
 
 /** Work handed over to an agent: to the computer agent, or to the coding agent. */
 export type Task = {
@@ -52,8 +55,7 @@ export type Task = {
   outcome: "running" | "done" | "stopped" | "failed"
   entries: TaskEntry[]
   result: string // what the agent doing it said last, once it ended
-  // The time it waited for the user rather than worked, as Codex's working timer stops while it asks the user
-  // something: for a step's answer, for the desktop back. Since when it waits now, by the log, if it does.
+  // The time it waited for the user rather than worked: for a step's answer, for the desktop back. Since when it waits now, by the log, if it does.
   waited: number
   waitingSince: number | null
 }
@@ -89,6 +91,9 @@ export type Item =
   | { kind: "message"; key: string; id: string; text: string; time: number }
   // What the main agent said, where it said it: in a run that works in the background, it talks as it goes.
   | { kind: "reply"; key: string; text: string; time: number; at: number }
+  // What the main agent remembered, where it called remember, before what it said after: one chip for the rules one
+  // reply of its saved, as Claude marks a memory written. `updated`: one of them replaced a rule it had.
+  | { kind: "memory"; key: string; memories: Remembered[]; updated: boolean }
 
 /** A step of the main agent's plan for the work (its write_todos calls: langchain's TodoListMiddleware). */
 export type PlanStep = {
@@ -137,8 +142,12 @@ export type Thread = {
 const STEERING = ["tell_task", "stop_task"]
 const TELL_TASK = "tell_task"
 const WRITE_TODOS = "write_todos"
-// The main agent's tools that neither steer nor hand over: its plan, and its search of the other conversations.
-const NO_HANDOVER = [WRITE_TODOS, "search_conversations"]
+const REMEMBER = "remember"
+// What remember says it saved (runtime memory/tools.py): the id is the last word of a result that saved one.
+const REMEMBERED = /^Remembered as (\S+?)\.?$/
+// The main agent's tools that neither steer nor hand over: its plan, its search of the other conversations, and its
+// memory (runtime memory/tools.py).
+const NO_HANDOVER = [WRITE_TODOS, "search_conversations", REMEMBER, "forget"]
 const STATUSES: readonly string[] = ["pending", "in_progress", "completed"]
 const handsOver = (tool: string) =>
   !STEERING.includes(tool) && !NO_HANDOVER.includes(tool)
@@ -274,6 +283,9 @@ export function buildThread(events: RunEvent[]): Thread {
     made.push(created)
     return created
   }
+  // The chip for the rules the main agent's latest reply remembered, which its next remember call joins; a reply of
+  // its starts the next.
+  let remembered: Extract<Item, { kind: "memory" }> | null = null
   // The work an event belongs to: the task under way its id names.
   const workOf = (event: RunEvent): Task | undefined =>
     event.task === undefined ? undefined : running.get(event.task)
@@ -342,6 +354,14 @@ export function buildThread(events: RunEvent[]): Thread {
           offline(work, key, event.data?.seconds ?? 0)
         } else if (work && event.code === "gone") {
           offline(work, key, event.data?.seconds ?? 0, true)
+        } else if (work && event.code === "memoryUsed") {
+          for (const [n, rule] of (event.data?.rules ?? []).entries())
+            work.entries.push({
+              kind: "memory",
+              key: `${key}-${n}`,
+              id: rule.id,
+              text: rule.text,
+            })
         } else if (work) {
           work.entries.push({ kind: "note", key, text: note(event) })
         } else {
@@ -365,6 +385,7 @@ export function buildThread(events: RunEvent[]): Thread {
         break
       case "model": {
         if (event.agent === "main") {
+          remembered = null
           // As written, but for the end: a paragraph indented with full-width spaces keeps them, as it did while being
           // written (trim() takes those too).
           const text = event.text.trimEnd()
@@ -451,6 +472,27 @@ export function buildThread(events: RunEvent[]): Thread {
           // Telling a task something ends the main agent's turn too (agent.main_agent): it waits on the task.
           if (event.tool === TELL_TASK && event.status === "success")
             thread.thinking = false
+          const saved =
+            event.tool === REMEMBER && event.status === "success"
+              ? REMEMBERED.exec(event.result.trim())?.[1]
+              : undefined
+          // The rule as given; none for one turned away (no project, nothing to replace).
+          if (saved) {
+            const memory = { id: saved, text: String(event.args.rule ?? "") }
+            const updated = Boolean(event.args.replaces)
+            if (remembered) {
+              remembered.memories.push(memory)
+              remembered.updated ||= updated
+            } else {
+              remembered = {
+                kind: "memory",
+                key: `memory-${index}`,
+                memories: [memory],
+                updated,
+              }
+              add(remembered, index)
+            }
+          }
           if (!handsOver(event.tool)) break
           if (event.reason) {
             // Turned away before it started (e.g. another task had the computer): never ran.
@@ -612,7 +654,7 @@ function groupAgents(
 }
 
 /**
- * Steps in a row, as Codex groups its tool calls: what the agent said as it took the first, if it said anything, and
+ * Steps in a row: what the agent said as it took the first, if it said anything, and
  * the steps, notes and turns at the desktop till it says something again.
  */
 export type Phase = {
@@ -707,4 +749,14 @@ export const runningTask = (thread: Thread): Task | null => {
     (task) => task.outcome === "running"
   )
   return tasks.find((task) => task.tool === "computer_use") ?? tasks[0] ?? null
+}
+
+/** The rules the run's tasks were handed over with (their memoryUsed notes), each once, in the order first cited. */
+export function citedMemories(thread: Thread): Remembered[] {
+  const cited = new Map<string, Remembered>()
+  for (const task of thread.tasks.values())
+    for (const entry of task.entries)
+      if (entry.kind === "memory" && !cited.has(entry.id))
+        cited.set(entry.id, { id: entry.id, text: entry.text })
+  return [...cited.values()]
 }

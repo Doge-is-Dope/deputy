@@ -8,8 +8,6 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-TypeMode = Literal["auto", "keys", "paste"]
-
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CU_", env_file=".env", extra="ignore", validate_by_name=True)
@@ -41,9 +39,7 @@ class Settings(BaseSettings):
     # The RDP backend: the X display showing the session (entrypoint.sh reads the same RDP_* variables, and
     # sizes the screen with RDP_SCREEN_WIDTH and RDP_SCREEN_HEIGHT; the runtime reads the size off screenshots).
     display: str = Field(default=":1", validation_alias="RDP_DISPLAY")
-    # "paste" sends all text through the clipboard, so a Chinese IME on Windows cannot garble it.
-    # "auto" types ASCII as keystrokes and pastes the rest; "keys" always types keystrokes.
-    type_mode: TypeMode = Field(default="paste", validation_alias="RDP_TYPE_MODE")
+    keyboard_pipe: Path = Field(default=Path("/tmp/rdp-keyboard"), validation_alias="RDP_KEYBOARD_PIPE")
     # After an action, wait until its effect has drawn and the screen has been still for settle_quiet_seconds,
     # at most settle_max_seconds. If nothing visible changes, stop waiting after settle_seconds.
     settle_seconds: float = 1.5
@@ -91,14 +87,18 @@ class Choice:
 
 @dataclass(frozen=True)
 class RunChoices:
-    """Per-message choices held by the browser: models, efforts, approvals and locale.
+    """Per-message choices held by the browser: models, efforts, approvals, locale and time zone, and memory.
 
     Missing choices use Settings; FOLLOW inherits the main agent. Model changes
-    apply to the next run; approval changes apply to its next flagged step."""
+    apply to the next run; approval changes apply to its next flagged step. Memory is off unless sent: a run from the
+    command line or an eval neither learns nor follows what the user taught on the page."""
 
     agents: dict[str, dict[str, str]] = field(default_factory=dict)
     approvals: Approvals = "ask"
     locale: str | None = None
+    timezone: str | None = None  # IANA, e.g. "Asia/Taipei": today's date as the user's clock says
+    learn: bool = False  # the main agent may remember rules from the user's corrections
+    recall: bool = False  # the run is told what it remembers, and hands rules over
 
 
 @lru_cache

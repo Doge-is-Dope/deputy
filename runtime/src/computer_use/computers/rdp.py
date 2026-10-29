@@ -1,15 +1,21 @@
 """Control the Windows RDP session shown on the container's X display.
 
-Agent input uses xdotool; streamed human input, single wheel notches and pointer reads use a
-persistent X connection. Clipboard pastes avoid Windows IME interference with keystrokes."""
+Text uses the RDP Unicode pipe; shortcuts use xdotool. Streamed human input, single wheel
+notches and pointer reads use a persistent X connection."""
 
 import asyncio
 import contextlib
+import fcntl
 import io
 import logging
 import os
+import stat
+import termios
+import time
+from array import array
 from asyncio import subprocess
 from collections.abc import Sequence
+from pathlib import Path
 
 from PIL import Image, ImageGrab
 from Xlib import XK, X
@@ -17,7 +23,6 @@ from Xlib import display as xlib
 from Xlib.ext import damage
 
 from computer_use.computers import Button, Combo, ComputerError, Direction, Frame, Point, Status
-from computer_use.config import TypeMode
 
 BUTTONS = {"left": 1, "middle": 2, "right": 3}
 SCROLL_BUTTONS = {"up": 4, "down": 5, "left": 6, "right": 7}
@@ -56,13 +61,9 @@ KEYSYMS = {
 # Full keysym names for the modifiers, which xdotool also takes by their short names.
 FULL_KEYSYMS = {"ctrl": "Control_L", "alt": "Alt_L", "shift": "Shift_L", "super": "Super_L"}
 
-# Seconds for the clipboard to reach Windows before ctrl+v, and at most for Windows to fetch it after.
-PASTE_WAIT_SECONDS = 0.3
-FETCH_TIMEOUT_SECONDS = 3
-# At most this long for one xdotool or xclip command; the longest action, a 10 s hold_key, takes far less, so one
-# still running then has hung and is stopped. Typing keystrokes gets TYPE_KEY_SECONDS more for each character.
+TEXT_TIMEOUT_SECONDS = 3
+# A command still running after this has hung: even a 10 s hold_key takes far less.
 COMMAND_TIMEOUT_SECONDS = 60
-TYPE_KEY_SECONDS = 0.04  # xdotool type --delay 40
 
 logger = logging.getLogger(__name__)
 
@@ -138,28 +139,25 @@ class ScreenChanges:
 
 
 class RdpComputer:
-    def __init__(self, display: str, type_mode: TypeMode = "paste"):
+    def __init__(self, display: str, keyboard_pipe: Path = Path("/tmp/rdp-keyboard")):
         self.display = display
-        self.type_mode = type_mode
+        self.keyboard_pipe = keyboard_pipe
+        self._typing = asyncio.Lock()
         self._env = {**os.environ, "DISPLAY": display}
         self._xtest: xlib.Display | None = None  # the lasting connection (_lasting), opened on first use
         self._changes: ScreenChanges | None = None  # watched once the live view first asks
         self._no_changes = False  # the display reports no changes: every call counts as one
 
-    async def _run(
-        self, *args: str, stdin: bytes | None = None, capture: bool = True, timeout: float = COMMAND_TIMEOUT_SECONDS
-    ) -> str:
-        # xclip keeps a child alive to serve the selection, so it must not hold our pipes.
-        out = subprocess.PIPE if capture else subprocess.DEVNULL
+    async def _run(self, *args: str, timeout: float = COMMAND_TIMEOUT_SECONDS) -> None:
         proc = await asyncio.create_subprocess_exec(
             *args,
-            stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
-            stdout=out,
-            stderr=out,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             env=self._env,
         )
         try:
-            out, err = await asyncio.wait_for(proc.communicate(stdin), timeout)
+            _, err = await asyncio.wait_for(proc.communicate(), timeout)
         except (asyncio.CancelledError, TimeoutError) as stopped:  # stopped, or it hung: don't leave it running
             with contextlib.suppress(ProcessLookupError):
                 proc.kill()
@@ -172,7 +170,6 @@ class RdpComputer:
         if proc.returncode != 0:
             detail = err.decode(errors="replace").strip() if err else f"exit code {proc.returncode}"
             raise ComputerError(f"{args[0]} failed: {detail}")
-        return out.decode(errors="replace") if out else ""
 
     async def status(self) -> Status:
         # xfreerdp maps its window (WM_CLASS set by the entrypoint) only once the session is up.
@@ -202,7 +199,7 @@ class RdpComputer:
         return Frame(buffer.getvalue(), image.width, image.height)
 
     async def click(self, point: Point | None, button: Button, count: int, modifiers: Combo) -> None:
-        click = ["click", "--repeat", str(count), "--delay", "80", str(BUTTONS[button])]
+        click = ["click", "--repeat", str(count), "--delay", "50" if count == 1 else "80", str(BUTTONS[button])]
         await self._run("xdotool", *moved(point, await self._here(point)), *held(modifiers, *click))
 
     async def drag(self, path: Sequence[Point], modifiers: Combo) -> None:
@@ -273,58 +270,49 @@ class RdpComputer:
         await self._run("xdotool", *moved(point, await self._here(point)), *held(modifiers, *wheel))
 
     async def type_text(self, text: str) -> None:
-        if self.type_mode == "keys" or (self.type_mode == "auto" and text.isascii()):
-            timeout = COMMAND_TIMEOUT_SECONDS + TYPE_KEY_SECONDS * len(text)
-            await self._run("xdotool", "type", "--delay", "40", "--", text, timeout=timeout)
-            return
-        # Pasting borrows the clipboard; put back what was there so a copy before typing still pastes.
-        saved = await self._clipboard_text()
-        try:
-            # Pasted, a newline is just a character that single-line fields drop; press Enter between lines instead.
-            for n, line in enumerate(text.replace("\r\n", "\n").split("\n")):
-                if n:
+        async with self._typing:
+            for number, line in enumerate(text.replace("\r\n", "\n").split("\n")):
+                if number:
                     await self.press([["enter"]])
-                if line:
-                    await self._paste(line)
-        finally:
-            if saved is not None:
-                await self._set_clipboard(saved)
+                chunk = ""
+                for char in line:
+                    if len((chunk + char).encode()) > 60:
+                        await self._unicode_chunk(chunk)
+                        chunk = ""
+                    chunk += char
+                if chunk:
+                    await self._unicode_chunk(chunk)
 
-    async def _paste(self, text: str) -> None:
-        """Paste through the clipboard and wait for Windows to fetch the text.
-
-        If xclip is still serving after Ctrl+V, delivery is unconfirmed: focus may be
-        wrong or clipboard sync may be late. Fail with a fresh screen for recovery;
-        restarting RDP does not resolve a focus error."""
-        args = ["xclip", "-selection", "clipboard", "-loops", "1", "-quiet"]  # -quiet: in the foreground
-        fetched = asyncio.create_task(self._run(*args, stdin=text.encode(), capture=False))
+    async def _unicode_chunk(self, text: str) -> None:
+        # FreeRDP reads 63 bytes at a time. Keep every write on a UTF-8 character boundary,
+        # wait until it has been read, then allow the reader to dispatch it before a control key.
+        reader = None
         try:
-            await asyncio.sleep(PASTE_WAIT_SECONDS)
-            if fetched.done():
-                fetched.result()  # xclip failed: paste nothing
-            await self.press([["ctrl", "v"]])
-            await asyncio.wait_for(fetched, FETCH_TIMEOUT_SECONDS)
-        except TimeoutError:
-            logger.warning("Windows did not fetch the pasted text")
-            raise ComputerError(
-                f"Windows did not confirm taking the pasted text within {FETCH_TIMEOUT_SECONDS:g} s of ctrl+v: it may "
-                "have pasted nothing (the focus may not be on a text field), older clipboard text, or this text after "
-                "all; nothing after it was typed. Check the screen, click the field, and type again."
-            ) from None
+            writer = os.open(self.keyboard_pipe, os.O_WRONLY | os.O_NONBLOCK)
+            try:
+                if not stat.S_ISFIFO(os.fstat(writer).st_mode):
+                    raise ComputerError("The RDP text input path is not a pipe; nothing was sent.")
+                reader = os.open(self.keyboard_pipe, os.O_RDONLY | os.O_NONBLOCK)
+                payload = text.encode("utf-8")
+                if os.write(writer, payload) != len(payload):
+                    raise ComputerError("The RDP text transfer was partial; check the screen before retrying.")
+            finally:
+                os.close(writer)
+            due = time.monotonic() + TEXT_TIMEOUT_SECONDS
+            while True:
+                pending = array("i", [0])
+                fcntl.ioctl(reader, termios.FIONREAD, pending, True)
+                if not pending[0]:
+                    break
+                if time.monotonic() >= due:
+                    raise ComputerError("RDP did not take the text; check the connection before retrying.")
+                await asyncio.sleep(0.002)
+            await asyncio.sleep(0.01 + len(text.encode("utf-16-le")) * 0.0015)
+        except OSError as error:
+            raise ComputerError("The RDP text input pipe is unavailable; check the desktop connection.") from error
         finally:
-            fetched.cancel()
-
-    async def _clipboard_text(self) -> str | None:
-        """The clipboard's text (over RDP, the Windows clipboard), or None when it holds no text."""
-        try:
-            return await asyncio.wait_for(
-                self._run("xclip", "-selection", "clipboard", "-o", "-t", "UTF8_STRING"), timeout=3
-            )
-        except (ComputerError, TimeoutError):
-            return None
-
-    async def _set_clipboard(self, text: str) -> None:
-        await self._run("xclip", "-selection", "clipboard", stdin=text.encode(), capture=False)
+            if reader is not None:
+                os.close(reader)
 
     async def press(self, combos: Sequence[Combo]) -> None:
         # Keep the default 12 ms key delay: longer Alt holds can open the task switcher.

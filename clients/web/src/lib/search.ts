@@ -1,5 +1,5 @@
 // Finding conversations: by name here, from the list the page already has, and by what was said in them from the
-// runtime (GET /api/search), merged as Claude's Code tab merges its two.
+// runtime (GET /api/search), the two merged.
 
 import type { SearchHit } from "@/lib/api"
 import { nameOf, type Conversation } from "@/lib/conversations"

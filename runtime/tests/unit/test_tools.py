@@ -1,5 +1,3 @@
-"""The model's desktop tools against a fake computer: result shape, bounds, rejected input, settling."""
-
 import asyncio
 import base64
 import io
@@ -102,7 +100,7 @@ def test_a_mark_rings_where_a_step_acts_and_nothing_else():
     assert changed_pixels(screen, marked, around=[(100, 100)]) >= NOISE
     assert changed_pixels(screen, marked, around=[(600, 400)]) == 0
     drag = mark(screen, [(100, 100), (500, 100)])
-    assert changed_pixels(screen, drag, around=[(300, 100)]) >= NOISE  # the line between a drag's two points
+    assert changed_pixels(screen, drag, around=[(300, 100)]) >= NOISE
 
 
 def screen_with(*boxes, ants: int | None = None):
@@ -140,7 +138,7 @@ def test_one_typed_character_is_a_change_and_the_clock_turning_a_minute_is_not()
 
 def test_a_change_that_stays_counts_and_marching_ants_do_not():
     seen, now, later = screen_with(ants=0), screen_with(ants=2), screen_with(ants=5)
-    assert changed_pixels(seen, now) >= NOISE  # compared plainly, the ants look like a change
+    assert changed_pixels(seen, now) >= NOISE
     assert lasting_changed_pixels(seen, now, later) < NOISE
     dialog = (400, 300, 700, 500)
     now, later = screen_with(dialog, ants=2), screen_with(dialog, ants=5)
@@ -173,7 +171,7 @@ async def test_settle_waits_for_a_late_effect_to_finish_drawing(computer, settin
     frames = iter([desktop] * 5 + [half] + [app] * 1000)
     computer.screen = lambda: next(frames)
     settings.settle_seconds, settings.settle_quiet_seconds, settings.settle_max_seconds = 1.0, 0.05, 2.0
-    assert (await settle(computer, settings, Frame.of(desktop))).png == app
+    assert changed_pixels((await settle(computer, settings, Frame.of(desktop))).png, app) == 0
 
 
 async def test_settle_stops_waiting_when_nothing_changes(computer, settings, fast_polls):
@@ -306,7 +304,7 @@ async def test_shortcut_wait_captures_a_700ms_effect_before_the_next_input(
 async def test_zoom_enlarges_a_region_of_the_screen(tools):
     result = await call(tools, "zoom", region=[0, 0, 320, 100])
     text, image = result.content
-    assert "enlarged 4.0x" in text["text"]  # up to the 1280x800 screen size
+    assert "enlarged 4.0x" in text["text"]
     assert Image.open(io.BytesIO(base64.b64decode(image["base64"]))).size == (1280, 400)
     outside = await call(tools, "zoom", region=[0, 0, 2000, 100])
     assert outside.status == "error"
@@ -330,16 +328,16 @@ async def test_a_batch_sends_its_actions_in_order_and_returns_the_screen_after_t
 
 async def test_a_batch_stops_at_the_first_action_that_fails(tools, computer):
     async def type_text(text):
-        raise ComputerError("Windows did not confirm taking the pasted text")
+        raise ComputerError("RDP text delivery was partial")
 
     computer.type_text = type_text
     result = await call_batch(
         tools, ("left_click", {"coordinate": [10, 10]}), ("type", {"text": "x"}), ("key", {"text": "enter"})
     )
     text, image = result.content
-    assert result.status == "error" and image["type"] == "image"  # the screen after the failure, to decide from
+    assert result.status == "error" and image["type"] == "image"
     assert text["text"].startswith(
-        "Stopped at action 2 of 3: Windows did not confirm taking the pasted text\n1. Left click at (10, 10)."
+        "Stopped at action 2 of 3: RDP text delivery was partial\n1. Left click at (10, 10)."
     )
     assert "\nAction 3 was not sent.\nScreen 1280x800" in text["text"]
     assert computer.calls == [("click", (10, 10), "left", 1, [])]
@@ -349,16 +347,16 @@ async def test_input_that_fails_comes_back_with_the_screen_as_it_is_then(tools, 
     computer.screen = lambda: fixture_png("Save As: file list")
     await executor.observe("Save As.")
 
-    async def type_text(text):  # e.g. pasted into a file list: maybe nothing, maybe old text
-        computer.screen = lambda: fixture_png("Save As: old text pasted")
-        raise ComputerError("Windows did not confirm taking the pasted text")
+    async def type_text(text):  # the text field changed before delivery failed
+        computer.screen = lambda: fixture_png("Save As: partial text")
+        raise ComputerError("RDP text delivery was partial")
 
     computer.type_text = type_text
     result = await call(tools, "type", text="Case-Test.txt")
     text, image = result.content
     assert result.status == "error"
-    assert text["text"].startswith("Windows did not confirm taking the pasted text\nScreen 1280x800")
-    now = fixture_png("Save As: old text pasted")
+    assert text["text"].startswith("RDP text delivery was partial\nScreen 1280x800")
+    now = fixture_png("Save As: partial text")
     assert base64.b64decode(image["base64"]) == now
     assert executor.shown.png == now  # the next action is checked against this screen, not the one before
 
@@ -369,11 +367,11 @@ async def test_input_that_fails_says_why_when_the_screen_cannot_be_seen_either(t
 
     async def type_text(text):
         computer.screen = gone
-        raise ComputerError("xclip failed: Can't open display: :1")
+        raise ComputerError("The RDP text input pipe is unavailable")
 
     computer.type_text = type_text
     result = await call(tools, "type", text="x")
-    assert result.status == "error" and result.content == "xclip failed: Can't open display: :1"
+    assert result.status == "error" and result.content == "The RDP text input pipe is unavailable"
 
 
 async def test_a_batch_stops_when_the_screen_changes_after_an_action_settled(tools, executor, computer, monkeypatch):
@@ -386,7 +384,7 @@ async def test_a_batch_stops_when_the_screen_changes_after_an_action_settled(too
         tools, ("key", {"text": "win+s"}), ("type", {"text": "notepad"}), ("key", {"text": "enter"})
     )
     text, image = result.content
-    assert result.status == "error" and image["type"] == "image"  # the screen it changed to
+    assert result.status == "error" and image["type"] == "image"
     assert text["text"].startswith(
         "Stopped at action 2 of 3: Not executed: the screen changed since your last screenshot."
     )

@@ -152,10 +152,9 @@ class Trajectory:
         """The log's format; the run's id, so listeners know which run the events belong to; its conversation (the
         first run's id); the user's message; both agents' models, since a model's reasoning
         carries over only within its family; whether the user asked for the computer; how the user chose to have
-        steps approved as the run started, which they may change while it works (each `confirm` says how it was); and
-        the project the run was started in (`computer-use run --project`), which the web page lists its conversation
-        under: None for one started from the page or without one; and whose it is (auth.Identity's id), the only one who
-        sees it."""
+        steps approved as the run started, which they may change while it works (each `confirm` says how it was); the
+        id of the project its conversation was begun in, which the web page lists it under (None for none); and whose
+        it is (auth.Identity's id), the only one who sees it."""
         self._write({
             "type": "start", "v": FORMAT, "run": self.run, "thread": thread or self.run, "goal": goal,
             "model": model, "main_model": main_model, "computer": computer, "approvals": approvals, "project": project,
@@ -326,7 +325,7 @@ class Trajectory:
 
     def cut(self) -> None:
         """A model call a stop cut off. The provider bills what it read and wrote so far, but a reply's usage comes only
-        with its end, so the run's cost is not known (Codex and the Agents SDK record nothing for such a call)."""
+        with its end, so the run's cost is not known."""
         self.cut_calls += 1
 
     def action(self, call: dict, result: ToolMessage, agent: str | None = None) -> None:

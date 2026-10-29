@@ -6,8 +6,10 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import {
   Tooltip,
   TooltipContent,
@@ -25,10 +27,17 @@ import {
   timeAgo,
 } from "@/lib/format"
 import { useT } from "@/lib/i18n"
+import type { Remembered } from "@/lib/memory"
 import { reducedMotion } from "@/lib/motion"
 import { cut, FADE_MS, Pace, STEP_MS } from "@/lib/reveal"
-import { ChevronDownIcon, EllipsisIcon, ProviderIcon } from "@/components/icons"
+import {
+  EllipsisIcon,
+  InfoIcon,
+  MemoryIcon,
+  ProviderIcon,
+} from "@/components/icons"
 import { CopyButton } from "@/components/copy-button"
+import { CitedMemoriesDialog } from "@/components/memory/lines"
 import { Markdown } from "@/components/markdown/markdown"
 import { MessageText } from "@/components/mentions"
 
@@ -108,11 +117,12 @@ export function UserMessage({
   )
 }
 
-/** What a run's last reply's details menu tells: what the whole run used, and how long it took. */
+/** What a run's last reply's details menu tells: what the whole run used, how long it took, and the rules it cited. */
 type About = {
   cost: Cost | null
   agents: AgentUsage[]
   took?: number // seconds, from the user's message to the end of the run
+  cited: Remembered[] // the rules its tasks were handed over with (citedMemories)
 }
 
 /** Reply actions appear on hover; keep the latest reply's buttons visible. */
@@ -150,19 +160,102 @@ function ReplyActions({
   )
 }
 
-/** Run duration and cost, with an optional per-agent breakdown. Preserve expansion across opens. */
+/** Run duration and cost; each agent's tokens and cost, and the rules the run cited, each in a dialog of its own. */
 function ReplyMore({ about }: { about: About }) {
   const t = useT()
   const words = t.run.about
-  const [more, setMore] = useState(false)
+  // The dialog the menu opened: kept outside it, as the menu closes once one opens.
+  const [opened, setOpened] = useState<"details" | "cited" | null>(null)
+  const close = (open: boolean) => !open && setOpened(null)
   const lines: [string, string][] = []
   if (about.took !== undefined)
     lines.push([words.took, formatDuration(about.took)])
   lines.push([words.cost, about.cost ? formatCost(about.cost) : words.unknown])
-  // Under the toggle, each agent by the model it used (the main agent's first, then those it handed work to), by kind
-  // of token as each is priced: the input read from and written to the cache apart from the rest, kinds not used left
-  // out.
-  const groups = about.agents.map((each) => {
+  return (
+    <>
+      <DropdownMenu>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t.run.usage}
+                    className="text-muted-foreground data-popup-open:bg-muted"
+                  />
+                }
+              />
+            }
+          >
+            <EllipsisIcon className="size-4" />
+          </TooltipTrigger>
+          <TooltipContent side="bottom">{t.run.usage}</TooltipContent>
+        </Tooltip>
+        <DropdownMenuContent align="start" className="min-w-44 text-xs">
+          <div className="px-2 py-0.5">
+            {lines.map(([label, value]) => (
+              <div
+                key={label}
+                className="flex items-center justify-between gap-4 py-0.5"
+              >
+                <span className="text-muted-foreground">{label}</span>
+                <span className="tabular-nums">{value}</span>
+              </div>
+            ))}
+          </div>
+          {(about.agents.length > 0 || about.cited.length > 0) && (
+            <DropdownMenuSeparator />
+          )}
+          {about.agents.length > 0 && (
+            <DropdownMenuItem
+              onClick={() => setOpened("details")}
+              className="py-1 pr-2 text-xs text-muted-foreground"
+            >
+              <InfoIcon className="size-3.5!" />
+              {words.details}
+            </DropdownMenuItem>
+          )}
+          {about.cited.length > 0 && (
+            <DropdownMenuItem
+              onClick={() => setOpened("cited")}
+              className="py-1 pr-2 text-xs text-muted-foreground"
+            >
+              <MemoryIcon className="size-3.5!" />
+              {t.run.memory.citations(about.cited.length)}
+            </DropdownMenuItem>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <UsageDialog
+        agents={about.agents}
+        open={opened === "details"}
+        onOpenChange={close}
+      />
+      <CitedMemoriesDialog
+        memories={about.cited}
+        open={opened === "cited"}
+        onOpenChange={close}
+      />
+    </>
+  )
+}
+
+/** Each agent by the model it used (the main agent's first, then those it handed work to), by kind of token as each is
+ * priced: the input read from and written to the cache apart from the rest, kinds not used left out. */
+function UsageDialog({
+  agents,
+  open,
+  onOpenChange,
+}: {
+  agents: AgentUsage[]
+  open: boolean
+  onOpenChange: (open: boolean) => void
+}) {
+  const t = useT()
+  const words = t.run.about
+  const groups = agents.map((each) => {
     const { usage, cost } = each
     const kinds: [string, number, number | undefined][] = [
       [
@@ -181,105 +274,51 @@ function ReplyMore({ about }: { about: About }) {
     }
   })
   return (
-    <DropdownMenu>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-xs"
-                  aria-label={t.run.usage}
-                  className="text-muted-foreground data-popup-open:bg-muted"
-                />
-              }
-            />
-          }
-        >
-          <EllipsisIcon className="size-4" />
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{t.run.usage}</TooltipContent>
-      </Tooltip>
-      <DropdownMenuContent align="start" className="min-w-44 text-xs">
-        <div className="px-2 py-0.5">
-          {lines.map(([label, value]) => (
-            <div
-              key={label}
-              className="flex items-center justify-between gap-4 py-0.5"
-            >
-              <span className="text-muted-foreground">{label}</span>
-              <span className="tabular-nums">{value}</span>
-            </div>
-          ))}
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-3">
+        <DialogTitle className="flex h-8 items-center pr-8">
+          {words.details}
+        </DialogTitle>
+        <div className="-mx-4 min-h-0 overflow-y-auto px-4">
+          <div className="grid grid-cols-[1fr_auto_auto] gap-x-4">
+            {groups.map((group, index) => (
+              <Fragment key={index}>
+                <span
+                  className={cn(
+                    "col-span-2 flex items-center gap-2 py-1.5 font-medium",
+                    index > 0 && "mt-3"
+                  )}
+                >
+                  <ProviderIcon model={group.model} className="size-4" />
+                  {modelName(group.model)}
+                </span>
+                <span
+                  className={cn(
+                    "py-1.5 text-right font-medium tabular-nums",
+                    index > 0 && "mt-3"
+                  )}
+                >
+                  {group.cost}
+                </span>
+                {group.kinds.map(([label, tokens, dollars]) => (
+                  <Fragment key={label}>
+                    <span className="py-1.5 pl-6 text-muted-foreground">
+                      {label}
+                    </span>
+                    <span className="py-1.5 text-right tabular-nums">
+                      {formatNumber(tokens)}
+                    </span>
+                    <span className="py-1.5 text-right text-muted-foreground tabular-nums">
+                      {dollars === undefined ? "" : formatDollars(dollars)}
+                    </span>
+                  </Fragment>
+                ))}
+              </Fragment>
+            ))}
+          </div>
         </div>
-        {groups.length > 0 && (
-          <>
-            <div
-              className={cn(
-                "grid transition-[grid-template-rows,opacity] duration-200 ease-(--ease-out) motion-reduce:transition-none",
-                more ? "grid-rows-[1fr]" : "grid-rows-[0fr] opacity-0"
-              )}
-            >
-              <div className="min-h-0 overflow-hidden">
-                <div className="mx-1 mt-1 grid grid-cols-[1fr_auto_auto] gap-x-3 border-t px-1 pt-2 pb-1.5">
-                  {groups.map((group, index) => (
-                    <Fragment key={index}>
-                      <span
-                        className={cn(
-                          "col-span-2 flex items-center gap-1 pb-1 font-medium",
-                          index > 0 && "pt-2.5"
-                        )}
-                      >
-                        <ProviderIcon model={group.model} className="size-3" />
-                        {modelName(group.model)}
-                      </span>
-                      <span
-                        className={cn(
-                          "pb-1 text-right font-medium tabular-nums",
-                          index > 0 && "pt-2.5"
-                        )}
-                      >
-                        {group.cost}
-                      </span>
-                      {group.kinds.map(([label, tokens, dollars]) => (
-                        <Fragment key={label}>
-                          <span className="py-0.5 pl-2 text-muted-foreground">
-                            {label}
-                          </span>
-                          <span className="py-0.5 text-right tabular-nums">
-                            {formatNumber(tokens)}
-                          </span>
-                          <span className="py-0.5 text-right text-muted-foreground tabular-nums">
-                            {dollars === undefined
-                              ? ""
-                              : formatDollars(dollars)}
-                          </span>
-                        </Fragment>
-                      ))}
-                    </Fragment>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <DropdownMenuItem
-              closeOnClick={false}
-              aria-expanded={more}
-              onClick={() => setMore(!more)}
-              className="justify-between py-1 pr-2 text-xs text-muted-foreground"
-            >
-              {more ? words.hide : words.show}
-              <ChevronDownIcon
-                className={cn(
-                  "size-3.5! transition-transform duration-200 ease-(--ease-out) motion-reduce:transition-none",
-                  more && "rotate-180"
-                )}
-              />
-            </DropdownMenuItem>
-          </>
-        )}
-      </DropdownMenuContent>
-    </DropdownMenu>
+      </DialogContent>
+    </Dialog>
   )
 }
 

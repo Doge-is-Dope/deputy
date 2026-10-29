@@ -134,13 +134,14 @@ function SearchBody({
         onKeyDown={onKeyDown}
         className="h-14 shrink-0 border-b bg-transparent pr-14 pl-5 text-base outline-none placeholder:text-muted-foreground md:text-sm"
       />
-      {/* scroll-py matches p, so rows the arrow keys scroll to keep their margin. */}
+      {/* scroll-py matches p, so rows the arrow keys scroll to keep their margin. On a phone, the whole screen, the
+          results lie on the page's background under the bar, as the settings' pages do. */}
       <div
         ref={list}
         id="search-results"
         role="listbox"
         aria-label={t.chats.search}
-        className="min-h-0 flex-1 scroll-py-2 overflow-y-auto p-2"
+        className="min-h-0 flex-1 scroll-py-2 overflow-y-auto p-2 max-sm:bg-background"
       >
         {searching && hits !== null && shown.length === 0 && (
           <p className="mt-8 text-center text-sm text-muted-foreground">

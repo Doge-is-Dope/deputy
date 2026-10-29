@@ -1,7 +1,3 @@
-"""Auto review: a reviewer answers a step flagged for approval before the user is asked. It lets a step through only
-on its own "allow" for a step neither high risk nor beyond what the user's words cover; a review that fails, takes too
-long or cannot be read leaves the step to the user."""
-
 import asyncio
 
 import pytest
@@ -126,10 +122,10 @@ async def test_a_deletion_neither_names_is_left_to_the_user(target, evidence):
 
 @pytest.mark.parametrize("target, source", [
     ("B.TXT", "建立 b.txt 再刪掉"),  # Windows would take it for the same file; asking once more is the safe side
-    ("a  b.txt", "建立 a b.txt 再刪掉"),  # two spaces are another name than one
+    ("a  b.txt", "建立 a b.txt 再刪掉"),
     ("a b.txt", "建立 a  b.txt 再刪掉"),
     ("Straße.txt", "建立 Strasse.txt 再刪掉"),
-    ("a.txt ", 'type {"text": "a.txt"}'),  # spaces around a name are part of it, not trimmed
+    ("a.txt ", 'type {"text": "a.txt"}'),
     (" a.txt", 'type {"text": "a.txt"}'),
 ])
 async def test_a_name_counts_only_as_written(target, source):

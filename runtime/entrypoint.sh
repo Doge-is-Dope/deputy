@@ -5,6 +5,7 @@ set -euo pipefail
 
 : "${RDP_HOST:?}" "${RDP_USER:?}" "${RDP_PASSWORD:?}"
 export DISPLAY="${RDP_DISPLAY:-:1}"
+export RDP_KEYBOARD_PIPE="${RDP_KEYBOARD_PIPE:-/tmp/rdp-keyboard}"
 width="${RDP_SCREEN_WIDTH:-1280}"
 height="${RDP_SCREEN_HEIGHT:-800}"
 
@@ -27,12 +28,13 @@ computer-use-runtime --host 0.0.0.0 &
 # Keep one RDP session open, sized to the virtual display; reconnect if it drops.
 rdp_args=(
   /v:"$RDP_HOST" /u:"$RDP_USER" /p:"$RDP_PASSWORD"
-  /size:"${width}x${height}" /bpp:24 /cert:tofu +clipboard -wallpaper +auto-reconnect /log-level:WARN
+  /size:"${width}x${height}" /bpp:24 /gfx:AVC444 /cert:tofu +clipboard -wallpaper +auto-reconnect /log-level:WARN
   /wm-class:rdp-session  # the tools look for this window to tell if the session is up
 )
+rdp_args+=(/kbd:"layout:0x00000409,lang:0x0409,pipe:$RDP_KEYBOARD_PIPE,unicode:on")
 [[ -n "${RDP_DOMAIN:-}" ]] && rdp_args+=(/d:"$RDP_DOMAIN")
 while true; do
-  xfreerdp3 "${rdp_args[@]}" || true
+  LD_PRELOAD=/usr/local/lib/keyboard-pipe.so xfreerdp3 "${rdp_args[@]}" || true
   echo "RDP session ended; reconnecting in 5s" >&2
   sleep 5
 done

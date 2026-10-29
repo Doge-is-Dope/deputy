@@ -17,7 +17,6 @@ beforeAll(async () => {
 
 const SOL = "openai:gpt-6.1-sol"
 const LUNA = "openai:gpt-6-luna"
-// As the runtime's status says it starts them (agent/models.py starting).
 const status = {
   defaults: {
     main: { model: SOL, effort: "low" },
@@ -36,7 +35,7 @@ describe("choices", () => {
     expect(resolve(status, "coding", {})).toEqual({ model: SOL, effort: "low" })
     const chosen = {
       main: { model: SOL, effort: "medium" },
-      computer: { model: "openai:gpt-5-gone", effort: "none" }, // a model no longer offered
+      computer: { model: "openai:gpt-5-gone", effort: "none" },
       coding: { model: LUNA, effort: "follow" },
     }
     // The main agent's model, at the lowest effort it takes: GPT-6.1 Sol has no "none".
@@ -52,7 +51,7 @@ describe("choices", () => {
 
   it("keeps a subagent's choice of the main agent's value as following it, and forgets all on reset", () => {
     const { chooseModel, currentChoices, resetModels, setApprovals } = choices
-    chooseModel(status, "coding", { model: SOL }) // the main agent's
+    chooseModel(status, "coding", { model: SOL })
     chooseModel(status, "computer", { effort: "medium" })
     chooseModel(status, "main", { model: LUNA })
     setApprovals("auto")
@@ -64,10 +63,21 @@ describe("choices", () => {
         main: { model: LUNA },
       },
       approvals: "auto",
+      memory: { learn: true, use: true },
     })
     expect(localStorage.getItem("approvals")).toBe("auto")
     resetModels()
-    expect(currentChoices()).toEqual({ agents: {}, approvals: "auto" })
+    expect(currentChoices()).toMatchObject({ agents: {}, approvals: "auto" })
     expect(localStorage.getItem("agents")).toBeNull()
+  })
+
+  it("keeps memory on unless turned off, and stores only what is off", () => {
+    const { currentChoices, setMemory } = choices
+    setMemory({ learn: false })
+    expect(currentChoices().memory).toEqual({ learn: false, use: true })
+    expect(localStorage.getItem("memory-learn")).toBe("off")
+    expect(localStorage.getItem("memory-use")).toBeNull()
+    setMemory({ learn: true })
+    expect(localStorage.getItem("memory-learn")).toBeNull()
   })
 })

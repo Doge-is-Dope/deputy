@@ -99,7 +99,8 @@ class ComputerAgent(Subagent):
             self.log.note(f"Agent requests a takeover: {reason}\nOpen {self.settings.web_url}", "takeoverRequested")
 
         requests, earlier = await self.earlier()
-        text = notes.opening(task, self.words(), notes.blackboard(requests, earlier))
+        board = notes.blackboard(requests, earlier)
+        text = f"{notes.opening(task, self.words(), board, self.taught)}\n\n{notes.today(self.choices.timezone)}"
 
         async def review(step: str, png: bytes | None) -> Verdict:
             """Auto review of a step, by the main agent's model, given what this agent was given and did since, and

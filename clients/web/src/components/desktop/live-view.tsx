@@ -5,6 +5,7 @@ import {
   useRef,
   useState,
   type RefObject,
+  type ReactNode,
 } from "react"
 import { cn } from "cn"
 
@@ -52,12 +53,12 @@ import { useT } from "@/lib/i18n"
 import { reducedMotion } from "@/lib/motion"
 import { doingNow, runningTask, stepUnderWay, type Task } from "@/lib/thread"
 
-// How long a takeover or return may go unconfirmed before the pill shows the real state again. The runtime answers once
-// the agent's action in flight is sent, which a held key makes up to about 10 s; a request that fails says so at once.
-const PENDING_MS = 15_000
 // After the pill switches, its button ignores clicks this long: the return button appears where the takeover
 // button was, so a double click would otherwise take over and hand control straight back.
 const SWITCH_LOCK_MS = 1000
+// A takeover the runtime answers within this (most do: the agent holds the desktop only while it sends an input)
+// goes straight to the user's pill; a slower one shows that it is under way.
+const TAKING_AFTER_MS = 250
 // Holding the expand button this long shows the live view full screen.
 const HOLD_MS = 500
 // How long the desktop stays unavailable before the user is asked to report it: most problems clear up on their own
@@ -71,23 +72,24 @@ const REPORT_AFTER_MS = 30_000
 const BAND = 11
 const RADIUS = 10
 
-// When control changes hands the pill changes in one continuous motion rather than in steps: the label's prefix and
-// the button morph to their new widths at once, on index.css's --ease-in-out (WAAPI can't read the variable), slow at
-// both ends so the words they share never jolt (RESIZE). What leaves fades up out of the way (ROLL_OUT) while what
-// comes in already rises into place on --ease-out (ROLL_IN), so the two cross and the place is never empty; for a
-// prefix that grows, a little later, once there is about room for it (ROLL_IN_LATE_MS), since a label has no edge to
+// When control changes hands the pill changes in one continuous motion rather than in steps: the label and the button
+// morph to their new widths at once, on index.css's --ease-in-out (WAAPI can't read the variable), slow at
+// both ends so the words they share never jolt (RESIZE). What leaves blurs away at once (ROLL_OUT, on --ease-out, so
+// it is mostly gone within its first frames) and what comes in rises out of a blur right behind it (ROLL_IN), so the two
+// meet only while both are blurred and read as one word turning into the next, never two words side by side; for a
+// label that grows, a little later, once there is about room for it (ROLL_IN_LATE_MS), since a label has no edge to
 // clip it at.
 const EASE_OUT = "cubic-bezier(0.23, 1, 0.32, 1)"
 const EASE_IN_OUT = "cubic-bezier(0.77, 0, 0.175, 1)"
-const ROLL_RISE = 4
-const ROLL_BLUR = "blur(2px)"
+const ROLL_RISE = 3
+const ROLL_BLUR = "blur(4px)"
 const ROLL_OUT: KeyframeAnimationOptions = {
-  duration: 160,
-  easing: "ease-in",
+  duration: 150,
+  easing: EASE_OUT,
 }
 const ROLL_IN: KeyframeAnimationOptions = {
-  duration: 260,
-  delay: 40,
+  duration: 250,
+  delay: 30,
   easing: EASE_OUT,
   fill: "backwards",
 }
@@ -114,15 +116,52 @@ function framePath(
 }
 
 /**
- * Classes for one of two texts that take turns in one place (data-text, rolled over by LiveView): the shown one is
- * laid out and sets the size, the other lies over it, hidden; centered in the button, and in the label's prefix at
- * its end, against the words both labels share.
+ * Classes for one of the texts that take turns in one place (data-text, rolled over by LiveView): the shown one is
+ * laid out and sets the size, the others lie over it, hidden; centered in the button, and in the label at its end,
+ * next to the button.
  */
 function slot(shown: boolean, place: "center" | "end") {
   return cn(
     "flex shrink-0 items-center gap-2",
     !shown && "pointer-events-none absolute opacity-0",
     !shown && (place === "center" ? "inset-0 justify-center" : "top-0 right-0")
+  )
+}
+
+/** Keep both glyphs mounted so a quick request cancels the fade without flashing or changing the button's width. */
+function ControlActionIcon({
+  busy,
+  children,
+}: {
+  busy: boolean
+  children: ReactNode
+}) {
+  // After a moment, so a quick answer shows no spinner at all.
+  const fade =
+    "absolute inset-0 flex items-center justify-center transition-[opacity,filter] duration-200 ease-(--ease-out)"
+  return (
+    <span aria-hidden className="relative flex size-5 shrink-0">
+      <span
+        className={cn(
+          fade,
+          busy ? "opacity-0 blur-[2px] delay-300" : "opacity-100 delay-0"
+        )}
+      >
+        {children}
+      </span>
+      <span
+        className={cn(
+          fade,
+          busy ? "opacity-100 delay-300" : "opacity-0 blur-[2px] delay-0"
+        )}
+      >
+        <SpinnerIcon
+          className="size-5"
+          still={reducedMotion()}
+          style={{ animationPlayState: busy ? "running" : "paused" }}
+        />
+      </span>
+    </span>
   )
 }
 
@@ -231,8 +270,7 @@ function WorkNow({
  * user takes over, their mouse and keyboard reach the desktop, until they return it.
  *
  * Covering the conversation (expanded, full screen, or on a phone), it also asks the step the conversation waits for
- * the user to approve (`approval`), which the composer can't be seen asking, with what the composer would say above it
- * (`notice`), such as why an answer did not go through.
+ * the user to approve (`approval`), which the composer can't be seen asking.
  */
 export function LiveView({
   status,
@@ -242,7 +280,6 @@ export function LiveView({
   focusScreen = false,
   onScreenFocused,
   approval: asked = null,
-  notice = null,
   onAnswer,
   onClose,
   expanded = false,
@@ -258,7 +295,6 @@ export function LiveView({
   focusScreen?: boolean
   onScreenFocused?: () => void
   approval?: Approval | null
-  notice?: string | null
   onAnswer?: (decision: Decision, note: string) => Promise<boolean> // true once answered
   onClose?: () => void
   /** On a side panel: whether it fills the page, and how to switch. */
@@ -279,11 +315,11 @@ export function LiveView({
   const events = useRunLog(status?.active ?? null)
   const task = runningTask(useThread(events))
   const thinking = task?.tool === "computer_use" && !stepUnderWay(task)
-  // The control the user just asked for, until the runtime's status shows it. Taking over waits for it (the
-  // agent has to stop first); returning shows the agent's pill at once.
-  const [pending, setPending] = useFlash<Owner>(PENDING_MS)
-  if (pending && pending === owner) setPending(null)
-  const shown = pending === "agent" ? "agent" : owner
+  // The control the user asked for, until the runtime answers. The pill shows who has control, so its words change
+  // once, when the runtime says so.
+  const [pending, setPending] = useState<Owner | null>(null)
+  const [slow, setSlow] = useState(false)
+  const shown = owner
   const lockedUntil = useRef(0)
   const lastShown = useRef(shown)
   useEffect(() => {
@@ -301,21 +337,31 @@ export function LiveView({
     ask: () => Promise<boolean>,
     at: number
   ) => {
-    if (at < lockedUntil.current) return
+    if (pending || at < lockedUntil.current) return
     lockedUntil.current = at + SWITCH_LOCK_MS
     aim()
     setFailed(null)
     setPending(next)
-    if (await ask()) {
-      if (next === "user") setTookOver(true)
-      return
+    const timer =
+      next === "user"
+        ? window.setTimeout(() => setSlow(true), TAKING_AFTER_MS)
+        : 0
+    try {
+      if (await ask()) {
+        if (next === "user") setTookOver(true)
+      } else {
+        setFailed(next)
+      }
+    } finally {
+      window.clearTimeout(timer)
+      setPending(null)
+      setSlow(false)
     }
-    // The pill goes back to who has control after all, at once, rather than when the wait runs out.
-    setPending(null)
-    setFailed(next)
   }
   const waiting = pending === "user"
   const user = shown === "user"
+  // What the pill says: who has control, or, while a slow takeover waits on the runtime, only the button, saying so.
+  const face = waiting && slow && !user ? "taking" : shown
 
   const problem = problemOf(status, offline)
 
@@ -394,25 +440,27 @@ export function LiveView({
   // 「交還控制權」, and returning narrows the blue into 「接管」.
   useLayoutEffect(aim, [aim, shown])
 
-  // Roll label and button text on ownership changes. Keep text colors fixed while
-  // the background changes to preserve contrast. Measure widths before the switch;
-  // interrupted animations resume from their current text positions and widths.
-  const prefix = useRef<HTMLSpanElement>(null)
+  // Roll label and button text when the face changes. Each text keeps its own color (white on the blue), so none
+  // changes color in place. Measure widths before the switch; interrupted animations resume from their current text
+  // positions and widths. While a takeover waits the label has no text, so it narrows away and the button glides to
+  // the middle of the pill; once it is through the label opens again round the new words.
+  const label = useRef<HTMLSpanElement>(null)
   const widths = useRef<number[]>([])
   const resizes = useRef<Animation[]>([])
-  const sizedFor = useRef(shown)
+  const sizedFor = useRef(face)
   useLayoutEffect(() => {
-    const parts = [prefix.current, pill.current?.querySelector("button")]
+    const parts = [label.current, pill.current?.querySelector("button")]
     const measure = () =>
       parts.map((part) => part?.getBoundingClientRect().width ?? 0)
     const resizing = resizes.current.some(
       (animation) => animation.playState === "running"
     )
-    if (sizedFor.current === shown) {
+    const left = sizedFor.current
+    if (left === face) {
       if (!resizing) widths.current = measure()
       return
     }
-    sizedFor.current = shown
+    sizedFor.current = face
     // Switched again mid-resize: from the widths it has got to.
     const before = resizing ? measure() : widths.current
     for (const animation of resizes.current) animation.cancel()
@@ -421,14 +469,15 @@ export function LiveView({
     // With motion reduced the texts only fade, and the widths change at once.
     const reduced = reducedMotion()
     parts.forEach((part, i) => {
+      // A label may narrow to nothing and open from it, while a takeover waits.
       const [from, to] = [before[i], widths.current[i]]
-      if (reduced || !part || !from || !to || from === to) return
+      if (reduced || !part || from === undefined || from === to) return
       resizes.current.push(
         part.animate({ width: [`${from}px`, `${to}px`] }, RESIZE)
       )
     })
-    const up = shown === "user" ? 1 : -1
-    const prefixGrows = widths.current[0] > before[0]
+    const up = face === "agent" ? -1 : 1
+    const labelGrows = widths.current[0] > before[0]
     const texts = pill.current?.querySelectorAll<HTMLElement>("[data-text]")
     for (const text of texts ?? []) {
       const rise = reduced ? 0 : ROLL_RISE * up
@@ -443,7 +492,9 @@ export function LiveView({
           }
         : null
       for (const animation of rolling) animation.cancel()
-      if (text.dataset.text !== shown) {
+      if (text.dataset.text !== face) {
+        // Only what was showing leaves; a text hidden all along stays so.
+        if (!from && text.dataset.text !== left) continue
         text.animate(
           [
             from ?? { opacity: 1, transform: "none", filter: "none" },
@@ -457,7 +508,7 @@ export function LiveView({
         )
         continue
       }
-      const late = prefixGrows && text.closest("[data-prefix]")
+      const late = labelGrows && text.closest("[data-label]")
       text.animate(
         [
           from ?? {
@@ -624,93 +675,114 @@ export function LiveView({
             ref={pill}
             className={cn(
               "takeover-pill",
-              (problem || (state !== "live" && !user)) && "invisible"
+              (problem || (state !== "live" && !user && !pending)) &&
+                "invisible"
             )}
           >
             <span aria-hidden className="takeover-pill-bg" />
             {!liquid && (
               <span ref={fill} aria-hidden className="takeover-fill" />
             )}
-            {/* One label and one button for both owners, each holding both texts (slot), so a switch rolls and resizes
-              them in place (the effect above) instead of swapping elements. */}
-            <span className="relative z-[3] flex items-center gap-3">
+            {/* One label and one button for both owners, each holding every text (slot), so a switch rolls and resizes
+              them in place (the effect above) instead of swapping elements. The label's room on the left and its gap
+              to the button lie within its texts, so a label with none leaves the button in the middle of the pill. */}
+            <span className="relative z-[3] flex items-center">
               {/* Below 20rem the tab and its concave corners would outgrow the frame's straight bottom edge, so the pill
                 keeps only its button. */}
               <span className="flex items-center text-sm whitespace-nowrap @max-xs:hidden">
                 {status ? (
-                  <>
+                  <span
+                    ref={label}
+                    data-label
+                    className="relative flex justify-end"
+                  >
                     <span
-                      ref={prefix}
-                      data-prefix
-                      className="relative flex justify-end"
+                      data-text="agent"
+                      aria-hidden={face !== "agent"}
+                      className={cn(
+                        slot(face === "agent", "end"),
+                        "pr-3 pl-3.5"
+                      )}
                     >
-                      <span
-                        data-text="agent"
-                        aria-hidden={user}
-                        className={slot(!user, "end")}
-                      >
-                        {t.liveView.agent}
-                      </span>
-                      <span
-                        data-text="user"
-                        aria-hidden={!user}
-                        className={slot(user, "end")}
-                      >
-                        {t.liveView.you}
-                      </span>
+                      {t.liveView.agent}
+                      {t.liveView.control}
                     </span>
-                    {t.liveView.control}
-                  </>
+                    <span
+                      data-text="user"
+                      aria-hidden={face !== "user"}
+                      className={cn(
+                        slot(face === "user", "end"),
+                        "pr-3 pl-3.5 text-white"
+                      )}
+                    >
+                      {t.liveView.you}
+                      {t.liveView.control}
+                    </span>
+                  </span>
                 ) : (
-                  t.liveView.connecting
+                  <span className="pr-3 pl-3.5">{t.liveView.connecting}</span>
                 )}
               </span>
               <Button
                 size="lg"
                 className={cn(
-                  "relative overflow-hidden rounded-full px-4",
+                  "relative overflow-hidden rounded-full px-4 aria-busy:disabled:opacity-100",
                   user && "bg-black/15 hover:bg-black/25"
                 )}
-                aria-busy={user ? undefined : waiting}
+                aria-busy={!!pending}
+                aria-label={
+                  pending
+                    ? pending === "agent"
+                      ? t.liveView.returningControl
+                      : t.liveView.takingOver
+                    : user
+                      ? t.liveView.returnControl
+                      : t.liveView.takeOver
+                }
                 onClick={(event) =>
                   user
                     ? request("agent", onReturn, event.timeStamp)
                     : !waiting && request("user", onTakeover, event.timeStamp)
                 }
-                disabled={!user && !status}
+                disabled={!!pending || (!user && (!status || state !== "live"))}
               >
                 <span
                   data-text="agent"
-                  aria-hidden={user}
+                  aria-hidden={face !== "agent"}
                   className={cn(
-                    slot(!user, "center"),
+                    slot(face === "agent", "center"),
                     "text-primary-foreground"
                   )}
                 >
-                  {/* Waiting on the runtime: after a moment, so a quick takeover shows none, the hand turns into
-                    a spinner of its size, and nothing else in the pill moves. */}
-                  <span className="relative flex size-5 shrink-0">
-                    <PointingHandIcon
-                      className={cn(
-                        "size-5",
-                        waiting &&
-                          "animate-out delay-300 duration-150 fill-mode-forwards fade-out"
-                      )}
-                    />
-                    {waiting && (
-                      <span className="absolute inset-0 animate-in delay-300 duration-150 fill-mode-both fade-in">
-                        <Spinner aria-hidden className="size-5" />
-                      </span>
-                    )}
-                  </span>
+                  <PointingHandIcon className="size-5" />
                   {t.liveView.takeOver}
                 </span>
                 <span
-                  data-text="user"
-                  aria-hidden={!user}
-                  className={cn(slot(user, "center"), "text-white")}
+                  data-text="taking"
+                  aria-hidden={face !== "taking"}
+                  className={cn(
+                    slot(face === "taking", "center"),
+                    "text-primary-foreground"
+                  )}
                 >
-                  <CursorEnterIcon />
+                  <SpinnerIcon
+                    className="size-5"
+                    still={reducedMotion()}
+                    style={{
+                      animationPlayState:
+                        face === "taking" ? "running" : "paused",
+                    }}
+                  />
+                  {t.liveView.takingOver}
+                </span>
+                <span
+                  data-text="user"
+                  aria-hidden={face !== "user"}
+                  className={cn(slot(face === "user", "center"), "text-white")}
+                >
+                  <ControlActionIcon busy={pending === "agent"}>
+                    <CursorEnterIcon />
+                  </ControlActionIcon>
                   {t.liveView.returnControl}
                 </span>
               </Button>
@@ -721,7 +793,6 @@ export function LiveView({
           <ApprovalBar
             key={approval.id}
             approval={approval}
-            notice={notice}
             onAnswer={onAnswer}
           />
         )}
@@ -791,11 +862,9 @@ function showFullscreen(root: HTMLElement | null) {
  * Keep failed answers retryable; keyboard shortcuts and rejection notes stay in the composer. */
 function ApprovalBar({
   approval,
-  notice,
   onAnswer,
 }: {
   approval: Approval
-  notice: string | null
   onAnswer: (decision: Decision, note: string) => Promise<boolean>
 }) {
   const t = useT()
@@ -806,14 +875,6 @@ function ApprovalBar({
   }
   return (
     <div className="mt-6 w-full max-w-3xl shrink-0">
-      {notice && (
-        <p
-          role="alert"
-          className="mb-2 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
-        >
-          {notice}
-        </p>
-      )}
       <div className="flex w-full animate-in flex-wrap items-center justify-end gap-x-3 gap-y-2 rounded-[1.75rem] border bg-background p-2 pl-3 shadow-[0_2px_8px_rgb(0_0_0/0.04)] duration-200 ease-(--ease-out) fade-in slide-in-from-bottom-1 motion-reduce:animate-none dark:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]">
         <div className="flex min-h-10 min-w-0 flex-[1_1_14rem] items-center gap-2.5 pr-2 pl-1">
           <HandIcon className="size-5 shrink-0 text-warning" />

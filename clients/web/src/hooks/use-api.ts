@@ -9,6 +9,7 @@ import {
 import {
   api,
   eventsUrl,
+  type Project,
   type RunEvent,
   type RunSummary,
   type Status,
@@ -37,7 +38,9 @@ export function useStatus() {
       setStatus((current) =>
         current && JSON.stringify(current) === JSON.stringify(next)
           ? current
-          : next
+          : current && current.control.since > next.control.since
+            ? { ...next, control: current.control }
+            : next
       )
       setOffline(false)
     } catch {
@@ -59,27 +62,42 @@ export function useStatus() {
     }
   }, [refresh])
 
-  return { status, offline, refresh }
+  // A confirmed handover is usable immediately, even if an older poll is still in flight.
+  const confirmControl = useCallback((control: Status["control"]) => {
+    setStatus((current) =>
+      current && control.since >= current.control.since
+        ? { ...current, control }
+        : current
+    )
+  }, [])
+
+  return { status, offline, refresh, confirmControl }
 }
 
 /**
- * The runs on disk, newest first; null until first loaded. `failed`: the last try to load them failed, which keeps the
- * list loaded before it. Call `refresh` to load them.
+ * The runs on disk, newest first, and the viewer's projects, which they are listed under; null until first loaded.
+ * `failed`: the last try to load them failed, which keeps the lists loaded before it. Call `refresh` to load them.
  */
 export function useRuns() {
   const [runs, setRuns] = useState<RunSummary[] | null>(null)
+  const [projects, setProjects] = useState<Project[] | null>(null)
   const [failed, setFailed] = useState(false)
 
   const refresh = useCallback(async () => {
     try {
-      setRuns(await api.runs())
+      const [nextRuns, nextProjects] = await Promise.all([
+        api.runs(),
+        api.projects(),
+      ])
+      setRuns(nextRuns)
+      setProjects(nextProjects)
       setFailed(false)
     } catch {
       setFailed(true)
     }
   }, [])
 
-  return { runs, failed, refresh }
+  return { runs, projects, failed, refresh }
 }
 
 /**

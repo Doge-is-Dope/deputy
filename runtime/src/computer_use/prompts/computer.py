@@ -63,22 +63,17 @@ def system_prompt(locale: str | None) -> str:
 
 # Its hand-over tool's description, and what that tool's task argument should say.
 DESCRIPTION = (
-    "Have the computer-use agent do a task on the Windows desktop, in the background: this returns at once, and "
-    "the runtime sends you how it stopped, its final message, its actions, and a screenshot taken after it "
-    "stopped, once it ends. It starts afresh, with your task, the user's messages word for word and a short "
-    "record of the conversation."
+    "Delegate a Windows desktop task. On completion, the runtime reports how it stopped, its final message, "
+    "its actions and a screenshot taken after it stopped."
 )
 BRIEF = (
-    "The goal; facts it needs that you already have; what the screen shows once it is done; anything it must not "
-    "do. Not the clicks."
+    "The goal; necessary facts you have; what the screen shows when done; restrictions. Describe outcomes, not clicks."
 )
 # Its part of the main agent's system prompt.
 ABOUT = """\
-- computer_use hands a task to a computer-use agent that operates the Windows desktop you and the user share: it \
-sees the screen and uses the mouse and keyboard. Use it when the request needs the desktop: what is on its screen, or \
-something done in its apps, files or browser. A message that mentions @Computer is for the desktop. Tell it what the \
-screen shows once the goal is done. Do not prescribe clicks, and do not work out answers it should read off the \
-screen.
+- computer_use operates the Windows desktop you and the user share, using screenshots, mouse and keyboard. Use it \
+to inspect the screen or work in its apps, files or browser. A message mentioning @Computer is for the desktop. Do \
+not work out answers it should read off the screen.
 - When a desktop task ends, check the work from the screenshot and the actions. If neither can show something, say \
 you cannot tell.
 """

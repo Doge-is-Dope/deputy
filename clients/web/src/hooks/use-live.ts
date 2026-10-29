@@ -57,18 +57,34 @@ export function useLive(iceServers: RTCIceServer[] | null) {
   useEffect(() => {
     if (servers === null) return
     let closed = false
+    let timer = 0
     const peer = new RTCPeerConnection({ iceServers: JSON.parse(servers) })
     const retry = () => {
       if (closed) return
       closed = true
+      channel.current = null
       peer.close()
       setState("retrying")
-      window.setTimeout(() => setAttempt((count) => count + 1), RETRY_MS)
+      timer = window.setTimeout(
+        () => setAttempt((count) => count + 1),
+        RETRY_MS
+      )
     }
 
     peer.addTransceiver("video", { direction: "recvonly" })
     const input = peer.createDataChannel("input")
     channel.current = input
+    const ready = () => {
+      if (
+        !closed &&
+        peer.connectionState === "connected" &&
+        input.readyState === "open"
+      )
+        setState("live")
+    }
+    input.onopen = ready
+    input.onclose = retry
+    input.onerror = retry
     input.onmessage = (event) => {
       const message = JSON.parse(event.data)
       if (message.type === "pointer")
@@ -86,7 +102,7 @@ export function useLive(iceServers: RTCIceServer[] | null) {
       setStream(event.streams[0] ?? new MediaStream([event.track]))
     }
     peer.onconnectionstatechange = () => {
-      if (peer.connectionState === "connected") setState("live")
+      ready()
       if (["failed", "disconnected"].includes(peer.connectionState)) retry()
     }
 
@@ -100,6 +116,7 @@ export function useLive(iceServers: RTCIceServer[] | null) {
 
     return () => {
       closed = true
+      window.clearTimeout(timer)
       channel.current = null
       peer.close()
     }

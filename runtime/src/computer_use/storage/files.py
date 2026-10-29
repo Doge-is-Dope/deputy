@@ -1,17 +1,33 @@
 """Runs as folders: data/runs/<id>/steps.jsonl, one event per line, with the run's files beside it.
 
 Deleted conversations' folders move to data/trash. The list's revision is the modification time of data/revision,
-touched by whichever process changes the list, so servers sharing the data see each other's changes."""
+touched by whichever process changes the list, so servers sharing the data see each other's changes.
 
+Each user's projects are one file, data/users/<user>/projects.json, rewritten whole under a lock: the page's server
+and the eval's may both make a project.
+
+Records are read and parsed in a worker thread, so the event loop stays free; appends stay on it, keeping events in
+order."""
+
+import asyncio
+import contextlib
+import fcntl
 import json
 import os
+import re
 import time
+import uuid
+from dataclasses import asdict, replace
 from datetime import datetime
 from pathlib import Path
 
 from computer_use.storage import (
-    LISTED, LOCAL_USER, MAX_HITS, Event, Hit, RunId, RunSummary, Thread, said, snippet, summarize, supported,
+    LISTED, LOCAL_USER, MAX_HITS, Event, Hit, Project, RunId, RunSummary, Thread, project_name, said, snippet,
+    summarize, supported,
 )
+
+# A user's id as auth makes it ("local", or 32 hex characters): it names their folder, so nothing else may.
+USER_ID = re.compile(r"[0-9a-z]{1,64}")
 
 
 class FileRunStore:
@@ -76,7 +92,7 @@ class FileRunStore:
         return (self._folder(run) / name).exists()
 
     async def events(self, run: RunId, after: int = -1) -> list[Event]:
-        return self._events(self._record(run), after)
+        return await asyncio.to_thread(self._events, self._record(run), after)
 
     @staticmethod
     def _events(path: Path, after: int = -1) -> list[Event]:
@@ -101,10 +117,16 @@ class FileRunStore:
         return (self._folder(run) / name).read_bytes()
 
     async def summaries(self) -> list[RunSummary]:
+        return await asyncio.to_thread(self._summarize)
+
+    def _summarize(self) -> list[RunSummary]:
         items = []
         for path in self.runs.glob("*/steps.jsonl") if self.runs.is_dir() else ():
             run = path.parent.name
-            stat = path.stat()
+            try:
+                stat = path.stat()
+            except (FileNotFoundError, NotADirectoryError):
+                continue  # a deletion can move the run to trash after glob found it
             key = (stat.st_mtime_ns, stat.st_size)
             cached = self._summaries.get(run)
             if cached is None or cached[0] != key:
@@ -161,12 +183,15 @@ class FileRunStore:
         return runs
 
     async def search(self, query: str, user: str, limit: int = MAX_HITS) -> list[Hit]:
-        """Reads the records newest first, as Codex greps its rollouts: one without the query anywhere in its text,
-        as written to the file, is passed over unparsed."""
+        return await asyncio.to_thread(self._search, query, user, limit)
+
+    def _search(self, query: str, user: str, limit: int) -> list[Hit]:
+        """Reads the records newest first; one without the query anywhere in its text, as written to the file, is
+        passed over unparsed."""
         written = json.dumps(query, ensure_ascii=False)[1:-1].lower()
         hits: list[Hit] = []
         threads: set[Thread] = set()
-        for summary in await self.summaries():
+        for summary in self._summarize():
             if len(hits) == limit:
                 break
             if summary.user != user or summary.thread in threads:
@@ -194,3 +219,78 @@ class FileRunStore:
             last = 0
         self._last_revision = max(now, last + 1)
         os.utime(self.revision_path, ns=(self._last_revision, self._last_revision))
+
+
+class FileProjectStore:
+    def __init__(self, data_dir: Path):
+        self.users = data_dir / "users"
+
+    def _path(self, user: str) -> Path:
+        if not USER_ID.fullmatch(user):
+            raise ValueError(f"not a user id: {user!r}")
+        return self.users / user / "projects.json"
+
+    def _read(self, user: str) -> list[Project]:
+        try:
+            return [Project(**each) for each in json.loads(self._path(user).read_text(encoding="utf-8"))]
+        except FileNotFoundError:
+            return []
+
+    @contextlib.contextmanager
+    def _changing(self, user: str):
+        """The user's projects to change in place, written back whole when the block ends, one process at a time."""
+        path = self._path(user)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with (path.parent / "projects.lock").open("w") as lock:
+            fcntl.flock(lock, fcntl.LOCK_EX)
+            projects = self._read(user)
+            yield projects
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(json.dumps([asdict(each) for each in projects], ensure_ascii=False), encoding="utf-8")
+            os.replace(temporary, path)
+
+    async def list(self, user: str) -> list[Project]:
+        return [each for each in self._read(user) if each.deleted is None]
+
+    async def get(self, user: str, id: str) -> Project | None:
+        return next((each for each in await self.list(user) if each.id == id), None)
+
+    async def create(self, user: str, name: str) -> Project:
+        name = project_name(name) or ""
+        if not name:
+            raise ValueError("a project needs a name")
+        with self._changing(user) as projects:
+            if found := next((each for each in projects if each.name == name and each.deleted is None), None):
+                return found
+            projects.append(project := Project(uuid.uuid4().hex, name, time.time()))
+        return project
+
+    async def rename(self, user: str, id: str, name: str) -> Project | None:
+        name = project_name(name) or ""
+        if not name:
+            raise ValueError("a project needs a name")
+        with self._changing(user) as projects:
+            index = next((n for n, each in enumerate(projects) if each.id == id and each.deleted is None), None)
+            if index is None:
+                return None
+            if any(each.name == name and each.id != id and each.deleted is None for each in projects):
+                raise ValueError(f"another project is named {name}")
+            projects[index] = renamed = replace(projects[index], name=name)
+        return renamed
+
+    async def delete(self, user: str, id: str) -> bool:
+        with self._changing(user) as projects:
+            index = next((n for n, each in enumerate(projects) if each.id == id and each.deleted is None), None)
+            if index is not None:
+                projects[index] = replace(projects[index], deleted=time.time())
+        return index is not None
+
+    async def restore(self, user: str, id: str) -> Project | None:
+        """Back under its name, unless another project has taken it meanwhile: then that one stands, and this stays
+        deleted."""
+        with self._changing(user) as projects:
+            index = next((n for n, each in enumerate(projects) if each.id == id and each.deleted is not None), None)
+            if index is None or any(each.name == projects[index].name and each.deleted is None for each in projects):
+                return None
+            projects[index] = restored = replace(projects[index], deleted=None)
+        return restored

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react"
 
 import type { Handover } from "@/components/composer/composer"
+import { showError } from "@/components/notice"
 import {
   ApiError,
   api,
@@ -36,6 +37,7 @@ export function useConversationActions({
   open,
   showLive,
   refreshStatus,
+  confirmControl,
   refreshRuns,
 }: {
   thread: string | null
@@ -46,6 +48,7 @@ export function useConversationActions({
   open: (thread: string | null) => void
   showLive: (focus?: boolean) => void
   refreshStatus: () => void
+  confirmControl: (control: Status["control"]) => void
   refreshRuns: () => void
 }) {
   const say = useT()
@@ -57,18 +60,6 @@ export function useConversationActions({
   const takesMessages = working?.pending !== undefined
   const userHasControl = status?.control.owner === "user"
   const approval = approvalFor(status, current)
-
-  // Operation errors belong to the conversation in which the operation was taken.
-  const [notice, setNotice] = useState<{
-    thread: string | null
-    text: string
-  } | null>(null)
-  const [noticeThread, setNoticeThread] = useState(thread)
-  if (noticeThread !== thread) {
-    setNoticeThread(thread)
-    setNotice(null)
-  }
-  const report = (text: string) => setNotice({ thread, text })
 
   // Messages appear immediately, until status lists them or their run ends. RunView replaces read messages from its log.
   const [justSent, setJustSent] = useState<{ run: string; message: Pending }[]>(
@@ -95,7 +86,7 @@ export function useConversationActions({
   )
 
   /**
-   * Does what the user asked of the runtime, null if it failed: the conversation says why, unless `ignore` says the
+   * Does what the user asked of the runtime, null if it failed: a notice says why, unless `ignore` says the
    * failure is no news (`missing`, what a 404 means), and the status and, if `runs` may have changed, the list of
    * conversations are read again either way.
    */
@@ -111,11 +102,10 @@ export function useConversationActions({
       runs?: boolean
     } = {}
   ): Promise<T | null> {
-    setNotice(null)
     try {
       return await action()
     } catch (error) {
-      if (!ignore?.(error)) report(explain(error, missing))
+      if (!ignore?.(error)) showError(explain(error, missing))
       return null
     } finally {
       refreshStatus()
@@ -186,6 +176,16 @@ export function useConversationActions({
     if (current) return act(() => api.stop(current))
   }
 
+  // A message read meanwhile is in the conversation already, which is no news.
+  async function withdraw(message: Pending) {
+    if (current === null) return
+    await act(() => api.withdraw(current, message.id), {
+      ignore: (error) => error instanceof ApiError && error.status === 409,
+      runs: false,
+    })
+    setJustSent((list) => list.filter((each) => each.message.id !== message.id))
+  }
+
   // True once deleted, for the sidebar to bring its row back if not.
   async function remove(conversation: string) {
     const deleted = await act(() => api.deleteConversation(conversation), {
@@ -215,14 +215,34 @@ export function useConversationActions({
     })
   }
 
+  // A project's id once made (or the viewer's by that name already), renamed, or deleted; null if not.
+  function createProject(name: string) {
+    return act(() => api.createProject(name))
+  }
+
+  function renameProject(project: string, name: string) {
+    return act(() => api.renameProject(project, name))
+  }
+
+  function deleteProject(project: string) {
+    return act(() => api.deleteProject(project))
+  }
+
+  // Not said if it fails: its conversations come back all the same, in the recents.
+  function restoreProject(project: string) {
+    return act(() => api.restoreProject(project), { ignore: () => true })
+  }
+
   // The live view presents control failures itself; only skipping a takeover reports one in the conversation.
   async function setControl(owner: Owner) {
     if (owner === "user") showLive()
-    const done = await act(() => api.control(owner).then(() => true), {
-      ignore: () => true,
-      runs: false,
-    })
-    return done !== null
+    try {
+      confirmControl(await api.control(owner))
+      return true
+    } catch {
+      refreshStatus()
+      return false
+    }
   }
 
   const waiting = waitingOf(status)
@@ -235,7 +255,8 @@ export function useConversationActions({
     showLive(true)
   }
   async function skip() {
-    if (!(await setControl("agent"))) report(say.composer.takeover.skipFailed)
+    if (!(await setControl("agent")))
+      showError(say.composer.takeover.skipFailed)
   }
 
   // A step answered elsewhere disappears on refresh without reporting a conflict as an error.
@@ -254,7 +275,6 @@ export function useConversationActions({
 
   return {
     input,
-    notice: notice?.thread === thread ? notice.text : null,
     current,
     takesMessages,
     approval,
@@ -263,10 +283,15 @@ export function useConversationActions({
     asking,
     start,
     stop,
+    withdraw,
     remove,
     restore,
     rename,
     move,
+    createProject,
+    renameProject,
+    deleteProject,
+    restoreProject,
     setControl,
     takeOver,
     skip,

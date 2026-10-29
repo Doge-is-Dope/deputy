@@ -48,9 +48,12 @@ def describe(note: str, frame: Frame, status: Status) -> str:
     return f"{text} {status.detail}." if status.detail else text
 
 
-def _changes(before: bytes, after: bytes) -> Image.Image:
-    """The pixels that differ between two screenshots, white on black. Screens of different sizes differ everywhere."""
-    old, new = (Image.open(io.BytesIO(png)).convert("L") for png in (before, after))
+def _gray(png: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(png)).convert("L")
+
+
+def _changes(old: Image.Image, new: Image.Image) -> Image.Image:
+    """The pixels that differ between two gray screens, white on black. Screens of different sizes differ everywhere."""
     if old.size != new.size:
         return Image.new("L", new.size, 255)
     return ImageChops.difference(old, new).point(lambda value: 255 if value > PIXEL_DELTA else 0)
@@ -67,7 +70,7 @@ def _count(changes: Image.Image, around: Sequence[Point]) -> int:
 def changed_pixels(before: bytes, after: bytes, around: Sequence[Point] = ()) -> int:
     """How many pixels differ between two screenshots: on the whole screen or, with points, in the busiest patch
     around one of them. NOISE or more is a change."""
-    return 0 if before == after else _count(_changes(before, after), around)
+    return 0 if before == after else _count(_changes(_gray(before), _gray(after)), around)
 
 
 def lasting_changed_pixels(seen: bytes, now: bytes, later: bytes, around: Sequence[Point] = ()) -> int:
@@ -75,6 +78,7 @@ def lasting_changed_pixels(seen: bytes, now: bytes, later: bytes, around: Sequen
     a change that stays, not marching ants, a spinner or a video playing."""
     # Within MOVING_MARGIN of a pixel that moved is where a box blur of the changes is above zero: the same pixels a
     # MaxFilter finds, in 3 ms rather than 70 with the GIL held throughout.
+    seen, now, later = (_gray(png) for png in (seen, now, later))
     moving = _changes(now, later).filter(ImageFilter.BoxBlur(MOVING_MARGIN)).point(lambda value: 255 if value else 0)
     return _count(ImageChops.subtract(_changes(seen, later), moving), around)
 
@@ -90,22 +94,37 @@ async def lasting_diff(seen: bytes, now: bytes, later: bytes, around: Sequence[P
     return await asyncio.to_thread(lasting_changed_pixels, seen, now, later, around)
 
 
+def _compare(old: Image.Image, image: Image.Image) -> tuple[Image.Image, bool]:
+    """The screen `image` in gray, and whether it changed from the gray screen `old`."""
+    new = image.convert("L")
+    return new, _count(_changes(old, new), ()) >= NOISE
+
+
+def _frame(image: Image.Image) -> Frame:
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+    return Frame(buffer.getvalue(), image.width, image.height)
+
+
 async def settle(computer: Computer, settings: Settings, before: Frame) -> Frame:
     """Wait for drawing to stop, bounded by the configured settle timeouts.
 
     App launches can outlast the no-change timeout. Return the current screen and
-    let the agent decide whether to wait longer rather than delay every input."""
+    let the agent decide whether to wait longer rather than delay every input.
+    Polls compare raw captures; only the returned frame is encoded as PNG."""
     loop = asyncio.get_running_loop()
     start = still_since = loop.time()
-    current = await computer.screenshot()
-    moved = await diff(before.png, current.png) >= NOISE
+    gray = await asyncio.to_thread(_gray, before.png)
+    image = await computer.image()
+    gray, moved = await asyncio.to_thread(_compare, gray, image)
     while True:
         now = loop.time()
         if moved and (now - still_since >= settings.settle_quiet_seconds or now - start >= settings.settle_max_seconds):
-            return current
+            return await asyncio.to_thread(_frame, image)
         if not moved and now - start >= settings.settle_seconds:
-            return current
+            return await asyncio.to_thread(_frame, image)
         await asyncio.sleep(SETTLE_POLL_SECONDS)
-        previous, current = current, await computer.screenshot()
-        if await diff(previous.png, current.png) >= NOISE:
+        image = await computer.image()
+        gray, changed = await asyncio.to_thread(_compare, gray, image)
+        if changed:
             moved, still_since = True, loop.time()

@@ -63,7 +63,7 @@ export const zhHant = {
     deleted: "已刪除對話",
     deletedProject: (project: string) => `Project ${project} 已刪除`,
     restore: "還原",
-    // The sections, as Codex's sidebar heads them.
+    // The sidebar's sections.
     projects: "Projects",
     recents: "Recents",
     newProject: "新增 Project",
@@ -78,6 +78,9 @@ export const zhHant = {
     // A project's row while folded: how many of its conversations ended since the user saw them.
     newReplies: (count: number) => `${count} 則新回覆`,
     renameProject: "重新命名",
+    // A project's menu: the rules the agent keeps for its conversations only, in a dialog titled with its name.
+    projectMemory: "記憶",
+    projectMemoryTitle: (project: string) => `${project} 的記憶`,
     deleteProject: "刪除",
     deleteProjectAsk: (project: string, count: number) =>
       `刪除 ${project} 與 ${count} 段對話？`,
@@ -121,12 +124,11 @@ export const zhHant = {
     placeholderNew: "問任何問題",
     placeholderNext: "接著要做什麼？",
     // A message turned away: another conversation's task has the desktop, or this conversation is still on its last one.
-    busy: "另一個任務正在使用桌面。等它結束，或先停止它。",
-    conversationBusy: "這段對話還有訊息在處理。等它結束，或先停止它。",
-    cantContinue: "這段對話無法接續（舊格式或已不存在），請開新對話。",
-    deleted: "找不到這段對話，可能已經刪除了。",
-    offline:
-      "操作沒有完成：暫時連不到服務。請稍後再試，一直不行的話，請在即時畫面複製錯誤資訊給管理員。",
+    busy: "桌面正在跑另一個任務",
+    conversationBusy: "這段對話還在處理上一則",
+    cantContinue: "這段對話無法接續，請開新對話",
+    deleted: "找不到這段對話",
+    offline: "連不到服務，請稍後再試",
     blockedOffline: "暫時連不到服務",
     liveView: "即時畫面",
     liveViewWith: (connection: string) => `即時畫面，${connection}`,
@@ -150,6 +152,8 @@ export const zhHant = {
     start: "開始任務",
     // Sends what is written to the run in progress.
     send: "送出",
+    // Takes back a message waiting above the composer, before the agent reads it.
+    withdraw: "刪除",
     // The list typing @ opens: what a message can be sent to. Their names stay in English in every language, as the
     // runtime looks for them.
     mention: {
@@ -253,6 +257,18 @@ export const zhHant = {
   },
 
   run: {
+    // What the main agent remembered (under its reply) and the rules a task was given (in the task).
+    memory: {
+      remembered: "已記住",
+      updated: "已更新記憶",
+      rememberedMany: (count: number) => `已記住 ${count} 條`,
+      deleted: (rule: string) => `已刪除：${rule}`,
+      following: (rule: string) => `遵守：${rule}`,
+      // The run's last reply's details menu: the rules its tasks were handed over with, listed in a dialog.
+      citations: (count: number) => `${count} 則記憶引用`,
+      cited: "引用的記憶",
+      failed: "無法變更記憶，請再試一次",
+    },
     // Work handed over, as one group: how long it has worked, and how it stands.
     work: {
       working: "正在工作",
@@ -311,15 +327,14 @@ export const zhHant = {
     },
     // Under a message sent while the run worked, for a moment once an agent reads it.
     read: "已讀",
-    // The details menu under a run's last reply: how long the run took and what it cost; a toggle opens each agent's
-    // model, and its tokens and cost of each kind.
+    // The details menu under a run's last reply: how long the run took and what it cost; an item opens a dialog of each
+    // agent's model, and its tokens and cost of each kind.
     usage: "用量",
     about: {
       cost: "花費",
       took: "用時",
       unknown: "未知", // a model without a known price, or a call a stop cut off (agent/trajectory.py cut)
-      show: "顯示細節",
-      hide: "隱藏細節",
+      details: "用量細節",
       input: "輸入",
       cached: "快取讀取",
       cacheWrite: "快取寫入",
@@ -383,6 +398,8 @@ export const zhHant = {
     you: "你",
     control: "控制中", // holding control, not operating: the agent holds it while nothing runs too
     takeOver: "接管",
+    takingOver: "接管中…",
+    returningControl: "交還中…",
     returnControl: "交還控制權",
   },
 
@@ -425,6 +442,33 @@ export const zhHant = {
     effort: "推理強度",
     byDefault: "（預設）",
     resetModels: "重設",
+    // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and the two switches
+    // Claude's own memory settings have, one for writing and one for reading.
+    memory: "記憶",
+    memoryModes: {
+      learn: {
+        label: "從我的糾正中學習",
+        description: "你糾正、拒絕或接管時，記下規則",
+      },
+      use: {
+        label: "使用記憶",
+        description: "遵守記住的規則",
+      },
+    },
+    resetMemory: "刪除全部記憶",
+    resetMemoryAsk: "要刪除所有記憶嗎？",
+    resetMemoryDetail: "無法復原。",
+    memoryEmpty: "還沒有記憶。",
+    memoryLoadFailed: "無法載入記憶。",
+    memoryRule: "規則",
+    memoryWhy: "原因",
+    memoryApplies: "適用於",
+    memoryFrom: "來源",
+    memorySource: "對話",
+    editMemory: "編輯",
+    memoryDeleted: "已刪除記憶",
+    deleteMemory: "刪除",
+    saveMemory: "儲存",
     permissions: "權限",
     // How a step the agent flags for approval is answered (agent/review.py), each with one general line and no
     // examples, as Claude's permission modes say theirs. Both name the same steps, the risky ones the agent flags

@@ -73,6 +73,14 @@ class Inbox:
         """The messages no agent has read yet."""
         return [message for message in self._messages if not message.read_by]
 
+    def withdraw(self, id: str) -> bool:
+        """Take back a message no agent has read yet; False once one has, or for one that is not here."""
+        message = next((each for each in self._messages if each.id == id), None)
+        if message is None or message.read_by:
+            return False
+        self._messages.remove(message)
+        return True
+
     def close(self) -> list[Message]:
         """Take no more messages, and return those the main agent has not read: the run ended before it could."""
         self.closed = True

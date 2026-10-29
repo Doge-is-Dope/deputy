@@ -41,6 +41,7 @@ import {
   ToolIcon,
 } from "@/components/icons"
 import { Markdown } from "@/components/markdown/markdown"
+import { FollowingLine } from "@/components/memory/lines"
 import {
   PhaseLine,
   PlainLine,
@@ -188,6 +189,8 @@ export function TaskGroup({
             {entry.text}
           </PlainLine>
         )
+      case "memory":
+        return <FollowingLine key={entry.key} id={entry.id} text={entry.text} />
       case "control":
         return turnLine(entry.key, entry.seconds)
       case "offline": {
@@ -305,8 +308,7 @@ export function TaskGroup({
                 </>
               ) : (
                 <>
-                  {/* Spinning while it works, what it works with while it waits; done, the words alone, as Codex's
-                  "Worked for". */}
+                  {/* Spinning while it works, what it works with while it waits; done, the words alone. */}
                   {running && (
                     <TraceIcon>
                       <span className="swap">

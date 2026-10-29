@@ -16,6 +16,7 @@ import json
 import re
 import traceback
 from dataclasses import asdict
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from PIL import Image
 from starlette.applications import Starlette
@@ -36,7 +37,9 @@ from computer_use.desktop.control import ApprovalFile, ControlFile, DesktopBusy,
 from computer_use.desktop.webrtc import ScreenShare
 from computer_use.agent.history import can_continue
 from computer_use.runner import ConversationBusy, Runner
-from computer_use.storage import RunStore, build_run_store, project_name
+from computer_use.memory import build_memory_store
+from computer_use.memory.routes import memory_routes
+from computer_use.storage import ProjectStore, RunStore, build_project_store, build_run_store
 
 RUN_ID = re.compile(r"[\w-]+")
 SCREENSHOT = re.compile(r"[\w-]+\.png")
@@ -51,6 +54,8 @@ KEEPALIVE_SECONDS = 15
 MAX_NOTE = 1000
 # Where a user can answer a step awaiting approval.
 ANSWERED_FROM = ("web", "cli")
+# A message for a conversation that is missing, deleted or in an unsupported format.
+NOT_CONTINUABLE = "this conversation cannot be continued: no supported record"
 
 
 def thumbnail(png: bytes, width: int) -> bytes:
@@ -63,11 +68,13 @@ def thumbnail(png: bytes, width: int) -> bytes:
     return out.getvalue()
 
 
-def project_of(data: dict) -> str | None:
-    """The project a new conversation is begun in on the page; None without one, or for a message that continues a
-    conversation, which stays in its own."""
-    return None if data.get("thread") is not None else project_name(data.get("project"))
-
+def known_zone(name: str) -> bool:
+    """An IANA time zone this machine knows, such as "Asia/Taipei"."""
+    try:
+        ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError):
+        return False
+    return True
 
 
 # The agents whose model and effort the settings page offers to choose: the main agent and each it hands work to.
@@ -75,11 +82,14 @@ AGENTS = (MAIN_AGENT, *(each.agent for each in SUBAGENTS))
 
 
 def create_app(
-    settings: Settings, max_steps: int, computer: Computer | None = None, store: RunStore | None = None
+    settings: Settings, max_steps: int, computer: Computer | None = None, store: RunStore | None = None,
+    projects: ProjectStore | None = None,
 ) -> Starlette:
     store = store or build_run_store(settings)
+    projects = projects or build_project_store(settings)
     authenticator = build_authenticator(settings)
-    runner = Runner(settings, computer or build_computer(settings), store, build_code_runner(settings))
+    memory = build_memory_store(settings.data_dir)
+    runner = Runner(settings, computer or build_computer(settings), store, build_code_runner(settings), memory)
     control = ControlFile(settings.control_path)
     run_lock = RunLock(settings.run_lock_path)
     approvals = ApprovalFile(settings.approval_path)
@@ -135,6 +145,18 @@ def create_app(
             raise HTTPException(404, "no such run")
         return run
 
+    async def project_of(request: Request, data: dict) -> str | None:
+        """The id of the asker's project that `data` names: by id ("project", as the page sends it) or by name
+        ("project_name", as the command line does, made if the asker has none by that name); None for none."""
+        if (name := data.get("project_name")) is not None:
+            if not isinstance(name, str) or not name.strip():
+                raise HTTPException(400, "project_name is a name")
+            return (await projects.create(me(request), name)).id
+        id = data.get("project")
+        if id is not None and not (isinstance(id, str) and await projects.get(me(request), id)):
+            raise HTTPException(404, "no such project")
+        return id
+
     async def awaiting(request: Request):
         """The step the run with the desktop waits for the user to approve, if the run is the asker's."""
         pending = approvals.pending(run := active())
@@ -154,7 +176,9 @@ def create_app(
         agent, its `model` and `effort`, a subagent's either "follow". A model or effort no longer offered is not
         refused, nor an agent the runtime no longer has: an agent works with the main agent's model, or the nearest
         effort its model takes (`models.chosen`), so what a page kept from before still sends. And `locale`, the
-        interface's language tag, which the agents write to the user in; none from a page that does not send it."""
+        interface's language tag, which the agents write to the user in; `timezone`, which today's date is told in;
+        and `memory`, whether the main agent may `learn` rules from the user's corrections and `use` those it has:
+        none of them from a page that does not send it."""
         approvals = data.get("approvals", "ask")
         if approvals not in APPROVALS:
             raise HTTPException(400, 'approvals must be "ask" or "auto"')
@@ -168,6 +192,13 @@ def create_app(
         locale = data.get("locale")
         if locale is not None and not (isinstance(locale, str) and re.fullmatch(LANGUAGE_TAG, locale)):
             raise HTTPException(400, 'locale must be a language tag, such as "zh-Hant"')
+        timezone = data.get("timezone")
+        if timezone is not None and not (isinstance(timezone, str) and known_zone(timezone)):
+            raise HTTPException(400, 'timezone must be an IANA time zone, such as "Asia/Taipei"')
+        memory = data.get("memory", {})
+        if not (isinstance(memory, dict) and set(memory) <= {"learn", "use"}
+                and all(isinstance(value, bool) for value in memory.values())):
+            raise HTTPException(400, "memory must say learn and use, each true or false")
         return RunChoices(
             {
                 agent: {key: value for key, value in chosen.items() if agent != MAIN_AGENT or value != FOLLOW}
@@ -176,6 +207,9 @@ def create_app(
             },
             approvals,
             locale,
+            timezone,
+            memory.get("learn", False),
+            memory.get("use", False),
         )
 
     def steps_of(data: dict) -> int:
@@ -195,6 +229,8 @@ def create_app(
         except DesktopBusy as error:
             return busy("desktop", error.run)
         except Exception as error:
+            if thread is not None and not await can_continue(store, thread):  # deleted since new_run checked
+                raise HTTPException(404, NOT_CONTINUABLE) from error
             traceback.print_exception(error)
             return JSONResponse({"error": f"{type(error).__name__}: {error}"}, 500)
         return JSONResponse({"id": run, "thread": thread or run}, 201)
@@ -252,7 +288,7 @@ def create_app(
             isinstance(thread, str) and RUN_ID.fullmatch(thread) and await can_continue(store, thread)
             and await store.conversation(thread, user=me(request))
         ):
-            raise HTTPException(404, "this conversation cannot be continued: no supported record")
+            raise HTTPException(404, NOT_CONTINUABLE)
         goal = goal.strip()
         choices = choices_of(data)
         desktop = data.get("computer", False)  # for the desktop, as a message that mentions @Computer is
@@ -268,8 +304,10 @@ def create_app(
                 return JSONResponse({"id": run, "thread": thread, "message": message.id}, 202)
         # The user agreed to hand the desktop over for a message for it: the run gives it to the agent once it has it.
         take_control = data.get("take_control") is True
+        # A message that continues a conversation stays in the conversation's own project.
+        project = None if thread is not None else await project_of(request, data)
         return await start(
-            goal, steps_of(data), thread, desktop or forced(goal), take_control, choices, project_of(data), me(request)
+            goal, steps_of(data), thread, desktop or forced(goal), take_control, choices, project, me(request)
         )
 
     async def delete_conversation(request: Request) -> JSONResponse:
@@ -278,9 +316,10 @@ def create_app(
         thread = request.path_params["thread"]
         if not RUN_ID.fullmatch(thread) or not await store.conversation(thread, user=me(request)):
             raise HTTPException(404, "no such conversation")
-        if thread in runner.runs:
-            return busy("conversation", runner.runs[thread].run)
-        deleted = await store.delete(thread)
+        try:
+            deleted = await runner.delete(thread)
+        except ConversationBusy as error:
+            return busy("conversation", error.run)
         for run in deleted:
             owners.pop(run, None)
         return JSONResponse({"deleted": deleted})
@@ -305,8 +344,6 @@ def create_app(
         if not runs:
             raise HTTPException(404, "no such conversation")
         data = await body(request)
-        if "project" in data and data["project"] is not None and not isinstance(data["project"], str):
-            raise HTTPException(400, "project is a name or null")
         changes = {}
         if "title" in data:
             title = data["title"]
@@ -314,9 +351,9 @@ def create_app(
                 raise HTTPException(400, "title is required")
             changes["title"] = " ".join(title.split())[:MAX_CHARS].rstrip()
             write(runs[-1], {"type": "title", "text": changes["title"], "by": "user"})
-        if "project" in data:
-            changes["project"] = project_name(data["project"])
-            write(runs[0], {"type": "project", "name": changes["project"], "by": "user"})
+        if "project" in data or "project_name" in data:
+            changes["project"] = await project_of(request, data)
+            write(runs[0], {"type": "project", "project": changes["project"], "by": "user"})
         if not changes:
             raise HTTPException(400, "title or project is required")
         return JSONResponse({"thread": thread, **changes})
@@ -327,6 +364,41 @@ def create_app(
         if (draft := runner.draft(run)) is not None:
             draft.stream.record(event)
 
+    async def list_projects(request: Request) -> JSONResponse:
+        return JSONResponse([asdict(each) for each in await projects.list(me(request))])
+
+    async def new_project(request: Request) -> JSONResponse:
+        """A project by the name given; the asker's own if they have one by that name already."""
+        name = (await body(request)).get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(400, "name is required")
+        return JSONResponse(asdict(await projects.create(me(request), name)), 201)
+
+    async def rename_project(request: Request) -> JSONResponse:
+        name = (await body(request)).get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise HTTPException(400, "name is required")
+        try:
+            renamed = await projects.rename(me(request), request.path_params["project"], name)
+        except ValueError as error:
+            return JSONResponse({"error": str(error)}, 409)
+        if renamed is None:
+            raise HTTPException(404, "no such project")
+        return JSONResponse(asdict(renamed))
+
+    async def delete_project(request: Request) -> JSONResponse:
+        """The project only: the page deletes its conversations first, and any left list without one."""
+        if not await projects.delete(me(request), request.path_params["project"]):
+            raise HTTPException(404, "no such project")
+        return JSONResponse({"deleted": request.path_params["project"]})
+
+    async def restore_project(request: Request) -> JSONResponse:
+        """A deleted project back, as its conversations come back from the trash (the page's 還原)."""
+        restored = await projects.restore(me(request), request.path_params["project"])
+        if restored is None:
+            raise HTTPException(404, "no such deleted project")
+        return JSONResponse(asdict(restored))
+
     async def stop_run(request: Request) -> JSONResponse:
         run = await run_of(request)
         if not runner.started(run):
@@ -334,18 +406,33 @@ def create_app(
         await runner.stop(run)
         return JSONResponse({"stopped": True})
 
+    async def withdraw_message(request: Request) -> JSONResponse:
+        """Takes back a message sent while the run works, while no agent has read it yet (the page's queue); once one
+        has, it is part of the conversation."""
+        run = await run_of(request)
+        inbox = runner.inbox(run)
+        if inbox is None or not inbox.withdraw(request.path_params["message"]):
+            return JSONResponse({"error": "this message has been read"}, 409)
+        return JSONResponse({"withdrawn": True})
+
     async def events(request: Request) -> StreamingResponse:
         """Server-sent events: each line of the run's log, numbered so a reconnecting page gets only what it
         missed, then a "done" event once the run has ended, or at once for a run this server does not run. While the main agent writes a
         reply, events without a number follow the lines: "draft", all it has written of it, when the page has none of
         it yet, and then "delta", what it wrote since. A page that reconnects gets the lines it missed, then the reply
-        so far, and nothing twice."""
+        so far, and nothing twice. Lines leave out the model messages the agents' history is restored from, which the
+        page does not show and which are most of a log; `?full=1` keeps them, for an export of the record."""
         run = await run_of(request)
         seen = request.headers.get("last-event-id", "")
         after = int(seen) if seen.isdigit() else -1
+        full = request.query_params.get("full") == "1"
 
         def said(kind: str, data: dict) -> str:
             return f"event: {kind}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n"
+
+        def line(index: int, event: dict) -> str:
+            shown = event if full else {key: value for key, value in event.items() if key != "message"}
+            return f"id: {index}\ndata: {json.dumps(shown, ensure_ascii=False)}\n\n"
 
         async def stream():
             draft = runner.draft(run)
@@ -360,7 +447,7 @@ def create_app(
                     # Only what the page has not got is read: a page that reconnects has most of a long log already.
                     missed = (await store.events(run, after))[:max(0, boundary - after - 1)]
                     for sent, event in enumerate(missed, after + 1):
-                        yield f"id: {sent}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                        yield line(sent, event)
                         ended = ended or event["type"] == "end"
                     if ended:
                         yield said("done", {})
@@ -377,7 +464,7 @@ def create_app(
                             return
                         if item.kind == "line":
                             if item.index > sent:
-                                yield f"id: {item.index}\ndata: {json.dumps(item.data, ensure_ascii=False)}\n\n"
+                                yield line(item.index, item.data)
                                 sent = item.index
                             if item.data["type"] == "end":
                                 yield said("done", {})
@@ -389,7 +476,7 @@ def create_app(
                 return
 
             for index, event in enumerate(await store.events(run, after), after + 1):  # an ended run, or another server's
-                yield f"id: {index}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+                yield line(index, event)
             yield said("done", {})
             return
 
@@ -446,7 +533,7 @@ def create_app(
 
     async def choose_approvals(request: Request) -> JSONResponse:
         """How a run in progress answers its next step that needs approval, as the user just chose in the page's
-        settings, as Claude Code's permission mode applies at once; the models chosen there apply from the next run."""
+        settings, at once; the models chosen there apply from the next run."""
         run = await run_of(request)
         approvals = (await body(request)).get("approvals")
         if approvals not in APPROVALS:
@@ -475,6 +562,7 @@ def create_app(
     return Starlette(
         routes=[
             *authenticator.routes,  # its own signing in and out
+            *memory_routes(memory, me),
             Route("/api/session", session),
             Route("/api/status", status),
             Route("/api/runs", list_runs),
@@ -483,10 +571,16 @@ def create_app(
             Route("/api/runs/{run}/events", events),
             Route("/api/runs/{run}/files/{name}", screenshot),
             Route("/api/runs/{run}/stop", stop_run, methods=["POST"]),
+            Route("/api/runs/{run}/messages/{message}", withdraw_message, methods=["DELETE"]),
             Route("/api/runs/{run}/approvals", choose_approvals, methods=["POST"]),
             Route("/api/conversations/{thread}", delete_conversation, methods=["DELETE"]),
             Route("/api/conversations/{thread}", update_conversation, methods=["PATCH"]),
             Route("/api/conversations/{thread}/restore", restore_conversation, methods=["POST"]),
+            Route("/api/projects", list_projects),
+            Route("/api/projects", new_project, methods=["POST"]),
+            Route("/api/projects/{project}", rename_project, methods=["PATCH"]),
+            Route("/api/projects/{project}", delete_project, methods=["DELETE"]),
+            Route("/api/projects/{project}/restore", restore_project, methods=["POST"]),
             Route("/api/screen", screen),
             Route("/api/control", set_control, methods=["POST"]),
             Route("/api/approval", approve, methods=["POST"]),

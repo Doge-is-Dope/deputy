@@ -97,6 +97,15 @@ async def load_conversation(store: RunStore, thread: Thread) -> list[BaseMessage
     ]
 
 
+async def cut_off(store: RunStore, thread: Thread) -> list[Event]:
+    """The tasks the conversation's latest run started and logged no end of, as their start events: the runtime died
+    under them, so that run could not tell of them. Any stop that runs its course logs each task's end."""
+    runs = await store.conversation(thread)
+    events = [event for event in await store.events(runs[-1]) if event["type"] == "task"] if runs else []
+    ended = {event["id"] for event in events if event["state"] != "started"}
+    return [event for event in events if event["state"] == "started" and event["id"] not in ended]
+
+
 def action_records(events: Iterable[dict]) -> list[str]:
     """The input the computer-use agent sent, as the runtime recorded it: each action's tool and arguments, without
     what it said before it or what came of it, for auto review, which takes only these and the user's words as facts.
@@ -111,12 +120,14 @@ def action_records(events: Iterable[dict]) -> list[str]:
 
 def action_lines(events: Iterable[dict]) -> list[str]:
     """One line per action of the computer-use agent: what it said before it, what it did (and, for a step that needed
-    approval, what it said the step would do, and whether the user or auto review was asked), and what came of it.
+    approval, what it said the step would do, and whether the user or auto review was asked), and what came of it: for
+    a step the user declined, all they said of it. And a line each time the user took the desktop and gave it back,
+    with how long they had it. These are what the main agent learns the user's corrections from.
 
     A tool call that never got a result (the run died mid-action) is left out: whether it happened shows on the
     next screenshot.
     """
-    lines, thought, reviewed = [], "", set()
+    lines, thought, reviewed, declined = [], "", set(), {}
     for event in events:
         if event.get("agent") == MAIN:
             continue
@@ -124,6 +135,10 @@ def action_lines(events: Iterable[dict]) -> list[str]:
             thought = " ".join(event["text"].split())
         elif event["type"] == "decision" and event.get("by") == "auto":
             reviewed.add(event["id"])
+        elif event["type"] == "decision" and event.get("outcome") == "declined":
+            declined[event["id"]] = " ".join((event.get("note") or "").split())
+        elif event["type"] == "note" and event.get("code") == "controlReturned":
+            lines.append(f"The user had the desktop for {event['data'].get('seconds', 0):.0f} seconds, then gave it back.")
         elif event["type"] == "action":
             args = json.dumps(shown_args(event["args"]), ensure_ascii=False)[:200]
             asked = ""
@@ -137,6 +152,9 @@ def action_lines(events: Iterable[dict]) -> list[str]:
                     line[:200] for line in (event["result"] or "").splitlines()
                     if line and not line.startswith("Screen ")
                 )
+            elif event.get("id") in declined:
+                note = declined[event["id"]]
+                outcome = "the user declined it" + (f", saying: {note}" if note else ", saying nothing")
             else:
                 outcome = (event["result"] or "").split("\n", 1)[0][:200]
             said = f"{thought} -> " if thought else ""

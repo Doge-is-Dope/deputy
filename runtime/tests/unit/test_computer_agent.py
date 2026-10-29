@@ -34,7 +34,6 @@ pytestmark = pytest.mark.usefixtures("the_log_is_the_whole_record")
 
 
 def notes_so_far(settings) -> list[str]:
-    """The notes of the run in progress, the only one under the data directory."""
     logs = list((settings.data_dir / "runs").glob("*/steps.jsonl"))
     return [event["text"] for event in read_events(logs[0].parent) if event["type"] == "note"] if logs else []
 
@@ -44,10 +43,10 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
         AIMessage(content="Open Start.", tool_calls=[tool_call("c1", "key", text="win")]),
         AIMessage(content="", tool_calls=[
             tool_call("c2", "type", text="notepad"),
-            tool_call("c3", "key", text="enter"),  # second call in one turn: runs as well
+            tool_call("c3", "key", text="enter"),
         ]),
         AIMessage(content="", tool_calls=[tool_call("c4", "key", text="ctrl+alt+delete")]),  # blocked input
-        AIMessage(content="", tool_calls=[tool_call("c5", "left_click", coordinate=[5000, 10])]),  # outside the screen
+        AIMessage(content="", tool_calls=[tool_call("c5", "left_click", coordinate=[5000, 10])]),
         AIMessage(content="", tool_calls=[tool_call("c6", "type", text="會議紀錄")]),
         AIMessage(content="Typed the note."),
         AIMessage(content="never reached"),
@@ -69,7 +68,6 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
     for event in actions.values():
         if event["status"] == "success":
             assert (run_dir(settings, result.run) / event["screenshot"]).exists()
-    # The main agent read the actions, each with what the agent said before it.
     assert '1. Open Start. -> key {"text": "win"} -> success' in computer_use_result(result)["result"]
 
 
@@ -243,9 +241,12 @@ async def test_loop_waits_while_the_user_has_control(settings, computer, monkeyp
     control = ControlFile(settings.control_path)
 
     async def user_returns_control():
-        while control.read().owner != "user":
+        # Once the agent waits for it: returned sooner, the agent's next step is refused as decided from an older screen.
+        while "The user has control." not in "".join(
+            path.read_text() for path in (settings.data_dir / "runs").glob("*/steps.jsonl")
+        ):
             await asyncio.sleep(0.05)
-        assert computer.calls == []  # nothing is sent while the user has control
+        assert computer.calls == []
         control.write("agent")
 
     user = asyncio.create_task(user_returns_control())
@@ -303,7 +304,7 @@ async def test_a_run_never_takes_the_desktop_from_the_user(settings, computer, m
     async def user_returns_control():
         while not any("The user has control" in text for text in notes_so_far(settings)):
             await asyncio.sleep(0.01)
-        assert control.read().reason == "editing a slide" and computer.calls == []  # the task waits for the user
+        assert control.read().reason == "editing a slide" and computer.calls == []
         control.write("agent", "returned by user")
 
     user = asyncio.create_task(user_returns_control())
@@ -321,14 +322,14 @@ async def test_a_run_lets_go_of_what_the_agent_still_held_when_it_ends(settings,
 
     await run_turn(settings, "press the button", max_steps=10, computer=computer)
 
-    assert computer.calls == [("mouse_button", True)] and computer.releases == 1  # never let go of by the agent
+    assert computer.calls == [("mouse_button", True)] and computer.releases == 1
 
 
 async def test_a_message_for_the_desktop_does_not_start_while_another_run_has_it(settings, computer, control, monkeypatch):
     use_script(monkeypatch, [AIMessage(content="never asked")])
     control.write("user", "taken over by user")
 
-    with RunLock(settings.run_lock_path) as other:  # e.g. `computer-use run` in another terminal
+    with RunLock(settings.run_lock_path) as other:
         other.name("20261007-120000")
         with pytest.raises(DesktopBusy) as busy:
             await run_turn(
@@ -341,7 +342,7 @@ async def test_a_message_for_the_desktop_does_not_start_while_another_run_has_it
 
 
 async def test_other_messages_go_on_while_another_run_has_the_desktop(settings, computer, monkeypatch):
-    with RunLock(settings.run_lock_path) as other:  # e.g. another conversation's task on the desktop
+    with RunLock(settings.run_lock_path) as other:
         other.name("20261007-120000")
         use_script(monkeypatch, [], main=[AIMessage("Paris.")])
         answered = await run_turn(settings, "capital of France?", max_steps=10, computer=computer)
@@ -356,7 +357,7 @@ async def test_other_messages_go_on_while_another_run_has_the_desktop(settings, 
     assert computer.calls == [] and computer.releases == 0
     handed = computer_use_result(refused)
     assert handed["status"] == "error" and handed["result"] == notes.DESKTOP_BUSY
-    assert tasks(read_events(run_dir(settings, refused.run))) == []  # nothing for a later task's blackboard
+    assert tasks(read_events(run_dir(settings, refused.run))) == []
     end = logged(refused, "end")[0]
     assert (end["stop_reason"], end["computer"]) == ("replied", None)
 
@@ -401,7 +402,7 @@ async def test_a_message_for_the_desktop_gets_it_from_the_user_once_the_run_has_
     )
 
     assert (result.computer, control.read().owner) == ("replied", "agent")
-    assert not [note for note in logged(result, "note") if "The user has control" in note["text"]]  # no wait
+    assert not [note for note in logged(result, "note") if "The user has control" in note["text"]]
 
 
 async def test_a_stopped_run_still_ends_its_log_and_frees_the_desktop(settings, computer, monkeypatch):
@@ -439,7 +440,7 @@ async def test_a_desktop_that_cannot_be_used_is_told_to_the_main_agent_which_rep
     result = await run_turn(settings, "open start", max_steps=10, computer=computer)
 
     assert (result.reply, result.computer) == ("The desktop can't be reached right now.", "error")
-    assert computer_model.received == []  # the task never began: there was no screen to begin from
+    assert computer_model.received == []
     handback = computer_use_result(result)
     assert handback["status"] == "success" and "the desktop could not be seen or used" in handback["result"]
     assert "No screenshot: the display is gone" in handback["result"]
@@ -476,7 +477,7 @@ async def test_loop_waits_while_the_desktop_is_disconnected(settings, computer, 
     async def press_then_drop(combos):
         await press(combos)
         if len(computer.calls) == 1:
-            computer.connected = False  # the session drops right after the first action
+            computer.connected = False
 
     monkeypatch.setattr(computer, "press", press_then_drop)
 
@@ -509,7 +510,7 @@ async def test_a_run_stops_when_the_desktop_does_not_reconnect(settings, compute
 
     async def press_then_drop(combos):
         await press(combos)
-        computer.connected = False  # the session drops for good
+        computer.connected = False
 
     monkeypatch.setattr(computer, "press", press_then_drop)
     result = await run_turn(settings, "select all", max_steps=10, computer=computer)
@@ -545,7 +546,7 @@ async def test_a_desktop_that_is_gone_ends_the_task_even_while_the_user_has_cont
     assert result.computer == "disconnected" and computer.calls == []
     codes = [note["code"] for note in logged(result, "note")]
     assert "userControl" not in codes and codes.index("disconnected") < codes.index("gone")
-    assert control.read().owner == "user"  # still theirs: the run never takes it
+    assert control.read().owner == "user"
 
 
 async def test_a_desktop_task_is_refused_at_once_while_the_desktop_is_down(settings, computer, monkeypatch):

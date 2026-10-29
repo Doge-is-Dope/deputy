@@ -18,17 +18,15 @@ printed, and fix the script until it does the task.
 
 # Its hand-over tool's description, and what that tool's task argument should say.
 DESCRIPTION = (
-    "Have the coding agent write and run code for a task, in the background: this returns at once, and the "
-    "runtime sends you how it stopped, its final message and its steps with what they printed, once it ends. It "
-    "starts afresh, with your task, the user's messages word for word and a short record of the conversation."
+    "Delegate a task to write and run code. On completion, the runtime reports how it stopped, its final message "
+    "and its steps with their printed output."
 )
 BRIEF = "The goal; the data it needs, written out in full; what to report."
 # Its part of the main agent's system prompt.
 ABOUT = """\
-- write_code hands a task to a coding agent that writes and runs code (bash and Python) in a Linux environment of its \
-own, with no internet. It cannot see the desktop or reach the Windows computer or its files, so put the data it needs \
-in your task. Use it for calculations and for processing data. When it ends, check its result from its steps and \
-what they printed.
+- write_code handles calculations and data processing with bash and Python in a separate Linux environment, \
+without internet or access to the Windows desktop or its files. Provide all needed data in the task. Verify results \
+from its steps and printed output.
 """
 
 

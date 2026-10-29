@@ -1,6 +1,3 @@
-"""Steps the user approves first: the computer-use agent flags an input action, the runtime holds it until the user
-approves, declines or takes the desktop, and only an approved step reaches the computer."""
-
 import asyncio
 
 import pytest
@@ -35,7 +32,6 @@ SEND = {"coordinate": [1180, 92], "needs_confirmation": True, "consequence": "�
 
 
 def asking(call_id="c1", **args) -> AIMessage:
-    """The agent's turn that clicks a step it flags for the user's approval."""
     return AIMessage(content="Sending it.", tool_calls=[tool_call(call_id, "left_click", **(args or SEND))])
 
 
@@ -62,7 +58,7 @@ async def test_a_step_runs_only_once_the_user_approves_it(settings, computer, mo
     user = asyncio.create_task(the_user_answers(settings, computer, "approve"))
     result = await asyncio.wait_for(run_turn(settings, "寄出週報", max_steps=10, computer=computer), timeout=20)
 
-    assert await user == [[]]  # nothing reached the desktop while it waited
+    assert await user == [[]]
     assert computer.calls == [("click", (1180, 92), "left", 1, [])]
     kinds = ("model", "confirm", "decision", "action")
     events = [event for event in read_events(run_dir(settings, result.run)) if event["type"] in kinds and "agent" not in event]
@@ -73,7 +69,6 @@ async def test_a_step_runs_only_once_the_user_approves_it(settings, computer, mo
     assert (decision["outcome"], decision["by"]) == ("approved", "web")
     assert not settings.approval_path.exists()
     assert handed_back(result)["reply"] == "Sent it."
-    # The main agent reads which step the user was asked about.
     assert "asked the user to approve: 寄出週報給 bob@example.com" in computer_use_result(result)["result"]
 
 
@@ -244,7 +239,6 @@ def reviewing(monkeypatch, allow: bool) -> list[dict]:
     return asked
 
 
-# The user turned auto review on, as the page sends it with the message.
 AUTO = RunChoices(approvals="auto")
 
 
@@ -261,7 +255,6 @@ async def test_auto_review_counts_what_the_user_sends_during_the_task_as_their_w
         AIMessage("Done."),
     ])
     inbox = Inbox()
-    # While the first key press runs, until the main agent has told the task.
     sent_while_pressing(computer, inbox, "也刪掉桌面的 a.txt", until=lambda: bool(told))
 
     await asyncio.wait_for(
@@ -269,7 +262,7 @@ async def test_auto_review_counts_what_the_user_sends_during_the_task_as_their_w
     )
 
     (question,) = asked
-    assert "也刪掉桌面的 a.txt" in question["sources"]  # the user's words, as they wrote them
+    assert "也刪掉桌面的 a.txt" in question["sources"]
     assert "What the main agent told it during this task, with the user's words:" in question["context"]
     assert "- 也刪掉桌面的 a.txt" in question["context"]
 
@@ -292,12 +285,10 @@ async def test_with_auto_review_on_a_step_it_lets_through_goes_ahead_without_the
     assert review["allow"] and review["reason"] == "a.txt 是這段對話剛建立的"
     assert (decision["outcome"], decision["by"], decision["note"]) == ("approved", "auto", "a.txt 是這段對話剛建立的")
     assert not settings.approval_path.exists()
-    # The reviewer is given the user's words and what this task did, and the step with its marked screen.
     (question,) = asked
     assert "建立 a.txt 再刪掉" in question["context"] and "The actions of this task so far" in question["context"]
     assert question["step"].startswith('key {"text": "Delete"') and "刪到資源回收筒" in question["step"]
-    assert question["sources"][0] == "建立 a.txt 再刪掉"  # its evidence may come only from the user and the records
-    # The main agent hears it was auto review, not the user, that let the step through.
+    assert question["sources"][0] == "建立 a.txt 再刪掉"
     assert "auto review let it through: 把桌面上的 a.txt 刪到資源回收筒" in computer_use_result(result)["result"]
 
 
@@ -341,10 +332,9 @@ async def test_auto_review_turned_off_while_a_run_works_asks_the_user_from_its_n
     await user
 
     events = list(read_events(run_folder(settings)))
-    # The step it was looking at went ahead as reviewed; the next one waited for the user, unreviewed.
     assert [e["auto_review"] for e in events if e["type"] == "confirm"] == [True, False]
     assert [e["by"] for e in events if e["type"] == "decision"] == ["auto", "web"]
-    assert not runner.choose(run, "auto")  # it has ended
+    assert not runner.choose(run, "auto")
 
 
 async def test_without_auto_review_for_the_run_every_step_waits_for_the_user(settings, computer, monkeypatch):
@@ -362,5 +352,5 @@ async def test_without_auto_review_for_the_run_every_step_waits_for_the_user(set
     await answering
 
     assert [event["by"] for event in logged(result, "decision")] == ["web"]
-    assert asked == []  # the run was sent without auto review, whatever another run of another user had
+    assert asked == []
     assert logged(result, "start")[0]["approvals"] == "ask"

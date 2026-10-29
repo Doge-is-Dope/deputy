@@ -62,6 +62,7 @@ class Subagent:
         self.stop_reason: StopReason | None = None  # how the last task ended; None until one has run
         self._start: HumanMessage | None = None  # the task's first message, once it is logged
         self.task: str | None = None  # the task's id, which its events in the log carry
+        self.taught = ""  # the rules the user taught that its task was handed over with, word for word
 
     async def run(self, task: str, told: Inbox) -> Result:
         """Carry out a task, reading what the main agent tells it meanwhile (`told`): its result for the main agent."""
@@ -79,7 +80,7 @@ class Subagent:
     async def opening(self, task: str) -> str:
         """The task's first message: its goal, the user's words, and the blackboard of the conversation so far."""
         requests, earlier = await self.earlier()
-        return notes.opening(task, self.words(), notes.blackboard(requests, earlier))
+        return notes.opening(task, self.words(), notes.blackboard(requests, earlier), self.taught)
 
     async def earlier(self) -> tuple[list[str], list[dict]]:
         """The conversation so far, read back from its logs, for the blackboard: the user's messages before this

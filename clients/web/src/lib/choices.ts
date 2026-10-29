@@ -3,7 +3,7 @@ import { useSyncExternalStore } from "react"
 import type { Approvals, Choice, Status } from "@/lib/api"
 import { EFFORTS } from "@/lib/efforts"
 
-// Browser-owned model, effort and approval choices, sent with each message.
+// Browser-owned model, effort, approval and memory choices, sent with each message.
 // Reset restores status.defaults. Model changes apply next run; approval changes
 // apply to the active run's next flagged step.
 
@@ -14,23 +14,36 @@ const LEVELS = EFFORTS.map((effort) => effort.id)
 
 /** By agent, the model and effort the user chose, a subagent's either FOLLOW; what is not here is as it starts. */
 export type Chosen = Record<string, Partial<Choice>>
-export type Choices = { agents: Chosen; approvals: Approvals }
+/** Whether the main agent learns rules from the user's interventions, and whether a run is told those it has. */
+export type MemoryChoice = { learn: boolean; use: boolean }
+export type Choices = {
+  agents: Chosen
+  approvals: Approvals
+  memory: MemoryChoice
+}
 
 const AGENTS_KEY = "agents"
 const APPROVALS_KEY = "approvals"
+// Each kept only while it is off: on is how it starts.
+const LEARN_KEY = "memory-learn"
+const USE_KEY = "memory-use"
+const KEYS = [AGENTS_KEY, APPROVALS_KEY, LEARN_KEY, USE_KEY]
 
 function load(): Choices {
   let agents: Chosen = {}
   let approvals: Approvals = "ask"
+  const memory = { learn: true, use: true }
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(AGENTS_KEY) ?? "{}")
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
       agents = parsed as Chosen
     if (localStorage.getItem(APPROVALS_KEY) === "auto") approvals = "auto"
+    memory.learn = localStorage.getItem(LEARN_KEY) !== "off"
+    memory.use = localStorage.getItem(USE_KEY) !== "off"
   } catch {
     // Nothing stored, or nothing readable: everything as it starts.
   }
-  return { agents, approvals }
+  return { agents, approvals, memory }
 }
 
 let state = load()
@@ -44,6 +57,12 @@ function save(next: Choices) {
     else localStorage.removeItem(AGENTS_KEY)
     if (next.approvals === "auto") localStorage.setItem(APPROVALS_KEY, "auto")
     else localStorage.removeItem(APPROVALS_KEY)
+    for (const [key, on] of [
+      [LEARN_KEY, next.memory.learn],
+      [USE_KEY, next.memory.use],
+    ] as const)
+      if (on) localStorage.removeItem(key)
+      else localStorage.setItem(key, "off")
   } catch {
     // Not stored; the choice still holds until the page reloads.
   }
@@ -52,11 +71,7 @@ function save(next: Choices) {
 
 // A choice made in another tab applies here too.
 addEventListener("storage", (event) => {
-  if (
-    event.key === AGENTS_KEY ||
-    event.key === APPROVALS_KEY ||
-    event.key === null
-  ) {
+  if (event.key === null || KEYS.includes(event.key)) {
     state = load()
     for (const listener of listeners) listener()
   }
@@ -134,4 +149,8 @@ export function resetModels() {
 
 export function setApprovals(approvals: Approvals) {
   save({ ...state, approvals })
+}
+
+export function setMemory(change: Partial<MemoryChoice>) {
+  save({ ...state, memory: { ...state.memory, ...change } })
 }

@@ -1,6 +1,3 @@
-"""The RDP backend's own work: key names to X keysyms, typing through the clipboard, and pointer moves."""
-
-import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -13,57 +10,31 @@ from computer_use.desktop.keys import parse_combos
 
 
 class RecordingRdp(RdpComputer):
-    """Records the xdotool and xclip commands instead of running them, and keeps the clipboard."""
+    """Records Unicode and shell input instead of sending it to Windows."""
 
-    def __init__(self, type_mode="paste"):
-        super().__init__(":1", type_mode)
+    def __init__(self):
+        super().__init__(":1")
         self.commands: list[tuple] = []
-        self.clipboard: str | None = None
-        self.fetches = True  # Windows fetches each pasted text; False: the clipboard sync stalled
-        self.xclip_error: str | None = None
         self.pointer = (0, 0)
-        self.timeouts: list[float | None] = []  # each command's own time limit, None for the usual one
+
+    async def _unicode_chunk(self, text):
+        self.commands.append(("unicode", text))
 
     async def cursor_position(self):
         return self.pointer
 
-    async def _run(self, *args, stdin=None, capture=True, timeout=None):
-        self.timeouts.append(timeout)
-        if args[0] == "xclip" and "-o" in args:
-            if self.clipboard is None:
-                raise ComputerError("xclip failed: target UTF8_STRING not available")
-            return self.clipboard
-        if args[0] == "xclip":
-            if self.xclip_error:
-                raise ComputerError(f"xclip failed: {self.xclip_error}")
-            self.clipboard = stdin.decode()
-            self.commands.append(("clipboard", self.clipboard))
-            if "-loops" in args and not self.fetches:
-                await asyncio.Event().wait()  # serves the text until cancelled
-        else:
-            self.commands.append(args)
-        return ""
+    async def _run(self, *args, timeout=None):
+        self.commands.append(args)
 
 
 def sent(rdp: RecordingRdp) -> list[tuple]:
-    """The input, short: ("clipboard", text), ("key", keysyms...), ("type", text) or ("reconnect",)."""
     short = []
     for command in rdp.commands:
-        if command[0] == "clipboard":
+        if command[0] == "unicode":
             short.append(command)
         elif command[:2] == ("xdotool", "key"):
             short.append(("key", *command[4:]))
-        elif command[:2] == ("xdotool", "type"):
-            short.append(("type", command[-1]))
-        elif command[-1] == "windowkill":
-            short.append(("reconnect",))
     return short
-
-
-@pytest.fixture(autouse=True)
-def no_paste_wait(monkeypatch):
-    monkeypatch.setattr(computer_use.computers.rdp, "PASTE_WAIT_SECONDS", 0)
-    monkeypatch.setattr(computer_use.computers.rdp, "FETCH_TIMEOUT_SECONDS", 0.01)
 
 
 def test_keys_map_to_xdotool_keysyms():
@@ -86,64 +57,39 @@ async def test_modifiers_are_held_as_keysyms():
     assert " keydown super click " in " ".join(command) and command[-2:] == ("keyup", "super")
 
 
-async def test_typing_pastes_everything_by_default():
+async def test_unicode_preserves_text_surrogates_and_newlines():
     rdp = RecordingRdp()
-    await rdp.type_text("C:\\agent-output\\result.txt")
-    assert sent(rdp) == [("clipboard", "C:\\agent-output\\result.txt"), ("key", "ctrl+v")]
+    text = "Ab中🙂🚀" * 40
+    await rdp.type_text(text + "\r\n下一行\n")
+    chunks = [command[1] for command in sent(rdp) if command[0] == "unicode"]
+    assert "".join(chunks) == text + "下一行"
+    assert all(0 < len(chunk.encode()) <= 60 for chunk in chunks)
+    assert [command for command in sent(rdp) if command[0] == "key"] == [("key", "Return")] * 2
 
 
-async def test_pasted_newlines_press_enter():
+async def test_unicode_pipe_must_exist_and_be_a_fifo(tmp_path):
+    rdp = RdpComputer(":1", tmp_path / "missing")
+    with pytest.raises(ComputerError, match="pipe is unavailable"):
+        await rdp.type_text("中文🙂")
+    target = tmp_path / "regular-file"
+    target.write_text("original")
+    rdp.keyboard_pipe = target
+    with pytest.raises(ComputerError, match="not a pipe"):
+        await rdp.type_text("must not overwrite")
+    assert target.read_text() == "original"
+
+
+async def test_a_unicode_failure_does_not_send_enter_or_remaining_lines():
     rdp = RecordingRdp()
-    await rdp.type_text("第一行\r\n第二行\n\nnotepad\n")
-    assert sent(rdp) == [
-        ("clipboard", "第一行"), ("key", "ctrl+v"), ("key", "Return"),
-        ("clipboard", "第二行"), ("key", "ctrl+v"), ("key", "Return"), ("key", "Return"),
-        ("clipboard", "notepad"), ("key", "ctrl+v"), ("key", "Return"),
-    ]
 
+    async def fail(text):
+        rdp.commands.append(("unicode", text))
+        raise ComputerError("text delivery failed")
 
-async def test_typing_puts_the_clipboard_back():
-    rdp = RecordingRdp()
-    rdp.clipboard = "copied before typing"
-    await rdp.type_text("你好")
-    assert sent(rdp) == [("clipboard", "你好"), ("key", "ctrl+v"), ("clipboard", "copied before typing")]
-    assert rdp.clipboard == "copied before typing"
-
-
-async def test_a_paste_windows_does_not_take_fails_without_restarting_the_session():
-    rdp = RecordingRdp()
-    rdp.clipboard = "copied before typing"
-    rdp.fetches = False  # e.g. the focus is on a Save As dialog's file list, which takes no text
-    with pytest.raises(ComputerError, match="did not confirm taking the pasted text"):
-        await rdp.type_text("notepad\nmore")
-    # The lines after it are not typed: Enter could act on the wrong text, or press a dialog's default button.
-    assert sent(rdp) == [("clipboard", "notepad"), ("key", "ctrl+v"), ("clipboard", "copied before typing")]
-
-
-async def test_a_paste_after_one_windows_did_not_take_goes_through():
-    rdp = RecordingRdp()
-    rdp.clipboard = "copied before typing"
-    rdp.fetches = False
-    with pytest.raises(ComputerError):
-        await rdp.type_text("Case-Test.txt")
-    rdp.fetches = True  # the agent clicked the file name field
-    await rdp.type_text("Case-Test.txt")
-    assert sent(rdp) == [("clipboard", "Case-Test.txt"), ("key", "ctrl+v"), ("clipboard", "copied before typing")] * 2
-
-
-async def test_a_clipboard_that_cannot_be_set_pastes_nothing():
-    rdp = RecordingRdp()
-    rdp.xclip_error = "Can't open display: :1"
-    with pytest.raises(ComputerError, match="Can't open display"):
-        await rdp.type_text("你好")
-    assert sent(rdp) == []
-
-
-async def test_auto_typing_pastes_non_ascii_and_types_ascii():
-    rdp = RecordingRdp("auto")
-    await rdp.type_text("hello")
-    await rdp.type_text("你好")
-    assert sent(rdp) == [("type", "hello"), ("clipboard", "你好"), ("key", "ctrl+v")]
+    rdp._unicode_chunk = fail
+    with pytest.raises(ComputerError, match="text delivery failed"):
+        await rdp.type_text("first\nsecond")
+    assert rdp.commands == [("unicode", "first")]
 
 
 def moves(rdp: RecordingRdp) -> list[tuple]:
@@ -174,8 +120,8 @@ async def test_a_move_to_where_the_pointer_already_is_does_not_wait():
 async def test_a_drag_from_the_pointer_waits_only_for_moves_that_move_it():
     rdp = RecordingRdp()
     rdp.pointer = (430, 400)
-    await rdp.drag([(430, 400), (550, 550)], [])  # starts where the last drag ended
-    await rdp.drag([(10, 10), (10, 10)], [])  # nowhere: midpoint and end are the start
+    await rdp.drag([(430, 400), (550, 550)], [])
+    await rdp.drag([(10, 10), (10, 10)], [])
     assert moves(rdp) == [
         (False, 430, 400), (True, 490, 475), (True, 550, 550), (True, 549, 550), (True, 550, 550),
         (True, 10, 10), (False, 10, 10), (False, 10, 10), (True, 9, 10), (True, 10, 10),
@@ -221,7 +167,7 @@ async def test_one_notch_moves_there_and_turns_the_wheel_over_xtest():
 
     await rdp.scroll((300, 200), "down", 1, [])
     await rdp.scroll((10, 20), "up", 1, [])
-    await rdp.scroll(None, "right", 1, [])  # where the pointer is
+    await rdp.scroll(None, "right", 1, [])
 
     assert rdp._xtest.sent == [
         (X.MotionNotify, 300, 200), (X.ButtonPress, 5), (X.ButtonRelease, 5),
@@ -262,14 +208,6 @@ async def test_a_notch_without_a_display_fails_and_reconnects_next_time():
 async def test_a_command_that_hangs_is_stopped_and_fails():
     with pytest.raises(ComputerError, match="did not finish within 0.2 seconds and was stopped"):
         await RdpComputer(":1")._run("sleep", "30", timeout=0.2)
-
-
-async def test_typing_keystrokes_gets_more_time_than_other_commands():
-    rdp = RecordingRdp(type_mode="keys")
-    await rdp.type_text("a" * 2000)  # 40 ms a key: 80 s
-    await rdp.press([["enter"]])
-
-    assert rdp.timeouts == [computer_use.computers.rdp.COMMAND_TIMEOUT_SECONDS + 80, None]
 
 
 async def test_a_screenshot_without_a_display_fails_as_the_desktop(monkeypatch):

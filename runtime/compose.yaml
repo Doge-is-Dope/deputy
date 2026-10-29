@@ -13,7 +13,6 @@ services:
       RDP_DOMAIN: ${RDP_DOMAIN:-}
       RDP_SCREEN_WIDTH: "1280"
       RDP_SCREEN_HEIGHT: "800"
-      RDP_TYPE_MODE: ${RDP_TYPE_MODE:-paste}
       CU_DATA_DIR: /app/data
       # Who may use it (.env.example). "none" is safe only because the ports below are published on 127.0.0.1.
       CU_AUTH: ${CU_AUTH:-none}

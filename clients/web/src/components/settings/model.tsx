@@ -13,7 +13,7 @@ import { type Choice, type Status } from "@/lib/api"
 import { chooseModel, resetModels, resolve, useChoices } from "@/lib/choices"
 import { effortName, modelName } from "@/lib/format"
 import { useT } from "@/lib/i18n"
-import { Row } from "@/components/settings/layout"
+import { Card, Row, Section } from "@/components/settings/layout"
 
 // The agents whose models are chosen here, in this order: the main agent's are every other's default. One the runtime
 // adds is shown after them, by its own name.
@@ -46,47 +46,49 @@ export function Model({ status }: { status: Status | null }) {
 
   return (
     <>
-      <div className="mt-6 divide-y">
-        {status &&
-          order.map((agent) => {
-            const choice = resolve(status, agent, chosen)
-            return (
-              <div
-                key={agent}
-                className="flex min-h-16 flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3"
-              >
-                <div>{names[agent] ?? agent}</div>
-                <ModelPicker
-                  label={names[agent] ?? agent}
-                  choice={choice}
-                  byDefault={resolve(status, agent, {})}
-                  models={status.models.map((each) => each.id)}
-                  efforts={efforts(choice.model)}
-                  onChange={(change) => chooseModel(status, agent, change)}
+      <Section>
+        <Card>
+          {status &&
+            order.map((agent) => {
+              const choice = resolve(status, agent, chosen)
+              return (
+                <div
+                  key={agent}
+                  className="flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3"
+                >
+                  <div>{names[agent] ?? agent}</div>
+                  <ModelPicker
+                    label={names[agent] ?? agent}
+                    choice={choice}
+                    byDefault={resolve(status, agent, {})}
+                    models={status.models.map((each) => each.id)}
+                    efforts={efforts(choice.model)}
+                    onChange={(change) => chooseModel(status, agent, change)}
+                  />
+                </div>
+              )
+            })}
+          {status?.title_model && (
+            <Row label={t.settings.titleGeneration}>
+              <span className="inline-flex items-center gap-2 text-sm">
+                <ProviderIcon
+                  model={status.title_model.model}
+                  className="size-4"
                 />
-              </div>
-            )
-          })}
-        {status?.title_model && (
-          <Row label={t.settings.titleGeneration}>
-            <span className="inline-flex items-center gap-2 text-sm">
-              <ProviderIcon
-                model={status.title_model.model}
-                className="size-4"
-              />
-              {modelName(status.title_model.model)}
-              <span className="text-muted-foreground">
-                {effortName(status.title_model.effort)}
+                {modelName(status.title_model.model)}
+                <span className="text-muted-foreground">
+                  {effortName(status.title_model.effort)}
+                </span>
               </span>
-            </span>
-          </Row>
-        )}
-      </div>
+            </Row>
+          )}
+        </Card>
+      </Section>
       {/* Beside the dialog's close button, placed against the dialog rather than this page, so it stays there as the
           page scrolls. */}
       <Button
         variant="ghost"
-        className="absolute top-2 right-12"
+        className="absolute top-2.5 right-12"
         disabled={atDefaults}
         onClick={resetModels}
       >

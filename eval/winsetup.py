@@ -47,9 +47,8 @@ def step_script(step: dict) -> str:
     """One setup step as PowerShell: start an app or URL (target, args); close every window (close-windows); set a
     registry value (key, name, value: a DWORD), or reset a Store app's data (package), to put back a setting an earlier
     run changed; or, on a path under ev/ (C:\\ev), docs/ or desktop/, folder, download (url), file (empty, or with
-    text), recycle, or open (a file in its app, a folder in Explorer). The tasks keep their files in C:\\ev: the test
-    PC's antivirus blocks a script from writing to Documents and the Desktop, which apps and Explorer still may
-    (2026-10-19)."""
+    text), recycle, or open (a file in its app, a folder in Explorer). The tasks keep their files in C:\\ev: antivirus
+    software can block a script from writing to Documents and the Desktop, which apps and Explorer still may."""
     if step["type"] == "start":
         args = step.get("args")
         return f"Start-Process {ps(step['target'])}" + (f" -ArgumentList {', '.join(map(ps, args))}" if args else "")

@@ -5,6 +5,8 @@ import { defineConfig } from "vite"
 
 // The runtime's HTTP API (`computer-use-runtime`, port 8000 in docker compose).
 const api = process.env.CU_API_URL ?? "http://127.0.0.1:8000"
+// No other site may show the page in a frame, where a click meant for it could approve a step.
+const headers = { "Content-Security-Policy": "frame-ancestors 'none'" }
 
 // https://vite.dev/config/
 export default defineConfig({
@@ -20,5 +22,7 @@ export default defineConfig({
     proxy: {
       "/api": api,
     },
+    headers,
   },
+  preview: { headers },
 })

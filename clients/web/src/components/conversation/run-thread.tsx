@@ -1,14 +1,20 @@
-import { useEffect, useState } from "react"
+import { useEffect, useState, type ReactNode } from "react"
 import { RememberedChip } from "@/components/memory/lines"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
 import { useCopy } from "@/hooks/use-copy"
 import { type Pending } from "@/lib/api"
-import { problemReport, type Problem } from "@/lib/format"
+import { useNow } from "@/hooks/use-now"
+import { formatDuration, problemReport, type Problem } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { citedMemories, type Item, type Task, type Thread } from "@/lib/thread"
-import { CheckIcon, CopyIcon, NoSignIcon } from "@/components/icons"
+import {
+  CheckIcon,
+  ChevronRightIcon,
+  CopyIcon,
+  NoSignIcon,
+} from "@/components/icons"
 import {
   Commentary,
   Reply,
@@ -62,22 +68,28 @@ function Failure({ problem, at }: { problem: Problem; at: number | null }) {
   )
 }
 
-// How long the main agent's words may stop coming before it shows as thinking under them.
-const DRAFT_PAUSE_MS = 1200
+// A letter, digit or symbol: what a reply being written needs before it draws anything.
+const WORD = /[\p{L}\p{N}\p{So}]/u
 
 // No replies seen being written, for a conversation drawn from its log alone.
 const NONE: ReadonlySet<number> = new Set()
+// Nothing sent to steer it.
+const NO_MESSAGES: Pending[] = []
 
-// How wide each line of a reply still loading is drawn: in paragraphs, as a reply's are, each one's last short.
+// How wide each line of a reply still loading is drawn: in paragraphs, as a reply's are, each one's last short. A turn
+// draws the first three; a conversation opening draws all of them, about a view's height.
 const REPLY_LINES = [
   ["w-full", "w-11/12", "w-full", "w-3/4"],
   ["w-full", "w-5/6", "w-2/5"],
   ["w-11/12", "w-1/2"],
+  ["w-full", "w-11/12", "w-full", "w-5/6", "w-1/3"],
+  ["w-full", "w-11/12", "w-full", "w-1/2"],
+  ["w-5/6", "w-full", "w-full", "w-2/3"],
 ]
 
 /** Delay the loading placeholder to avoid flashing. Match the final turn layout,
  * and mount it separately so the real turn starts its own entrance animation. */
-export function TurnSkeleton() {
+export function TurnSkeleton({ long = false }: { long?: boolean }) {
   const t = useT()
   return (
     // A turn still to come, marked where it starts as the turn is (run-view.tsx places it).
@@ -93,7 +105,7 @@ export function TurnSkeleton() {
       </div>
       {/* Paragraphs spaced as Markdown spaces a reply's. */}
       <div className="space-y-2.5">
-        {REPLY_LINES.map((lines, paragraph) => (
+        {REPLY_LINES.slice(0, long ? undefined : 3).map((lines, paragraph) => (
           <div key={paragraph}>
             {lines.map((width, line) => (
               <div key={line} className="flex h-6 items-center">
@@ -107,32 +119,89 @@ export function TurnSkeleton() {
   )
 }
 
+/** How long a session has worked, over its work once there is some: counting from the start while it works, and once
+ * its final reply has come, the line the work before that reply folds under (`fold`), a rule under it throughout. The
+ * same line throughout, so nothing moves as it turns from one to the other. It opens its room as it comes, its gap to
+ * the row under it inside. Drawn apart from the rows, so its clock draws only itself again. */
+function WorkedLine({
+  started,
+  until,
+  fold,
+  open,
+  onOpen,
+}: {
+  started: number
+  until: number | null // when the session ended; counting until then
+  fold: boolean
+  open: boolean
+  onOpen: (open: boolean) => void
+}) {
+  const t = useT()
+  const now = useNow(until === null)
+  return (
+    <div className="mb-0 grid grid-rows-[1fr] transition-[grid-template-rows,opacity] duration-300 ease-(--ease-out) motion-reduce:transition-none in-data-settled:starting:grid-rows-[0fr] in-data-settled:starting:opacity-0">
+      <div className="min-h-0 overflow-hidden">
+        <div className="pb-6">
+          <button
+            type="button"
+            disabled={!fold}
+            aria-expanded={fold ? open : undefined}
+            onClick={() => onOpen(!open)}
+            className={cn(
+              "flex w-full items-center gap-1 border-b border-border pb-2 text-left text-sm leading-6 text-muted-foreground tabular-nums transition-colors duration-300 ease-(--ease-out) outline-none",
+              fold && "hover:text-foreground focus-visible:text-foreground"
+            )}
+          >
+            {t.run.workedFor(formatDuration((until ?? now) - started))}
+            {fold && (
+              <ChevronRightIcon
+                aria-hidden
+                className={cn(
+                  "size-3.5 shrink-0 transition-[rotate,opacity] duration-250 ease-(--ease-out) motion-reduce:transition-none in-data-settled:starting:opacity-0",
+                  open && "rotate-90"
+                )}
+              />
+            )}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+/** The work before a session's final reply, under its worked line: shut, or open as it was. In a settled conversation
+ * it shuts as the reply comes: the rows, drawn again here, are simply there for the first frame (index.css
+ * data-refolded), where they were. Its gap under the line is its own, inside the fold, so shut it takes no room. One
+ * opened later is shut already. */
+function WorkFold({ open, children }: { open: boolean; children: ReactNode }) {
+  const [fresh, setFresh] = useState(true)
+  useEffect(() => {
+    const frame = requestAnimationFrame(() => setFresh(false))
+    return () => cancelAnimationFrame(frame)
+  }, [])
+  return (
+    <div
+      inert={!open}
+      data-open={open || undefined}
+      className="-mt-6 grid grid-rows-[0fr] opacity-0 transition-[grid-template-rows,opacity] duration-300 ease-(--ease-out) motion-reduce:transition-none in-data-settled:starting:grid-rows-[1fr] in-data-settled:starting:opacity-100 data-open:grid-rows-[1fr] data-open:opacity-100"
+    >
+      <div className="min-h-0 overflow-hidden">
+        <div data-refolded={fresh || undefined} className="space-y-6 pt-6">
+          {children}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 /** The task of a work item that is on the computer and under way, if any. */
 function computerTask(item: Extract<Item, { kind: "task" | "agents" }>) {
   const tasks = item.kind === "task" ? [item.task] : item.tasks
   return (
     tasks.find(
-      (task) => task.outcome === "running" && task.tool === "computer_use"
+      (task) => task.outcome === "running" && task.agent === "computer"
     ) ?? null
   )
-}
-
-/**
- * Whether the agent has answered the message at `index` of the items shown, read at `time`: it said something after
- * it, or took up work after it (a task that started after; one running since before goes on under it).
- */
-function answeredAfter(items: Item[], index: number, time: number): boolean {
-  return items
-    .slice(index + 1)
-    .some(
-      (item) =>
-        item.kind === "reply" ||
-        item.kind === "commentary" ||
-        item.kind === "held" ||
-        (item.kind === "task" && item.task.started > time) ||
-        (item.kind === "agents" &&
-          item.tasks.some((task) => task.started > time))
-    )
 }
 
 /** Render messages and replies in order, with delegated work grouped at its end.
@@ -140,6 +209,8 @@ function answeredAfter(items: Item[], index: number, time: number): boolean {
 export function RunThread({
   run,
   thread,
+  sent = null,
+  dropped = false,
   continued = false,
   latest = false,
   visible = true,
@@ -150,14 +221,17 @@ export function RunThread({
   disconnected = false,
   approving,
   takingOver = false,
-  pending = [],
   draft = "",
+  answering = false,
+  steering = NO_MESSAGES,
   streamed = NONE,
   onOpenShot,
   onOpenLive,
 }: {
   run: string
   thread: Thread
+  sent?: string | null // what the user sent, drawn with the agent thinking under it until the log comes
+  dropped?: boolean // its log stopped coming and waits to connect again
   continued?: boolean // carries on the run before with the same goal, so the goal is not shown again
   latest?: boolean // the conversation's last run, whose last reply keeps its buttons showing
   visible?: boolean // the conversation is shown: it stays hidden until all its runs have come
@@ -168,21 +242,19 @@ export function RunThread({
   disconnected?: boolean // the desktop can't be reached
   approving: string | null // the step the run waits for the user to approve, which the composer asks: what it will do
   takingOver?: boolean // the run waits for the user to take over the desktop, which the composer asks
-  pending?: Pending[] // sent while the run works, and not read by its agents yet
   draft?: string // the reply the main agent is writing, not logged yet
+  steering?: Pending[] // sent to steer the session, drawn at once, until its log has them
+  answering?: boolean // that reply is its final one, as its model said from its start
   streamed?: ReadonlySet<number> // its logged replies this page saw being written, by their model event's place
   onOpenShot: (name: string) => void
   onOpenLive: () => void
 }) {
   const t = useT()
-  // Messages this page saw waiting for the agent: each says 「已讀」 once it is read. A conversation opened later, or
-  // reloaded, has none waiting, and marks nothing.
-  const [waited, setWaited] = useState<ReadonlySet<string>>(new Set())
-  if (pending.some((message) => !waited.has(message.id)))
-    setWaited(new Set([...waited, ...pending.map((message) => message.id)]))
   // The work groups the user opened, by key: kept here, since a group under way is drawn apart from those done, and
   // drawn again among them once it is done.
   const [opened, setOpened] = useState<ReadonlySet<string>>(new Set())
+  // The work before the final reply, opened again by the user.
+  const [workOpen, setWorkOpen] = useState(false)
   const open = (key: string, open: boolean) =>
     setOpened((was) => {
       const now = new Set(was)
@@ -213,22 +285,22 @@ export function RunThread({
   }
   // Settled a moment after the conversation is first drawn: from then on, what arrives rises into place (index.css).
   // Drawn only once shown: what came while the conversation was hidden was there when it opened.
-  const shown = thread.goal !== null
+  const goal = thread.goal ?? sent
+  const shown = goal !== null
   const [settled, setSettled] = useState(false)
   useEffect(() => {
     if (!shown || !visible || settled) return
     const timer = window.setTimeout(() => setSettled(true), 400)
     return () => window.clearTimeout(timer)
   }, [shown, visible, settled])
-  // The main agent's words, once they stop coming while its call goes on: it is writing a call now (work to hand over,
-  // its plan), which takes a while, so it shows as thinking again under them.
-  const [stalled, setStalled] = useState<string | null>(null)
-  useEffect(() => {
-    if (!draft) return
-    const timer = window.setTimeout(() => setStalled(draft), DRAFT_PAUSE_MS)
-    return () => window.clearTimeout(timer)
-  }, [draft])
-  const writingCall = !!draft && stalled === draft
+  // The words as they come, once there is one: markup alone (a heading's ##, a list's -) draws nothing, and the thinking
+  // row would fold shut over a blank.
+  const words = WORD.test(draft) ? draft : ""
+  // The reply its model said from its start is the final one, by its place among those this page saw written: what
+  // led to it folds away as it starts, and stays folded once it is logged, until the session ends.
+  const [answered, setAnswered] = useState<number | null>(null)
+  if (answering && words && answered !== streamed.size)
+    setAnswered(streamed.size)
   const end = thread.end
   const interrupted = loaded && !active && !end
   // A run with no reply to show because the main agent itself failed says why, in words (a desktop that cannot be used
@@ -301,19 +373,11 @@ export function RunThread({
   const written = [...streamed].sort((a, b) => a - b)
   // Whether a reply is being written, not what: the rows above it are drawn again only when that changes, not on each
   // frame of the reply.
-  const writing = !!draft
-  const rows = items.map((item, index) => {
+  const writing = !!words
+  const rows = items.map((item) => {
     switch (item.kind) {
       case "message":
-        return (
-          <UserMessage
-            key={item.id}
-            text={item.text}
-            time={item.time}
-            read={waited.has(item.id)}
-            answered={writing || answeredAfter(items, index, item.time)}
-          />
-        )
+        return <UserMessage key={item.id} text={item.text} time={item.time} />
       case "reply":
         return (
           <Reply
@@ -323,7 +387,7 @@ export function RunThread({
                 : item.key
             }
             text={item.text}
-            time={end && item === lastReply ? end.time : undefined}
+            time={item.time}
             // What the run used, every agent, logged as it ends.
             about={
               end && item === lastReply
@@ -340,8 +404,6 @@ export function RunThread({
             }
             pinned={latest && !writing && item === lastReply}
             rise={!streamed.has(item.at)}
-            // Words before the run's last reply were said on the way: no actions, as under commentary.
-            actions={item === lastReply}
           />
         )
       case "commentary":
@@ -385,41 +447,109 @@ export function RunThread({
             {item.text}
           </p>
         )
+      default:
+        return item satisfies never // a new kind of row does not compile until it is drawn
     }
   })
+  // The final reply's place: the session's last, once it ended replied; while no task works, the one its model said
+  // was final from its start, as it is written (after every row) and once it is logged, while nothing came after it.
+  const answer =
+    answered === null
+      ? -1
+      : items.findIndex(
+          (item) =>
+            item.kind === "reply" &&
+            streamed.has(item.at) &&
+            written.indexOf(item.at) === answered
+        )
+  const final =
+    end?.stop_reason === "replied" && lastReply
+      ? items.indexOf(lastReply)
+      : working.length > 0
+        ? -1
+        : answering && words
+          ? items.length
+          : answer >= 0 && answer === items.length - 1
+            ? answer
+            : -1
+  // The session's work: what it did and said before its final reply, or so far (a turn of work, words on the way, a
+  // message meanwhile, a reply with more after it); not a reply alone, or what it recalled. Once the final reply has
+  // come, or starts, the work folds under the worked line.
+  const work = items.filter(
+    (item, index) =>
+      item.kind !== "memory" &&
+      (final < 0
+        ? item !== lastReply || index < items.length - 1
+        : index < final)
+  )
+  const fold = final > 0 && work.length > 0
   // In one list with the rows, so a reply keeps its key from draft to logged.
   const all = [
-    ...rows,
+    thread.started !== null && work.length > 0 ? (
+      <WorkedLine
+        key="worked"
+        started={thread.started}
+        until={end?.time ?? (active ? null : (thread.last ?? thread.started))}
+        fold={fold}
+        open={workOpen}
+        onOpen={setWorkOpen}
+      />
+    ) : null,
+    ...(fold
+      ? [
+          <WorkFold key="work" open={workOpen}>
+            {rows.slice(0, final)}
+          </WorkFold>,
+          ...rows.slice(final),
+        ]
+      : rows),
     // What the main agent is writing, where it will stay once written. Without the line break a model ends its words with, which its logged reply drops
     // (lib/thread.ts) and which would be a blank line until then.
-    draft ? (
+    words ? (
       <Reply
         key={`written-${written.length}`}
-        text={draft.trimEnd()}
+        text={words.trimEnd()}
         writing
         actions={false}
       />
     ) : null,
-    // The main agent working out what to say, until the first of its words comes; and again once they have stopped
-    // while it still writes. Last of all, under the work under way as ChatGPT's indicator is, and
+    // What the user sent to steer it, where it goes: after what the main agent is writing, which it reads next. Under
+    // the same key as once its log has it, there in the conversation.
+    ...steering
+      .filter(
+        (message) =>
+          !items.some(
+            (item) => item.kind === "message" && item.id === message.id
+          )
+      )
+      .map((message) => <UserMessage key={message.id} text={message.text} />),
+    // The main agent working out what to say, until the first of its words comes. Last of all, under the work under way,
+    // and
     // folding open and shut in its place rather than coming and going, so nothing above it moves.
-    active ? (
+    // Kept for what was just sent too, whose run the status may not list as working yet: gone and back, it would blink.
+    active || sent !== null ? (
       <ThinkingRow
         key="thinking"
-        shown={thread.thinking && (!draft || writingCall)}
+        replaced={!!words}
+        shown={thread.goal === null ? !dropped : thread.thinking && !words}
       />
     ) : null,
   ]
 
   return (
     // Marked where the turn starts, with what the user sent: the conversation places it at the top of its view.
-    <div data-turn className="space-y-6" data-settled={settled || undefined}>
+    <div
+      data-turn
+      data-run={run}
+      className="space-y-6"
+      data-settled={settled || undefined}
+    >
       {continued ? (
         <p className="flex dashed-rule items-center gap-3 text-xs text-muted-foreground">
           {t.run.continued}
         </p>
       ) : (
-        <UserMessage text={thread.goal!} time={thread.started ?? undefined} />
+        <UserMessage text={goal!} time={thread.started ?? undefined} />
       )}
 
       {all}

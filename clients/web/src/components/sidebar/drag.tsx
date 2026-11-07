@@ -7,7 +7,7 @@ import {
 } from "@dnd-kit/core"
 import { getEventCoordinates } from "@dnd-kit/utilities"
 
-import { type Conversation } from "@/lib/conversations"
+import { type Conversation } from "@/lib/api"
 import { FolderIcon } from "@/components/icons"
 
 // The row a dragged project is carried by (DragOverlay): its folder, shut as the project is while dragged

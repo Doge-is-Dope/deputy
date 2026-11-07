@@ -3,17 +3,18 @@
 import argparse
 import struct
 import sys
+import time
 from datetime import datetime
 from pathlib import Path
 
 from computer_use_cli import render
-from computer_use_cli.client import ApiError, Client
+from computer_use_cli.client import ApiError, Client, Follow
 
 # Default model-call budget per desktop task; --max-steps overrides it.
 MAX_STEPS = 60
-# Exit codes: the computer-use agent replied; the task ended another way, the desktop was not used, or the command
-# could not run; the run was stopped.
-REPLIED, OTHER, STOPPED = 0, 2, 130
+# Exit codes: the computer-use agent replied; `status --idle` found the runtime busy; the task ended another way, the
+# desktop was not used, or the command could not run; the run was stopped.
+REPLIED, BUSY, OTHER, STOPPED = 0, 1, 2, 130
 
 
 def choices(main: list[str] | None, computer: list[str] | None) -> dict[str, dict[str, str]] | None:
@@ -45,42 +46,45 @@ def refused(error: ApiError, thread: str | None = None) -> int:
 
 
 def follow(client: Client, run: str) -> int:
-    """Show a run's events until it ends, then its reply and how its desktop task ended. Ctrl-C stops the run, and
-    its end is still shown; a second Ctrl-C leaves without waiting."""
-    last, end, stopping = -1, None, False
+    """Show what the session `run` began logs until it is quiet (its turns' and its tasks' logs), then the main agent's
+    last reply and how its last desktop task ended, from that task's own log: one the user stopped wakes no turn to say
+    so. Ctrl-C stops the conversation's session, and its end is still shown; a second Ctrl-C leaves without waiting."""
+    feed, starts, end, desktop, stopping = Follow(client, run), {}, None, None, False
     while True:
         try:
-            done = False
-            for event in client.events(run, last):
-                if event.kind == "line":
-                    last = event.index if event.index is not None else last + 1
-                    if (text := render.line(event.data)) is not None:
-                        print(text, flush=True)
-                    if event.data.get("type") == "end":
-                        end = event.data
-                elif event.kind == "done":
-                    done = True
-            if done:
-                break
+            for log, event in feed.lines():
+                kind = event.get("type")
+                if kind == "start":
+                    starts[log] = event
+                task = starts.get(log, {}).get("kind") == "task"
+                if kind == "end" and task:
+                    print(f"      {starts[log]['agent']} {event['stop_reason']}: {starts[log]['goal']}", flush=True)
+                    if starts[log]["agent"] == "computer":  # how the agent ended, or that it was stopped or failed
+                        desktop = event.get("computer") or event["stop_reason"]
+                elif (text := render.line(event)) is not None:
+                    print(text, flush=True)
+                if kind == "end" and not task:
+                    end = event
+            break
         except KeyboardInterrupt:
             if stopping:
                 raise
             stopping = True
             print("\nStopping the run…", file=sys.stderr, flush=True)
             try:
-                client.stop(run)
+                client.stop(feed.thread or run)
             except ApiError as error:
                 if error.status != 409:  # 409: it had ended already
                     raise
     if end is None:
         print(f"\nThe run ended without saying how.\nRun: {run}", file=sys.stderr)
         return OTHER
-    if end.get("stop_reason") == "cancelled":
+    if stopping or end.get("stop_reason") == "cancelled":
         print(f"\nStopped.\nRun: {run}", file=sys.stderr)
         return STOPPED
     print(f"\nAgent: {end.get('summary', '')}")
-    print(f"Desktop: {end.get('computer') or 'not used'}\nRun: {run}")
-    return REPLIED if end.get("computer") == "replied" else OTHER
+    print(f"Desktop: {desktop or 'not used'}\nRun: {run}")
+    return REPLIED if desktop == "replied" else OTHER
 
 
 def send(client: Client, goal: str, args: argparse.Namespace, thread: str | None = None, project: str | None = None
@@ -107,7 +111,7 @@ def cmd_run(client: Client, args: argparse.Namespace) -> int:
 
 def cmd_resume(client: Client, args: argparse.Namespace) -> int:
     """Send a run's message again, in its conversation: the given run, or the latest."""
-    run = args.run or max((each["id"] for each in client.runs()), default=None)
+    run = args.run or next((each["latest"]["id"] for each in client.conversations(1)), None)
     if run is None:
         print("No runs in the supported log format to continue.", file=sys.stderr)
         return OTHER
@@ -190,11 +194,43 @@ def cmd_status(client: Client, args: argparse.Namespace) -> int:
         print(f"Running: {item['run']} in conversation {item['thread']}.")
     if approval := status.get("approval"):
         print(f"Waiting for your approval: {approval['consequence']}")
+    busy = status["active"] or status["running"] or control["owner"] != "agent" or not control.get("ready", True)
+    return BUSY if args.idle and busy else 0
+
+
+def cmd_agents(client: Client, args: argparse.Namespace) -> int:
+    """List every agent at work, in every conversation, by the log `stop` takes: which agent, for how long, and the
+    task it was handed."""
+    rows = []
+    for item in client.status()["running"]:
+        for task in item.get("tasks", []):
+            start = client.start_of(task)
+            seconds = int(time.time() - start["time"])
+            rows.append((task, start.get("agent", ""), f"{seconds // 60}:{seconds % 60:02d}",
+                         start.get("title") or start.get("goal", "")))
+    if not rows:
+        print("No agent at work.")
+    for task, agent, elapsed, title in rows:
+        print(f"{task}  {agent:<8} {elapsed:>5}  {title}")
+    return 0
+
+
+def cmd_stop(client: Client, args: argparse.Namespace) -> int:
+    """Stop one agent at work, by its log as `agents` lists it; the others and the main agent go on."""
+    try:
+        client.stop_run(args.run)
+    except ApiError as error:
+        if error.status != 409:
+            raise
+        print(f"Not in progress: {args.run}", file=sys.stderr)
+        return OTHER
+    print(f"Stopped {args.run}.")
     return 0
 
 
 def cmd_export(client: Client, args: argparse.Namespace) -> int:
-    events, files = client.export(args.run, Path(args.folder))
+    """Write the logs of the session a run began, its turns' and its tasks', each in a folder of its own."""
+    events, files = client.export_session(args.run, Path(args.folder))
     print(f"Wrote {args.run} to {args.folder}: {len(events)} events, {len(files)} files.")
     return 0
 
@@ -208,6 +244,8 @@ COMMANDS = {
     "approve": cmd_approve,
     "reject": cmd_reject,
     "status": cmd_status,
+    "agents": cmd_agents,
+    "stop": cmd_stop,
     "export": cmd_export,
 }
 
@@ -238,7 +276,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("approve", help="Approve the step the agent is waiting for you to approve")
     reject = sub.add_parser("reject", help="Decline the step the agent is waiting for you to approve")
     reject.add_argument("--message", default="", help="why, or what to do instead; the agent reads it")
-    sub.add_parser("status", help="Who has the desktop and which runs are going")
+    status = sub.add_parser("status", help="Who has the desktop and which runs are going")
+    status.add_argument("--idle", action="store_true",
+                        help="exit 1 unless no run is going and the agent has control: safe to restart the runtime")
+    sub.add_parser("agents", help="List the agents at work, by the id stop takes")
+    stop = sub.add_parser("stop", help="Stop one agent at work; the others and the main agent go on")
+    stop.add_argument("run", help="the agent's id, as agents lists it")
     export = sub.add_parser("export", help="Save a run's record and screenshots to a folder")
     export.add_argument("run")
     export.add_argument("folder")

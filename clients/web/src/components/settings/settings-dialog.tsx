@@ -13,7 +13,7 @@ import {
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { type Status } from "@/lib/api"
 import { useT } from "@/lib/i18n"
-import { closeSettings, useOpenedSettings } from "@/lib/memory"
+import { closeSettings, useOpenedSettings } from "@/lib/settings"
 import { General } from "@/components/settings/general"
 import { Appearance } from "@/components/settings/appearance"
 import { Desktop } from "@/components/settings/desktop"
@@ -22,7 +22,7 @@ import { Permissions } from "@/components/settings/permissions"
 import { Account } from "@/components/settings/account"
 import { MemoryPage } from "@/components/settings/memory"
 
-type Page =
+export type SettingsPage =
   | "general"
   | "appearance"
   | "desktop"
@@ -31,10 +31,11 @@ type Page =
   | "memory"
   | "account"
 
-// What this browser keeps, then what the runtime runs with, in one list as ChatGPT's and Claude's settings menus are.
-// Pages are named in the interface's language. A page is its entry here: its icon, and what it shows.
-const PAGES: {
-  id: Page
+// What this browser keeps, then what the runtime runs with, in one list.
+// Pages are named in the interface's language. A page is its entry here: its icon, and what it shows. The search
+// finds them by name too.
+export const PAGES: {
+  id: SettingsPage
   icon: ComponentType<SVGProps<SVGSVGElement>>
   Content: ComponentType<{
     status: Status | null
@@ -54,18 +55,14 @@ const PAGES: {
 /** Browser settings for language, appearance, models, approvals and memory.
  * Runtime connections are read-only. Opened from the sidebar, or from anywhere at a page (openSettings). */
 export function SettingsDialog({
-  open,
-  onOpenChange,
   status,
   offline,
 }: {
-  open: boolean
-  onOpenChange: (open: boolean) => void
   status: Status | null
   offline: boolean
 }) {
   const t = useT()
-  const [page, setPage] = useState<Page>("general")
+  const [page, setPage] = useState<SettingsPage>("general")
   // Opened at a page from elsewhere, as a memory's line in the conversation opens it at that memory.
   const asked = useOpenedSettings()
   const [seen, setSeen] = useState(asked)
@@ -74,17 +71,13 @@ export function SettingsDialog({
     const at = PAGES.find(({ id }) => id === asked.page)
     if (asked.open && at) setPage(at.id)
   }
-  const change = (next: boolean) => {
-    if (!next) closeSettings()
-    onOpenChange(next)
-  }
   const { Content } = PAGES.find(({ id }) => id === page)!
   // Opened, the focus is on the window itself rather than its first page, so no page shows a focus ring before the
   // user moves to one; Tab goes on from there.
   const popup = useRef<HTMLDivElement>(null)
 
   return (
-    <Dialog open={open || asked.open} onOpenChange={change}>
+    <Dialog open={asked.open} onOpenChange={(next) => !next && closeSettings()}>
       {/* The whole screen on a phone, as the search is. */}
       <DialogContent
         ref={popup}
@@ -130,11 +123,7 @@ export function SettingsDialog({
           <h2 className="text-xl tracking-tight md:text-2xl">
             {t.settings[page]}
           </h2>
-          <Content
-            status={status}
-            offline={offline}
-            onClose={() => change(false)}
-          />
+          <Content status={status} offline={offline} onClose={closeSettings} />
         </main>
       </DialogContent>
     </Dialog>

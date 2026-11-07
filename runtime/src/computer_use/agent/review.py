@@ -1,18 +1,16 @@
 """Auto review of actions the computer agent flags for approval.
 
-Only an explicit allow for a low- or medium-risk action covered by the user's
-words skips manual approval. Unclear, failed, unreadable or timed-out reviews
-fall back to the user. Unflagged actions never reach the reviewer.
+Only an explicit allow for a low- or medium-risk action covered by the user's words skips manual approval; any
+unclear, failed, unreadable or timed-out review falls back to the user.
 
-Only user messages authorize actions. Screens and agent statements are evidence;
-successful action records show input was sent, not that the goal was achieved.
-For deletes and overwrites, the named target must also occur verbatim in the
-user's messages or recorded action input; this check does not establish identity
-or authorization."""
+Only user messages authorize actions. Screens and agent statements are evidence; a successful action record shows input
+was sent, not that the goal was achieved. For deletes and overwrites, the named target must also occur verbatim in the
+user's messages or recorded action input; this establishes neither identity nor authorization."""
 
 import asyncio
+import json
 import time
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Literal
 
@@ -20,11 +18,13 @@ from langchain_core.language_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, Field
 
-from computer_use.agent.tools import image_block
-from computer_use.agent.trajectory import usage_of
+from computer_use.tools.common import image_block
+from computer_use.agent.usage import usage_of
+from computer_use.events import shown_args
 from computer_use.prompts.review import REVIEW_PROMPT, review_request
+from computer_use.storage import MAIN
 
-# How long a review may take before the user is asked instead; a review that times out proves nothing either way.
+# A review that times out proves nothing either way, so the user is asked.
 REVIEW_SECONDS = 30
 
 
@@ -53,11 +53,8 @@ class Verdict:
 
 
 def allows(review: Review, sources: Sequence[str]) -> bool:
-    """Allow only authorized, non-high-risk steps with a verbatim target match when named.
-
-    sources contains user messages and sent action input. Matching does not prove
-    target identity, ownership or authorization. Names are case- and space-sensitive;
-    an empty target skips the match. Quoted evidence is retained only for the log."""
+    """Allow only authorized, non-high-risk steps whose named target occurs verbatim (case- and space-sensitive) in
+    `sources`, the user's messages and sent action input. An empty target skips the match; evidence is only logged."""
     if review.decision != "allow" or review.risk == "high" or review.authorization not in ("high", "medium"):
         return False
     if not review.target.strip():
@@ -65,13 +62,22 @@ def allows(review: Review, sources: Sequence[str]) -> bool:
     return any(review.target in source for source in sources)
 
 
+def action_records(events: Iterable[dict]) -> list[str]:
+    """Each action the computer-use agent sent, as the tool and arguments the runtime recorded, for auto review.
+    Only actions whose input went out ("success"; not that a file was saved, say) count: not one that failed, was held
+    back or declined, nor a batch that stopped partway."""
+    return [
+        f"{event['tool']} {json.dumps(shown_args(event['args']), ensure_ascii=False)}"
+        for event in events
+        if event["type"] == "action" and event.get("agent") != MAIN and event.get("status") == "success"
+    ]
+
+
 async def review_step(
     model: BaseChatModel, context: str, step: str, png: bytes | None, sources: Sequence[str] = ()
 ) -> Verdict:
-    """Review one step: the conversation as the computer-use agent got it plus what it did since (`context`), the step
-    and its arguments (`step`), the screen it decided from with its target marked, and where its target must be named
-    (`sources`: the user's messages and the actions whose input was sent). A review that fails, takes too long or
-    cannot be read allows nothing: the user is asked."""
+    """Review one step against the conversation and actions so far (`context`) and the screen it decided from. A review
+    that fails, takes too long or cannot be read allows nothing: the user is asked."""
     message = HumanMessage(content=[{"type": "text", "text": review_request(context, step)},
                                     *([image_block(png)] if png else [])])
     started = time.monotonic()

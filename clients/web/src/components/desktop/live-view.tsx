@@ -1,7 +1,7 @@
 import {
-  useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type RefObject,
@@ -25,7 +25,7 @@ import {
 } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
-import { useRunLog } from "@/hooks/use-api"
+import { useRunLog } from "@/hooks/use-run-events"
 import { useCopy } from "@/hooks/use-copy"
 import { NUDGE_MS, useFlash } from "@/hooks/use-flash"
 import { useLive } from "@/hooks/use-live"
@@ -51,6 +51,7 @@ import {
 } from "@/lib/liquid-takeover"
 import { useT } from "@/lib/i18n"
 import { reducedMotion } from "@/lib/motion"
+import { mergeSession } from "@/lib/logs"
 import { doingNow, runningTask, stepUnderWay, type Task } from "@/lib/thread"
 
 // After the pill switches, its button ignores clicks this long: the return button appears where the takeover
@@ -64,13 +65,6 @@ const HOLD_MS = 500
 // How long the desktop stays unavailable before the user is asked to report it: most problems clear up on their own
 // within seconds (a restart, a dropped connection), and a report of one of those is noise.
 const REPORT_AFTER_MS = 30_000
-
-// The takeover frame is drawn as one thick stroke along its centerline (index.css: stroke-width): BAND wide, with
-// RADIUS outer corners. Its box is the screen's plus 10px on each side (and 1px more below, under the pill), so the
-// band reaches 1px over the screen. The screen is square, so the outer corners' radius is those 10px: inside and out
-// the band's edges stay the same distance apart all round, as a monitor's bezel round its screen.
-const BAND = 11
-const RADIUS = 10
 
 // When control changes hands the pill changes in one continuous motion rather than in steps: the label and the button
 // morph to their new widths at once, on index.css's --ease-in-out (WAAPI can't read the variable), slow at
@@ -97,22 +91,6 @@ const ROLL_IN_LATE_MS = 90
 const RESIZE: KeyframeAnimationOptions = {
   duration: 300,
   easing: EASE_IN_OUT,
-}
-
-/** The frame's box, and where the tab's two ends meet its bottom edge (the lines start there). */
-type Outline = { width: number; height: number; left: number; right: number }
-
-/** Half of the frame's centerline, from one end of the tab round one side to the middle of the top. */
-function framePath(
-  { width, height, left, right }: Outline,
-  side: "left" | "right"
-) {
-  const c = BAND / 2
-  const r = RADIUS - c
-  const bottom = height - c
-  if (side === "left")
-    return `M${left} ${bottom}H${c + r}A${r} ${r} 0 0 1 ${c} ${bottom - r}V${c + r}A${r} ${r} 0 0 1 ${c + r} ${c}H${width / 2}`
-  return `M${right} ${bottom}H${width - c - r}A${r} ${r} 0 0 0 ${width - c} ${bottom - r}V${c + r}A${r} ${r} 0 0 0 ${width - c - r} ${c}H${width / 2}`
 }
 
 /**
@@ -308,25 +286,29 @@ export function LiveView({
   // Beside the conversation, the composer asks for an approval; covering it, the live view does.
   const approval = !onExpand || expanded || fullscreen ? asked : null
   const owner = status?.control.owner ?? "agent"
-  const userHasControl = owner === "user"
+  const user = owner === "user"
   const { stream, state, send, pointer } = useLive(status?.ice_servers ?? null)
   // The run at work, from its own events: the line over the screen says what it does, and while the agent on the
   // desktop works out its next step (none under way), its pointer swings.
-  const events = useRunLog(status?.active ?? null)
+  const active = status?.active ?? null
+  const log = useRunLog(active)
+  const events = useMemo(
+    () => (active ? mergeSession([{ id: active, events: log }], false).events : log),
+    [active, log]
+  )
   const task = runningTask(useThread(events))
-  const thinking = task?.tool === "computer_use" && !stepUnderWay(task)
+  const thinking = task?.agent === "computer" && !stepUnderWay(task)
   // The control the user asked for, until the runtime answers. The pill shows who has control, so its words change
   // once, when the runtime says so.
   const [pending, setPending] = useState<Owner | null>(null)
   const [slow, setSlow] = useState(false)
-  const shown = owner
   const lockedUntil = useRef(0)
-  const lastShown = useRef(shown)
+  const lastShown = useRef(owner)
   useEffect(() => {
-    if (lastShown.current === shown) return
-    lastShown.current = shown
+    if (lastShown.current === owner) return
+    lastShown.current = owner
     lockedUntil.current = performance.now() + SWITCH_LOCK_MS
-  }, [shown])
+  }, [owner])
   // A takeover or return that didn't happen, said over the screen for a moment; and a takeover that did, after which
   // the keyboard goes to the desktop.
   const [failed, setFailed] = useFlash<Owner>(NUDGE_MS)
@@ -339,34 +321,29 @@ export function LiveView({
   ) => {
     if (pending || at < lockedUntil.current) return
     lockedUntil.current = at + SWITCH_LOCK_MS
-    aim()
     setFailed(null)
     setPending(next)
     const timer =
       next === "user"
         ? window.setTimeout(() => setSlow(true), TAKING_AFTER_MS)
         : 0
-    try {
-      if (await ask()) {
-        if (next === "user") setTookOver(true)
-      } else {
-        setFailed(next)
-      }
-    } finally {
-      window.clearTimeout(timer)
-      setPending(null)
-      setSlow(false)
+    if (await ask()) {
+      if (next === "user") setTookOver(true)
+    } else {
+      setFailed(next)
     }
+    window.clearTimeout(timer)
+    setPending(null)
+    setSlow(false)
   }
   const waiting = pending === "user"
-  const user = shown === "user"
   // What the pill says: who has control, or, while a slow takeover waits on the runtime, only the button, saying so.
-  const face = waiting && slow && !user ? "taking" : shown
+  const face = waiting && slow && !user ? "taking" : owner
 
   const problem = problemOf(status, offline)
 
-  // Choose canvas or the CSS fallback before first paint; reduced motion uses CSS.
-  const [liquid] = useState(() => !reducedMotion() && canDrawLiquid())
+  // The canvas where the browser can draw it, chosen before first paint; else a plain ring (index.css).
+  const [liquid] = useState(canDrawLiquid)
   const stage = useRef<HTMLDivElement>(null)
   const pill = useRef<HTMLDivElement>(null)
   const screenBox = useRef<HTMLDivElement>(null)
@@ -389,56 +366,6 @@ export function LiveView({
   // Nobody operates a desktop that can't be reached, so no frame then.
   const framed = !problem && user
   useLayoutEffect(() => surface.current?.setTarget(framed), [framed])
-
-  // Measure the takeover origin on load, resize and clicks, not every render,
-  // so transitions retain their starting point.
-  const frame = useRef<SVGSVGElement>(null)
-  const [outline, setOutline] = useState<Outline | null>(null)
-  const fill = useRef<HTMLSpanElement>(null)
-  const aim = useCallback(() => {
-    const button = pill.current?.querySelector("button")
-    if (!button || !stage.current || !frame.current || !pill.current) return
-    if (!fill.current) return
-    // At rest the fill is clipped to the button's own shape (--fill-from, its insets within the fill's box), so the
-    // blue widens out of the button and narrows back into it exactly.
-    const b = button.getBoundingClientRect()
-    const box = fill.current.getBoundingClientRect()
-    stage.current.style.setProperty(
-      "--fill-from",
-      `${b.top - box.top}px ${box.right - b.right}px ${box.bottom - b.bottom}px ${b.left - box.left}px`
-    )
-    const p = pill.current.getBoundingClientRect()
-    const f = frame.current.getBoundingClientRect()
-    const along = (x: number) =>
-      Math.round(Math.min(Math.max(x - f.left, RADIUS), f.width - RADIUS))
-    const next: Outline = {
-      width: Math.round(f.width * 2) / 2,
-      height: Math.round(f.height * 2) / 2,
-      left: along(p.left),
-      right: along(p.right),
-    }
-    setOutline((current) =>
-      current &&
-      current.width === next.width &&
-      current.height === next.height &&
-      current.left === next.left &&
-      current.right === next.right
-        ? current
-        : next
-    )
-  }, [])
-  // Measured again once the status has loaded: before that the pill reads 「連線中…」 and its button sits elsewhere.
-  const loaded = status !== null
-  useLayoutEffect(() => {
-    aim()
-    // The panel can be resized on its own, so watch it rather than the window.
-    const observer = new ResizeObserver(() => aim())
-    if (stage.current) observer.observe(stage.current)
-    return () => observer.disconnect()
-  }, [aim, loaded])
-  // And right after the pill switches, at its new size: taking over ends with the tab and the frame around
-  // 「交還控制權」, and returning narrows the blue into 「接管」.
-  useLayoutEffect(aim, [aim, shown])
 
   // Roll label and button text when the face changes. Each text keeps its own color (white on the blue), so none
   // changes color in place. Measure widths before the switch; interrupted animations resume from their current text
@@ -576,7 +503,7 @@ export function LiveView({
         reached, since then nobody is operating it. */}
       <div
         ref={stage}
-        data-control={problem ? undefined : shown}
+        data-control={problem ? undefined : owner}
         data-liquid={liquid || undefined}
         className={cn(
           "flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-5",
@@ -606,26 +533,8 @@ export function LiveView({
             />
           )}
           <div className="relative w-full">
-            {!liquid && (
-              <svg ref={frame} aria-hidden className="takeover-frame">
-                {outline && (
-                  <>
-                    <path
-                      className="takeover-line"
-                      pathLength={1}
-                      d={framePath(outline, "left")}
-                    />
-                    <path
-                      className="takeover-line"
-                      pathLength={1}
-                      d={framePath(outline, "right")}
-                    />
-                  </>
-                )}
-              </svg>
-            )}
-            {/* Square, as the desktop it shows is: none of it is cut off at the corners, and the frame round it (RADIUS,
-              and SCREEN_RADIUS in liquid-takeover.ts) has no curve of the screen's to follow. */}
+            {/* Square, as the desktop it shows is: none of it is cut off at the corners, and the frame round it (SCREEN_RADIUS
+              in liquid-takeover.ts) has no curve of the screen's to follow. */}
             <div
               ref={screenBox}
               className="takeover-screen relative aspect-[16/10] overflow-hidden bg-neutral-950"
@@ -633,7 +542,7 @@ export function LiveView({
               <RemoteScreen
                 stream={stream}
                 // Not while the desktop can't be reached: the screen says so, and nothing typed there would arrive.
-                interactive={userHasControl && state === "live" && !problem}
+                interactive={user && state === "live" && !problem}
                 send={send}
                 pointer={pointer}
                 thinking={thinking}
@@ -680,9 +589,6 @@ export function LiveView({
             )}
           >
             <span aria-hidden className="takeover-pill-bg" />
-            {!liquid && (
-              <span ref={fill} aria-hidden className="takeover-fill" />
-            )}
             {/* One label and one button for both owners, each holding every text (slot), so a switch rolls and resizes
               them in place (the effect above) instead of swapping elements. The label's room on the left and its gap
               to the button lie within its texts, so a label with none leaves the button in the middle of the pill. */}

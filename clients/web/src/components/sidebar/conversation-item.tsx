@@ -7,10 +7,9 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
-import { isComposing } from "@/lib/keys"
 import { Spinner } from "@/components/ui/spinner"
-import type { Project } from "@/lib/api"
-import { nameOf, type Conversation } from "@/lib/conversations"
+import type { Conversation, Project } from "@/lib/api"
+import { nameOf } from "@/lib/conversations"
 import { useT } from "@/lib/i18n"
 import { runHref } from "@/lib/route"
 import {
@@ -30,6 +29,7 @@ import {
   DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { NameField } from "@/components/sidebar/name-field"
 import { ConversationName } from "@/components/sidebar/conversation-name"
 import { fold } from "@/components/sidebar/motion"
 
@@ -43,6 +43,7 @@ export const ConversationItem = memo(function ConversationItem({
   selected,
   inset = false,
   moving,
+  arriving = false,
   projects,
   onDelete,
   onRename,
@@ -52,6 +53,7 @@ export const ConversationItem = memo(function ConversationItem({
   conversation: Conversation
   inset?: boolean // in a project: name indented, highlight full width
   moving?: "in" | "out" // just moved: its row opens here, or closes up
+  arriving?: boolean // it came with a list's next page: its row comes in where the placeholder was
   active: boolean
   needsYou: boolean // its run waits for the user: an approval or a takeover
   fresh: boolean // its latest run ended since the user last saw it
@@ -84,7 +86,6 @@ export const ConversationItem = memo(function ConversationItem({
       setGiven(renamed?.title ?? null)
     )
   }
-  const [first] = conversation.runs
   const mark = active
     ? needsYou
       ? { color: "bg-warning", label: t.sidebar.needsAttention }
@@ -116,7 +117,10 @@ export const ConversationItem = memo(function ConversationItem({
   return (
     <SidebarMenuItem
       ref={item}
-      className={cn(moving === "out" && "pointer-events-none")}
+      className={cn(
+        arriving && "arrive-row",
+        moving === "out" && "pointer-events-none"
+      )}
     >
       {/* 32px rows, 40px on touch screens. */}
       <SidebarMenuButton
@@ -144,7 +148,7 @@ export const ConversationItem = memo(function ConversationItem({
           <ConversationName
             key={renames}
             name={name}
-            placeholder={first.goal || first.id}
+            placeholder={conversation.goal || conversation.id}
             naming={active && name === null}
           />
         </span>
@@ -173,19 +177,12 @@ export const ConversationItem = memo(function ConversationItem({
         )}
       </SidebarMenuButton>
       {draft !== null && (
-        <input
-          autoFocus
+        <NameField
           value={draft}
-          aria-label={t.sidebar.renameConversation}
-          onChange={(event) => setDraft(event.target.value)}
-          onFocus={(event) => event.currentTarget.select()}
-          onBlur={commit}
-          onKeyDown={(event) => {
-            // Enter or Esc mid-composition belongs to the input method.
-            if (isComposing(event.nativeEvent)) return
-            if (event.key === "Enter") commit()
-            if (event.key === "Escape") setDraft(null)
-          }}
+          label={t.sidebar.renameConversation}
+          onChange={setDraft}
+          onSave={commit}
+          onCancel={() => setDraft(null)}
           className={cn(
             "absolute inset-0 z-10 h-full w-full rounded-md bg-sidebar-accent px-2 text-sm text-sidebar-accent-foreground outline-none",
             inset && "pl-10"

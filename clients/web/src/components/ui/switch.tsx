@@ -1,7 +1,7 @@
 import { Switch as SwitchPrimitive } from "@base-ui/react/switch"
 import { cn } from "cn"
 
-/** An on/off setting, as ChatGPT's and Claude's settings have them: a pill whose knob slides across as it fills. */
+/** An on/off setting: a pill whose knob slides across as it fills. */
 function Switch({ className, ...props }: SwitchPrimitive.Root.Props) {
   return (
     <SwitchPrimitive.Root

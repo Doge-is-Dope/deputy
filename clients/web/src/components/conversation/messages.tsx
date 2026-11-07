@@ -47,71 +47,29 @@ import { MessageText } from "@/components/mentions"
 const ON_HOVER =
   "transition-opacity duration-150 motion-reduce:transition-none [@media(hover:hover)]:opacity-0 group-hover/message:opacity-100 group-has-[:focus-visible]/message:opacity-100 group-has-[[data-popup-open]]/message:opacity-100"
 
-// 「已讀」 fades out over this long once the answer comes, before the copy button is back in its place.
-const READ_OUT_MS = 300
-
-/** Show a read receipt for steering messages until answered, then restore the copy button. */
+/** A message the user sent, its copy button and when it was sent under it. */
 export function UserMessage({
   text,
   time,
-  read = false,
-  answered = false,
 }: {
   text: string
   time?: number // when it was sent; not yet known for one still waiting to be read
-  read?: boolean
-  answered?: boolean
 }) {
-  const t = useT()
-  const saying = read && !answered
-  // Kept a moment once it stops, fading out: saying as of the last render, and whether it has just stopped.
-  const [said, setSaid] = useState(saying)
-  const [fading, setFading] = useState(false)
-  if (saying !== said) {
-    setSaid(saying)
-    setFading(!saying)
-  }
-  useEffect(() => {
-    if (!fading) return
-    const timer = window.setTimeout(() => setFading(false), READ_OUT_MS)
-    return () => window.clearTimeout(timer)
-  }, [fading])
   return (
     <div className="group/message flex arrive flex-col items-end gap-1">
-      <div className="max-w-[85%] rounded-3xl bg-muted px-4 py-2.5 text-sm leading-6 whitespace-pre-wrap">
+      <div className="max-w-[85%] rounded-3xl bg-bubble px-4 py-2.5 text-sm leading-6 whitespace-pre-wrap">
         <MessageText text={text} />
       </div>
-      {/* Where nothing can hover (a phone), the row under it holds no copy button, as Messages has none: pressing the
-        text selects it. It is closed there but for 「已讀」, opening round it and closing after, so nothing below jumps. */}
+      {/* Where nothing can hover (a phone), there is no row under it, as Messages has none: pressing the text selects
+        it. */}
       <div
         className={cn(
-          "grid grid-rows-[1fr] transition-[grid-template-rows] duration-300 ease-(--ease-out) motion-reduce:transition-none",
-          !saying && "[@media(hover:none)]:grid-rows-[0fr]"
+          "flex items-center gap-x-1.5 text-xs text-muted-foreground [@media(hover:none)]:hidden",
+          ON_HOVER
         )}
       >
-        <div className="min-h-0 overflow-hidden">
-          {saying || fading ? (
-            <p
-              role="status"
-              className={cn(
-                "flex h-6 animate-in items-center px-1 text-xs text-muted-foreground transition-opacity duration-300 ease-(--ease-out) fade-in motion-reduce:transition-none",
-                !saying && "opacity-0"
-              )}
-            >
-              {t.run.read}
-            </p>
-          ) : (
-            <div
-              className={cn(
-                "flex items-center gap-x-1.5 text-xs text-muted-foreground [@media(hover:none)]:invisible",
-                ON_HOVER
-              )}
-            >
-              <CopyButton text={text} />
-              {time !== undefined && <TimeAgo time={time} />}
-            </div>
-          )}
-        </div>
+        <CopyButton text={text} />
+        {time !== undefined && <TimeAgo time={time} />}
       </div>
     </div>
   )
@@ -350,10 +308,11 @@ function useRevealed(text: string, writing: boolean): [string, boolean] {
     let timer = 0
     const step = () => {
       const count = pacer.pace.step(text.length, performance.now(), !writing)
-      frame ||= requestAnimationFrame(() => {
-        frame = 0
-        setShown(text.slice(0, cut(text, pacer.pace.shown)))
-      })
+      if (!frame)
+        frame = requestAnimationFrame(() => {
+          frame = 0
+          setShown(text.slice(0, cut(text, pacer.pace.shown)))
+        })
       if (count < text.length) timer = window.setTimeout(step, STEP_MS)
     }
     step()
@@ -396,10 +355,7 @@ export function Reply({
   return (
     <div
       aria-busy={streaming || undefined}
-      className={cn(
-        "group/message space-y-1",
-        writing ? "make-room" : rise && "arrive"
-      )}
+      className={cn("group/message space-y-1", !writing && rise && "arrive")}
     >
       <Markdown text={shown} streaming={coming} className="text-sm leading-6" />
       {actions && !writing && (
@@ -416,29 +372,37 @@ export function Reply({
 
 /** The main agent thinking: three lights and a word, in a row that folds open and shut (as a plan's steps do) and is
  * there the whole run, folded or not. Its gap from the row above is its own, inside the fold, so folded it takes no
- * room at all. It opens and shuts as what arrives does, easing out. Shutting, it gives up its gap first, the word kept
- * at its foot: words that take its place open their room on the same curve, so the word stays where it is, fading out
- * as they fade in, and what is under it holds still. */
-export function ThinkingRow({ shown }: { shown: boolean }) {
+ * room at all. It opens and shuts as what arrives does, easing out. Shutting, it fades where it is, the fold
+ * closing from below, so its word never slides up. Words written in its place (`replaced`) take it at once: their first
+ * line is where its word was, so it goes in that frame and they fade in there, rather than the two crossing. */
+export function ThinkingRow({
+  shown,
+  replaced = false,
+}: {
+  shown: boolean
+  replaced?: boolean
+}) {
   const t = useT()
+  const swapped = !shown && replaced
   // Folding: overlay scrollbars flash at every resize (index.css), so they hide while it moves.
   const [moving, setMoving] = useState(false)
   const [was, setWas] = useState(shown)
   if (shown !== was) {
     setWas(shown)
-    setMoving(true)
+    setMoving(!swapped)
   }
   return (
     <div
       inert={!shown}
       data-gone={shown ? undefined : ""}
+      data-swapped={swapped || undefined}
       data-moving={moving || undefined}
       onTransitionEnd={(event) => {
         if (event.target === event.currentTarget) setMoving(false)
       }}
-      className="group/thinking -mt-6 grid grid-rows-[1fr] transition-[grid-template-rows,opacity,filter] duration-300 ease-(--ease-out) data-gone:grid-rows-[0fr] data-gone:opacity-0 data-gone:blur-[2px] motion-reduce:transition-none in-data-settled:starting:grid-rows-[0fr] in-data-settled:starting:opacity-0 in-data-settled:starting:blur-[2px]"
+      className="group/thinking -mt-6 grid grid-rows-[1fr] transition-[grid-template-rows,opacity,filter] duration-300 ease-(--ease-out) data-gone:grid-rows-[0fr] data-gone:opacity-0 data-gone:blur-[2px] data-swapped:transition-none motion-reduce:transition-none in-data-settled:starting:grid-rows-[0fr] in-data-settled:starting:opacity-0 in-data-settled:starting:blur-[2px]"
     >
-      <div className="min-h-0 overflow-hidden group-data-gone/thinking:flex group-data-gone/thinking:flex-col group-data-gone/thinking:justify-end">
+      <div className="min-h-0 overflow-hidden">
         <div className="flex items-center gap-2 pt-6 text-sm leading-6 text-muted-foreground">
           <span aria-hidden className="thinking-orbs">
             <span />

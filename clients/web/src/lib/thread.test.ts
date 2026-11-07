@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { RunEvent } from "@/lib/api"
-import events from "../../../../runtime/tests/fixtures/events-v4.json"
+import events from "../../../../runtime/tests/fixtures/events-v5.json"
 import {
   awaitingDesktop,
   buildThread,
@@ -282,8 +282,8 @@ describe("v4 event projection", () => {
         agent: "main",
         n: 1,
         id: "held",
-        tool: "computer_use",
-        args: { task: "Open the report" },
+        tool: "start_task",
+        args: { agent: "computer", task: "Open the report" },
         status: "error",
         result: "Busy elsewhere",
         reason: "desktopBusy",
@@ -317,7 +317,7 @@ describe("v4 event projection", () => {
         type: "task",
         state: "started",
         id: "t1",
-        tool: "computer_use",
+        agent: "computer",
         brief: "@Computer open notepad",
         title: "open notepad",
         time: 102,
@@ -333,7 +333,7 @@ describe("v4 event projection", () => {
     const item = thread.items.find((each) => each.kind === "task")
     if (item?.kind !== "task") throw new Error("Expected task")
     expect(item.task).toMatchObject({
-      tool: "computer_use",
+      agent: "computer",
       title: "open notepad",
       outcome: "running",
     })
@@ -413,7 +413,7 @@ describe("v4 event projection", () => {
           type: "task",
           state: "started",
           id: "t1",
-          tool: "computer_use",
+          agent: "computer",
           brief: "@Computer send it",
           title: "send it",
           time: 102,
@@ -450,7 +450,7 @@ describe("v4 event projection", () => {
         type: "task",
         state: "started",
         id,
-        tool: "computer_use",
+        agent: "computer",
         brief: `@Computer ${id}`,
         title: id,
         time,
@@ -504,14 +504,14 @@ describe("v4 event projection", () => {
         type: "model",
         agent: "main",
         text: "I will add them.",
-        tool_calls: [{ name: "write_code", args: { task: "Add 2 and 2" } }],
+        tool_calls: [{ name: "start_task", args: { agent: "coding", task: "Add 2 and 2" } }],
         time: 101,
       },
       {
         type: "task",
         state: "started",
         id: "t1",
-        tool: "write_code",
+        agent: "coding",
         brief: "Add 2 and 2",
         title: "",
         time: 102,
@@ -529,7 +529,7 @@ describe("v4 event projection", () => {
     const item = thread.items.find((each) => each.kind === "task")
     if (item?.kind !== "task") throw new Error("Expected task")
     expect(item.task).toMatchObject({
-      tool: "write_code",
+      agent: "coding",
       brief: "Add 2 and 2",
       outcome: "running",
     })
@@ -549,8 +549,8 @@ describe("v4 event projection", () => {
         agent: "main",
         n: 1,
         id: "failure",
-        tool: "computer_use",
-        args: {},
+        tool: "start_task",
+        args: { agent: "computer" },
         status: "error",
         result: "Not executed: unexpected exception",
         screenshot: null,
@@ -649,7 +649,7 @@ describe("v4 event projection", () => {
         text: said,
         tool_calls: [
           { name: "write_todos", args: { todos } },
-          { name: "computer_use", args: { task } },
+          { name: "start_task", args: { agent: "computer", task } },
         ],
         time: at,
       },
@@ -670,8 +670,8 @@ describe("v4 event projection", () => {
         agent: "main",
         n: 2,
         id: `m${at}`,
-        tool: "computer_use",
-        args: { task },
+        tool: "start_task",
+        args: { agent: "computer", task },
         status: "success",
         result: "Started in the background.",
         screenshot: null,
@@ -681,7 +681,7 @@ describe("v4 event projection", () => {
         type: "task",
         state: "started",
         id: `t${at}`,
-        tool: "computer_use",
+        agent: "computer",
         brief: task,
         title: "",
         time: at,
@@ -716,7 +716,7 @@ describe("v4 event projection", () => {
         type: "task",
         state: "ended",
         id: `t${at}`,
-        tool: "computer_use",
+        agent: "computer",
         brief: task,
         title: "",
         time: at + 4,
@@ -862,8 +862,8 @@ describe("v4 event projection", () => {
           agent: "main",
           text: "Both at once.",
           tool_calls: [
-            { name: "computer_use", args: { title: "A", task: "Open A" } },
-            { name: "write_code", args: { title: "B", task: "Add B" } },
+            { name: "start_task", args: { agent: "computer", title: "A", task: "Open A" } },
+            { name: "start_task", args: { agent: "coding", title: "B", task: "Add B" } },
           ],
           time: 101,
         },
@@ -871,7 +871,7 @@ describe("v4 event projection", () => {
           type: "task",
           state: "started",
           id: "t1",
-          tool: "computer_use",
+          agent: "computer",
           brief: "Open A",
           title: "",
           time: 102,
@@ -880,7 +880,7 @@ describe("v4 event projection", () => {
           type: "task",
           state: "started",
           id: "t2",
-          tool: "write_code",
+          agent: "coding",
           brief: "Add B",
           title: "",
           time: 102,
@@ -892,7 +892,7 @@ describe("v4 event projection", () => {
           type: "task",
           state: "ended",
           id: "t2",
-          tool: "write_code",
+          agent: "coding",
           brief: "Add B",
           title: "",
           time: 106,
@@ -905,10 +905,10 @@ describe("v4 event projection", () => {
           entry.kind === "step" ? entry.step.call?.args.text : entry.kind
         )
       expect(
-        item.tasks.map((task) => [task.tool, task.outcome, keys(task)])
+        item.tasks.map((task) => [task.agent, task.outcome, keys(task)])
       ).toEqual([
-        ["computer_use", "running", ["a1"]],
-        ["write_code", "done", ["b1", "b2"]],
+        ["computer", "running", ["a1"]],
+        ["coding", "done", ["b1", "b2"]],
       ])
       expect(item.tasks.map((task) => task.title)).toEqual(["A", "B"])
       expect(thread.usingComputer).toBe(true)
@@ -920,14 +920,14 @@ describe("v4 event projection", () => {
     it("keeps a task handed over in a later turn on a line of its own, after what was said meanwhile", () => {
       const started = (
         id: string,
-        tool: string,
+        agent: string,
         brief: string,
         time: number
       ): RunEvent => ({
         type: "task",
         state: "started",
         id,
-        tool,
+        agent,
         brief,
         title: "",
         time,
@@ -939,21 +939,21 @@ describe("v4 event projection", () => {
           agent: "main",
           text: "First A.",
           tool_calls: [
-            { name: "computer_use", args: { title: "A", task: "Open A" } },
+            { name: "start_task", args: { agent: "computer", title: "A", task: "Open A" } },
           ],
           time: 101,
         },
-        started("t1", "computer_use", "Open A", 102),
+        started("t1", "computer", "Open A", 102),
         {
           type: "model",
           agent: "main",
           text: "Meanwhile B.",
           tool_calls: [
-            { name: "write_code", args: { title: "B", task: "Add B" } },
+            { name: "start_task", args: { agent: "coding", title: "B", task: "Add B" } },
           ],
           time: 103,
         },
-        started("t2", "write_code", "Add B", 104),
+        started("t2", "coding", "Add B", 104),
       ])
       expect(
         thread.items.map((item) =>

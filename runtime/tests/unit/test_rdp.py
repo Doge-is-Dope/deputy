@@ -1,11 +1,13 @@
+import asyncio
+import os
 from types import SimpleNamespace
 
 import pytest
-from Xlib import X
+from Xlib import XK, X
 
 import computer_use.computers.rdp
 from computer_use.computers import ComputerError
-from computer_use.computers.rdp import RdpComputer, full_keysym, xdotool_combo
+from computer_use.computers.rdp import RdpComputer, ScreenChanges, full_keysym, xdotool_combo
 from computer_use.desktop.keys import parse_combos
 
 
@@ -42,6 +44,13 @@ def test_keys_map_to_xdotool_keysyms():
     assert [xdotool_combo(combo) for combo in combos] == [
         "ctrl+s", "super", "Return", "alt+F4", "Next", "ctrl+slash", "BackSpace",
     ]
+
+
+def test_tab_escape_and_delete_go_by_keysyms_without_text():
+    # FreeRDP sends a key whose keysym has text as that text; rdp-entrypoint.sh puts these keysyms on their keys.
+    combos = parse_combos("Tab shift+Tab Escape Delete")
+    assert [xdotool_combo(combo) for combo in combos] == ["ISO_Left_Tab", "shift+ISO_Left_Tab", "Cancel", "Select"]
+    assert all(XK.string_to_keysym(full_keysym(key)) for key in ["tab", "esc", "delete"])
 
 
 def test_keys_map_to_full_keysyms_for_xtest():
@@ -90,6 +99,33 @@ async def test_a_unicode_failure_does_not_send_enter_or_remaining_lines():
     with pytest.raises(ComputerError, match="text delivery failed"):
         await rdp.type_text("first\nsecond")
     assert rdp.commands == [("unicode", "first")]
+
+
+async def test_enter_and_the_next_action_wait_until_freerdp_has_typed_the_line(tmp_path, monkeypatch):
+    pipe = tmp_path / "keyboard"
+    os.mkfifo(pipe)
+    freerdp = os.open(pipe, os.O_RDONLY | os.O_NONBLOCK)
+    rdp = RdpComputer(":1", pipe)
+    now, typing_until, typed, enters = 0.0, 0.0, [], []
+
+    async def sleep(seconds):  # FreeRDP reads the next chunk once it has typed the last: 10 ms per UTF-16 unit
+        nonlocal now, typing_until
+        now += seconds
+        if now >= typing_until and (chunk := os.read(freerdp, 63).decode()):
+            typed.append(chunk)
+            typing_until = now + len(chunk.encode("utf-16-le")) * 0.005
+
+    async def press(combos):
+        enters.append(now >= typing_until)
+
+    rdp.press = press
+    monkeypatch.setattr(computer_use.computers.rdp, "asyncio", SimpleNamespace(sleep=sleep))
+    lines = ["$o+=(gi 'C:\\p\\f001.txt'|%{$_.Name});中文🙂" * 3, "第二行 ends with 🚀"]
+    await rdp.type_text("\n".join(lines))
+    os.close(freerdp)
+    assert "".join(typed) == "".join(lines)
+    assert all(0 < len(chunk.encode()) <= 63 for chunk in typed)
+    assert enters == [True] and now >= typing_until
 
 
 def moves(rdp: RecordingRdp) -> list[tuple]:
@@ -217,3 +253,64 @@ async def test_a_screenshot_without_a_display_fails_as_the_desktop(monkeypatch):
     monkeypatch.setattr(computer_use.computers.rdp.ImageGrab, "grab", no_display)
     with pytest.raises(ComputerError, match="screenshot failed: X connection failed"):
         await RdpComputer(":1").screenshot()
+
+
+async def test_close_disposes_local_connections_even_when_one_is_broken():
+    closed = []
+
+    def close_watcher():
+        closed.append("watcher")
+        raise OSError("display lost")
+
+    rdp = RecordingRdp()
+    rdp._changes = SimpleNamespace(close=close_watcher)
+    rdp._xtest = SimpleNamespace(close=lambda: closed.append("input"))
+    with pytest.raises(OSError, match="display lost"):
+        await rdp.close()
+    await rdp.close()
+    assert sorted(closed) == ["input", "watcher"]
+    assert not rdp.commands  # Closing a client never sends input or stops the shared session.
+
+
+@pytest.mark.parametrize("unsupported_damage", [False, True])
+async def test_screen_watcher_removes_its_reader_and_closes_partial_initialization(monkeypatch, unsupported_damage):
+    reader, writer = os.pipe()
+    disposed = []
+    loop = asyncio.get_running_loop()
+    remove_reader = loop.remove_reader
+
+    def remove(fd):
+        disposed.append("reader")
+        return remove_reader(fd)
+
+    def close():
+        disposed.append("connection")
+        os.close(reader)
+
+    def version():
+        if unsupported_damage:
+            raise RuntimeError("no damage extension")
+
+    display = SimpleNamespace(
+        fileno=lambda: reader, damage_query_version=version, flush=lambda: None, close=close,
+        screen=lambda: SimpleNamespace(root=SimpleNamespace(damage_create=lambda _: 1)),
+    )
+    monkeypatch.setattr(computer_use.computers.rdp.xlib, "Display", lambda _: display)
+    monkeypatch.setattr(loop, "remove_reader", remove)
+    try:
+        if unsupported_damage:
+            with pytest.raises(RuntimeError, match="no damage extension"):
+                ScreenChanges(":1")
+            assert disposed == ["connection"]
+        else:
+            watcher = ScreenChanges(":1")
+            waiting = asyncio.create_task(watcher.after(0, 10))
+            await asyncio.sleep(0)
+            watcher.close()
+            watcher.close()
+            await asyncio.wait_for(waiting, 1)
+            assert disposed == ["reader", "connection"]
+        with pytest.raises(OSError):
+            os.fstat(reader)
+    finally:
+        os.close(writer)

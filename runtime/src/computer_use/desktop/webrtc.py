@@ -17,6 +17,7 @@ from aiortc import MediaStreamTrack, RTCConfiguration, RTCDataChannel, RTCPeerCo
 from aiortc import rtcrtpsender
 from aiortc.codecs import get_encoder, h264, vpx
 from av import CodecContext, VideoFrame
+from PIL import Image
 
 from computer_use.computers import Computer, Point
 from computer_use.desktop.control import Control, release_input
@@ -29,7 +30,7 @@ WATCH_FPS = 30
 CONTROL_FPS = 60
 # Refresh quiet screens often enough to keep sparse updates moving through browser playback.
 KEEPALIVE_SECONDS = 0.1
-TEXT_BATCH_SECONDS = 0.05
+TEXT_BATCH_SECONDS = 0.02
 CLOCK_RATE = 90_000  # RTP's video clock
 # Use a fixed bitrate on this local path: aiortc's REMB ramp repeatedly rebuilds the encoder.
 # A deployment across a real network needs congestion control.
@@ -92,25 +93,28 @@ class ScreenTrack(MediaStreamTrack):
         self.computer = computer
         self.control = control
         self.start: float | None = None
-        self.due = 0.0  # when the next frame may be taken
+        self.due = 0.0
         self.seen = 0  # the screen's change count at the last frame (Computer.next_change)
+        self.image: Image.Image | None = None  # the last capture, sent again while the screen stays as it was
 
     async def recv(self) -> VideoFrame:
+        changed = True
         if self.start is None:
             self.start = self.due = time.monotonic()
         else:
             self.due += 1 / (CONTROL_FPS if self.control.read().owner == "user" else WATCH_FPS)
             await asyncio.sleep(max(0.0, self.due - time.monotonic()))
-            self.seen = await self.computer.next_change(self.seen, KEEPALIVE_SECONDS)
+            seen, self.seen = self.seen, await self.computer.next_change(self.seen, KEEPALIVE_SECONDS)
+            changed = self.seen != seen
             self.due = max(self.due, time.monotonic())  # a late frame does not set off a burst to catch up
-        while True:
+        while changed or self.image is None:
             try:
-                image = await self.computer.image()
+                self.image = await self.computer.image()
                 break
             except Exception as error:  # e.g. the display is not up yet: keep the stream, try again
                 logger.warning("live view capture failed: %s", error)
                 await asyncio.sleep(1)
-        frame = VideoFrame.from_image(image)
+        frame = VideoFrame.from_image(self.image)
         frame.pts = round((self.due - self.start) * CLOCK_RATE)
         frame.time_base = fractions.Fraction(1, CLOCK_RATE)
         return frame
@@ -124,6 +128,7 @@ class ScreenShare:
         self.computer = computer
         self.control = control
         self.peers: set[RTCPeerConnection] = set()
+        self._tasks: set[asyncio.Task] = set()
 
     async def answer(self, offer: str) -> str:
         """Accept the page's SDP offer and return the answer, with every local candidate in it."""
@@ -162,6 +167,10 @@ class ScreenShare:
                 return
             if not isinstance(event, dict):
                 return
+            state = self.control.read()
+            if not state.allows_input("user"):
+                return
+            event["_control_since"] = state.since
             if event.get("type") == "move" and waiting and waiting[-1].get("type") == "move":
                 waiting[-1] = event
             else:
@@ -180,7 +189,9 @@ class ScreenShare:
                             # never merge across a key or pointer event, which may change the insertion point.
                             parts = [event["text"]]
                             while True:
-                                while waiting and waiting[0].get("type") == "text" and isinstance(waiting[0].get("text"), str):
+                                while (waiting and waiting[0].get("type") == "text"
+                                       and waiting[0].get("_control_since") == event.get("_control_since")
+                                       and isinstance(waiting[0].get("text"), str)):
                                     parts.append(waiting.popleft()["text"])
                                 if waiting:
                                     break
@@ -189,12 +200,14 @@ class ScreenShare:
                                     await asyncio.wait_for(ready.wait(), TEXT_BATCH_SECONDS)
                                 except TimeoutError:
                                     break
-                            event = {"type": "text", "text": "".join(parts)}
+                            event = {"type": "text", "text": "".join(parts), "_control_since": event["_control_since"]}
                         await self.apply(event)
             finally:  # the page went away: a key or button the user still held would stay down on Windows
                 await release_input(self.control, self.computer, "user")
 
         worker = asyncio.ensure_future(apply_all())
+        self._tasks.add(worker)
+        worker.add_done_callback(self._tasks.discard)
         channel.on("message", on_message)
         channel.on("close", worker.cancel)
 
@@ -216,27 +229,43 @@ class ScreenShare:
                     sent = point
 
         reporter = asyncio.ensure_future(report())
+        self._tasks.add(reporter)
+        reporter.add_done_callback(self._tasks.discard)
         channel.on("close", reporter.cancel)
 
     async def apply(self, event: dict) -> None:
-        """One input event from the page; ignored unless the user has control."""
-        if self.control.read().owner != "user":
+        before = self.control.read()
+        if not before.allows_input("user") or event.get("_control_since", before.since) != before.since:
             return
-        try:
-            match event:
-                case {"type": "move", "x": int(x), "y": int(y)}:
-                    await self.computer.move((x, y), settle=False)
-                case {"type": "button", "button": str(button), "down": bool(down)} if button in BUTTONS:
-                    await self.computer.mouse_button(down, button)
-                case {"type": "wheel", "direction": str(direction), "x": int(x), "y": int(y)} if direction in DIRECTIONS:
-                    await self.computer.scroll((x, y), direction, 1, [])
-                case {"type": "key", "key": str(key), "down": bool(down)}:
-                    await self.computer.key_state(normalize_key(key), down)
-                case {"type": "text", "text": str(text)} if text:
-                    await self.computer.type_text(text)
-        except Exception as error:  # an unknown key or a failed input: drop it, keep the channel
-            logger.warning("live view input %s failed: %s", event.get("type"), error)
+        async with self.control.locked() as state:
+            if not state.allows_input("user") or state.since != before.since:
+                return
+            try:
+                match event:
+                    case {"type": "move", "x": int(x), "y": int(y)}:
+                        await self.computer.move((x, y), settle=False)
+                    case {"type": "button", "button": str(button), "down": bool(down)} if button in BUTTONS:
+                        await self.computer.mouse_button(down, button)
+                    case {"type": "wheel", "direction": str(direction), "x": int(x), "y": int(y)} if direction in DIRECTIONS:
+                        await self.computer.scroll((x, y), direction, 1, [])
+                    case {"type": "key", "key": str(key), "down": bool(down)}:
+                        await self.computer.key_state(normalize_key(key), down)
+                    case {"type": "text", "text": str(text)} if text:
+                        await self.computer.type_text(text)
+            except Exception as error:  # an unknown key or a failed input: drop it, keep the channel
+                logger.warning("live view input %s failed: %s", event.get("type"), error)
 
     async def close(self) -> None:
-        await asyncio.gather(*(peer.close() for peer in self.peers))
-        self.peers.clear()
+        try:
+            results = await asyncio.gather(*(peer.close() for peer in tuple(self.peers)), return_exceptions=True)
+            for result in results:
+                if isinstance(result, BaseException):
+                    raise result
+        finally:
+            self.peers.clear()
+            tasks = tuple(self._tasks)
+            for task in tasks:
+                if not task.cancelling():
+                    task.cancel()
+            # Input workers release held keys before the computer's connections are closed.
+            await asyncio.gather(*tasks, return_exceptions=True)

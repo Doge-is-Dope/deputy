@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.tools import tool
 from langchain_core.tracers import LangChainTracer
 
-from computer_use.agent.tools import image_block
+from computer_use.tools.common import image_block
 from computer_use.agent.tracing import SCREENSHOT_NOT_TRACED, for_trace
 from conftest import fixture_png
 

@@ -6,7 +6,8 @@ import { answered } from "@/lib/session"
 
 export type Owner = "agent" | "user"
 // How a run ended: the main agent replied, or the run was stopped (from the page or with Ctrl-C) or failed.
-export type StopReason = "replied" | "cancelled" | "error"
+// How a log ended: a turn's ("replied", "cancelled", "error"), or a task's ("ended", "stopped", "error").
+export type StopReason = "replied" | "cancelled" | "error" | "ended" | "stopped"
 // Why a run failed, as the runtime codes it (agent/failures.py, which says what each covers). The page says each in
 // words (run.errors) and puts the code only in the report the user copies.
 export type ErrorCode =
@@ -28,9 +29,9 @@ export type Status = {
   defaults: Record<string, Choice>
   title_model: Choice // runtime-managed, displayed read-only
   models: { id: string; efforts: string[] }[] // what the settings page offers, each with the efforts it takes
-  active: string | null // the run using the desktop
+  active: string | null // the log of the task using the desktop
   titles_revision: number // changes as a conversation is named, during a run or after it (agent/title.py)
-  running: Running[] // every run in progress, one per conversation at most
+  running: Running[] // every session in progress, one per conversation at most
   error: { run: string; message: string } | null
   control: { owner: Owner; since: number; reason: string }
   approval: Approval | null // the step the running run waits for the user to approve
@@ -40,11 +41,19 @@ export type Status = {
   ice_servers: RTCIceServer[] // for the live view; a TURN server when the runtime runs in Docker
 }
 
-/** Active run state. Only web runs accept steering messages and report unread inbox entries. */
+/**
+ * A session in progress (agent/session.py): the user's message, the main agent's turns and the tasks they hand over,
+ * until it is quiet. Only web runs accept steering messages and report unread inbox entries.
+ */
 export type Running = {
-  run: string
+  run: string // its first turn's log, which names the session
   thread: string
-  pending?: Pending[]
+  goal?: string // the message it began with, for a page that did not send it
+  turn: string | null // the log of the main agent's turn under way, if one is
+  tasks: string[] // the logs of its tasks at work
+  pending?: Pending[] // sent while it works, steering it, not read by its agents yet
+  queued?: Pending[] // sent to wait for it to end, which then starts the next session with them
+  read?: string[] // the ids of the messages its agents have read
 }
 export type Pending = { id: string; text: string }
 
@@ -68,14 +77,16 @@ export type Outcome = "approved" | "declined" | "took_control"
 export type RunSummary = {
   id: string
   thread: string // the conversation the run belongs to: its first run's id
-  goal: string // the user's message
+  kind: "turn" | "task" // a turn of the main agent, or a task it handed over: each logs on its own
+  session: string // the session it is part of: its first turn's id
+  parent: string | null // a task's: the turn that handed it over
+  goal: string // a turn's user message ("" for one a task's end woke), a task's brief
   title: string | null // the conversation's name, made from its first message (agent/title.py); null until it is
   started: number
   actions: number // on the desktop
   ended: number | null // when it ended; null while it runs, or if it never ended (the runtime stopped under it)
   failed: boolean // it ended in an error, not a reply or the user's stop
   project: string | null // the id of the project its conversation is in (Project); null for none
-  user: string // whose it is (the signed-in user's id); the runtime lists only the asker's
 }
 
 /** A project of the viewer's, which conversations are listed under; its id stays when it is renamed. */
@@ -84,6 +95,25 @@ export type Project = {
   name: string
   created: number
 }
+
+/** One conversation as the runtime lists it: its runs folded into one (storage.Conversation). */
+export type Conversation = {
+  id: string // the thread: its first run's id
+  project: string | null // the id of the project it is in (Project); null for none
+  title: string | null // its name, made by the runtime from its first message (agent/title.py); null until then
+  goal: string // its first message, listed until it has a title
+  last: number // when its latest run started: the lists' order
+  latest: RunSummary
+}
+
+/** A page of a list, and where the next one continues from: null on the last page. */
+export type Page<T> = { items: T[]; next: string | null }
+/** The most the runtime gives in one page. */
+export const MAX_PAGE = 100
+/** How many of a project's conversations the sidebar lists at a time. */
+export const PROJECT_PAGE = 5
+/** Delays between failed API reads; the last delay repeats. */
+export const RETRY_MS = [500, 1000, 2000, 4000, 8000]
 
 /** Stable runtime note codes; the display text is never used to infer behavior. */
 export type NoteCode =
@@ -120,14 +150,21 @@ export type ActionReason =
   | "tooManyTasks"
   | "noTask"
 
-// An event an agent logged while it worked on a background task carries that task's id (agent/trajectory.py TASK).
+// Each turn and each task logs on its own (agent/trajectory.py); a session's logs merge into one list of events
+// (lib/logs.ts), where the events of a task's work carry its id (`task`).
 export type RunEvent = { time: number; task?: string } & (
   | {
       type: "start"
-      v: 4 // only the current log format is served
+      v: 6 // only the current log format is served
+      kind?: "turn" | "task"
       run?: string
       thread?: string
-      goal: string
+      session?: string // the session's first turn
+      parent?: string // a task's: the turn that handed it over
+      id?: string // a task's id there
+      agent?: string // a task's agent
+      title?: string // a task's title
+      goal: string // a turn's user message, a task's brief
       computer?: boolean // the message was for the desktop (@Computer, or the command line)
       approvals?: Approvals // how the user chose, when they sent it, to have its steps approved; each confirm says
       // how it was as that step came up
@@ -152,11 +189,12 @@ export type RunEvent = { time: number; task?: string } & (
   // Work the main agent handed over in the background starting or ending (agent/background.py)
   | {
       type: "task"
-      state: "started" | "ended" | "stopped"
+      state: "started" | "ended" | "stopped" | "failed"
       id: string // the task's id, which the events of its work carry (`task`)
-      tool: string
+      agent: string // the agent it was handed to: computer or coding
       brief: string
       title: string // what the user sees for it: a few words, beside the brief the agent reads
+      record?: string // the task's own log, where its work is
     }
   | {
       type: "model"
@@ -285,7 +323,29 @@ const post = <T>(path: string, body: object = {}) =>
 
 export const api = {
   status: () => request<Status>("/api/status"),
-  runs: () => request<RunSummary[]>("/api/runs"),
+  // A page of the viewer's conversations, most recently active first: a project's (its id), those in none (null), or
+  // every one (left out); `before` is the page before's `next`; up to MAX_PAGE a page.
+  conversations: ({
+    project,
+    before,
+    limit,
+  }: {
+    project?: string | null
+    before?: string | null
+    limit?: number
+  } = {}) => {
+    const query = new URLSearchParams()
+    if (project !== undefined) query.set("project", project ?? "")
+    if (before) query.set("before", before)
+    if (limit) query.set("limit", String(limit))
+    const search = query.toString()
+    return request<Page<Conversation>>(
+      `/api/conversations${search ? `?${search}` : ""}`
+    )
+  },
+  // A conversation's runs, oldest first, by its id or any of its runs' (an older link).
+  runsOf: (thread: string) =>
+    request<RunSummary[]>(`/api/conversations/${thread}/runs`),
   projects: () => request<Project[]>("/api/projects"),
   // A project by this name: the viewer's own if they have one by it already.
   createProject: (name: string) => post<Project>("/api/projects", { name }),
@@ -294,20 +354,18 @@ export const api = {
       method: "PATCH",
       body: JSON.stringify({ name }),
     }),
-  // The project only: its conversations are deleted first (useSidebarLists).
+  // The project and its conversations: the runtime deletes them, and keeps both if one is in use (409).
   deleteProject: (project: string) =>
     request<{ deleted: string }>(`/api/projects/${project}`, {
       method: "DELETE",
     }),
-  // A deleted project back, for its conversations brought back from the trash to list under.
-  restoreProject: (project: string) =>
-    post<Project>(`/api/projects/${project}/restore`),
   // The conversations whose words hold the query (storage.said), most recently active first, one hit each.
   search: (query: string, signal?: AbortSignal) =>
     request<SearchHit[]>(`/api/search?q=${encodeURIComponent(query)}`, {
       signal,
     }),
-  // Start or continue a conversation; steer its active web run when one exists.
+  // Start or continue a conversation; steer its active web run when one exists, or `queue` the message for the run
+  // after it.
   // takeControl transfers ownership only after acquiring the desktop.
   // Send browser choices, locale and time zone with each message.
   // A new conversation begins in `project` when given; a message into a conversation stays in its own.
@@ -315,32 +373,32 @@ export const api = {
     goal: string,
     thread?: string,
     takeControl = false,
-    project?: string
+    project?: string,
+    queue = false
   ) =>
     post<Started>("/api/runs", {
       goal,
       ...(thread && { thread }),
       ...(takeControl && { take_control: true }),
+      ...(queue && { queue: true }),
       ...(project && !thread && { project }),
       ...currentChoices(),
       locale: locale(),
       // Today's date, for the agents, as the user's clock says it.
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
     }),
-  stop: (run: string) => post(`/api/runs/${run}/stop`),
+  // Stops the conversation's session in progress: the main agent's turn and every task.
+  stop: (thread: string) => post(`/api/conversations/${thread}/stop`),
   // Takes back a message sent to a run in progress, while none of its agents has read it (409 once one has).
   withdraw: (run: string, message: string) =>
     request<{ withdrawn: boolean }>(`/api/runs/${run}/messages/${message}`, {
       method: "DELETE",
     }),
-  // Moves every run of the conversation to the runtime's data/trash, out of the list.
+  // Erases every run of the conversation, its records and screenshots; nothing brings it back.
   deleteConversation: (thread: string) =>
     request<{ deleted: string[] }>(`/api/conversations/${thread}`, {
       method: "DELETE",
     }),
-  // Brings a deleted conversation back from the runtime's trash.
-  restoreConversation: (thread: string) =>
-    post<{ restored: string[] }>(`/api/conversations/${thread}/restore`),
   // Names the conversation as the user wants it listed, over the name the runtime made.
   renameConversation: (thread: string, title: string) =>
     request<{ thread: string; title: string }>(`/api/conversations/${thread}`, {
@@ -370,15 +428,16 @@ export const api = {
     post<RTCSessionDescriptionInit>("/api/live", { type: "offer", sdp }),
 }
 
-// A conversation a search found, by the words around the first match in its latest run that has one, "…" where cut.
-export type SearchHit = { thread: string; snippet: string }
+/** A conversation a search found: by its name, or by its words, with the snippet around the match (null for a name
+ * alone). */
+export type SearchHit = { conversation: Conversation; snippet: string | null }
 
 // The run: a new one, or for a message sent while the conversation's run works, that run and the message's id.
 export type Started = { id: string; thread: string; message?: string }
 
-// Why the user has the desktop when they took it themselves (runtime server.py, for the page and the CLI alike).
+// How the reason starts when someone took the desktop themselves, then the client they did it from (runtime server.py).
 // Any other reason is the agent's own, given when it asked them to take over (agent/tools.py).
-const TAKEN_OVER = "taken over by user"
+const TAKEN_OVER = "taken over from "
 
 /** Pending approval or requested takeover for the desktop owner.
  * id distinguishes consecutive waits; null means no user action is pending. */
@@ -397,7 +456,7 @@ export function waitingOf(
       consequence: status.approval.consequence,
     }
   const { owner, reason, since } = status.control
-  if (owner === "user" && status.active && reason && reason !== TAKEN_OVER)
+  if (owner === "user" && status.active && reason && !reason.startsWith(TAKEN_OVER))
     return {
       id: `${status.active}-${since}`,
       run: status.active,
@@ -421,9 +480,11 @@ export function runningOf(
 export const userSince = (status: Status | null) =>
   status?.control.owner === "user" ? status.control.since : null
 
-/** The step this run waits for the user to approve; null when it waits for none. */
-export const approvalFor = (status: Status | null, run: string | null) =>
-  run !== null && status?.approval?.run === run ? status.approval : null
+/** The step one of these logs (a session's) waits for the user to approve; null when they wait for none. */
+export const approvalFor = (status: Status | null, logs: readonly string[]) =>
+  status?.approval && logs.includes(status.approval.run)
+    ? status.approval
+    : null
 
 /** Whether a message is for the desktop: it mentions @Computer, as the runtime reads it (agent/main_agent.py). */
 export const forComputer = (message: string) =>
@@ -431,5 +492,8 @@ export const forComputer = (message: string) =>
 
 export const eventsUrl = (run: string) => `/api/runs/${run}/events`
 // A screenshot, or with a width, a small copy of it for a thumbnail (server.py): a few kilobytes, not a few hundred.
-export const screenshotUrl = (run: string, name: string, width?: number) =>
-  `/api/runs/${run}/files/${name}${width ? `?w=${width}` : ""}`
+// A name another log of the session wrote says which (lib/logs.ts): "<log>/<file>".
+export function screenshotUrl(run: string, name: string, width?: number) {
+  const [log, file] = name.includes("/") ? name.split("/", 2) : [run, name]
+  return `/api/runs/${log}/files/${file}${width ? `?w=${width}` : ""}`
+}

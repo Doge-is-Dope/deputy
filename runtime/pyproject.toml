@@ -10,7 +10,9 @@ dependencies = [
     "langchain-openai==1.7.2",
     "pillow==13.0.0",
     "pydantic-settings==2.16.1",
+    "pymongo==4.19.0",
     "python-xlib==0.33",
+    "pyyaml==6.0.3",
     "starlette==1.9.0",
     "uvicorn==0.54.0",
 ]
@@ -26,10 +28,17 @@ build-backend = "uv_build"
 dev = [
     "pytest==9.1.1",
     "pytest-asyncio==1.4.0",
+    "ruff==0.17.3",
 ]
+
+[tool.ruff.lint]
+select = ["F"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
-addopts = "-m 'not model'"
-markers = ["model: calls a real model API (run with `pytest -m model`)"]
+addopts = "-m 'not model and not mongo'"
+markers = [
+    "model: calls a real model API (run with `pytest -m model`)",
+    "mongo: runs a store's contract on MongoDB (run with `CU_TEST_MONGO_URL=... pytest -m mongo`)",
+]

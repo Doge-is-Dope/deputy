@@ -15,7 +15,9 @@ import { RunThread, TurnSkeleton } from "@/components/conversation/run-thread"
 import { useMarkdownReady } from "@/components/markdown/markdown"
 import { ScreenshotViewer } from "@/components/screenshot-viewer"
 import { buttonVariants } from "@/components/ui/button"
-import { useRunEvents, type StreamPhase } from "@/hooks/use-api"
+import { Spinner } from "@/components/ui/spinner"
+import { HISTORY_PAGE, historyStart } from "@/lib/history"
+import { useSessionEvents, type StreamPhase } from "@/hooks/use-run-events"
 import { useLiquidGlass } from "@/hooks/use-liquid-glass"
 import { useThread } from "@/hooks/use-thread"
 import {
@@ -50,11 +52,18 @@ function usePresence(open: boolean, ms: number) {
 
 // Within this many pixels of the end, the conversation counts as read to the end and follows new events.
 const STICK_PX = 80
+// The run being read is the one across this line, as a share of the view's height down from its top; it is found
+// again once scrolling has paused this long, so passing over a run does not flash its plan.
+const READING_LINE = 0.3
+const READ_AFTER_MS = 150
 // A message the user sends sits this far below the top of the view, as the conversation's first one does (pt-4).
 const PLACED_PX = 16
-// Where each conversation was left, so it opens there again: the turn at the top of the view and how far into it.
-// Nothing for one left at the end, which opens as any conversation does. Kept while the page is, for the last few dozen.
-const LEFT_AT = new Map<string, { turn: number; into: number }>()
+// Where each conversation was left, so it opens there again: the first turn read, and the turn at the top of the view
+// and how far into it (null for one left at the end, which opens there). Kept while the page is, for the last few dozen.
+const LEFT_AT = new Map<
+  string,
+  { first: string; at: { run: string; into: number } | null }
+>()
 const LEFT_AT_MAX = 50
 
 const below = (element: HTMLElement) =>
@@ -79,12 +88,12 @@ function overlayScrollbars() {
 
 type TurnActions = {
   onEnded: () => void
-  onTitled: () => void // the conversation's name has come in a run's stream (agent/title.py)
   onOpenLive: () => void // the live view, from the screen of the step under way
 }
 
-// One empty list for every turn with nothing pending: a new one each time would draw every turn again.
-const NO_PENDING: Pending[] = []
+const NO_LOGS: readonly string[] = []
+// One empty list for every turn with nothing sent to steer it: a new one each time would draw every turn again.
+const NO_MESSAGES: Pending[] = []
 
 /** Where a run's stream stands, and whether any of it has arrived to show. */
 type TurnStream = { phase: StreamPhase; shown: boolean }
@@ -92,64 +101,95 @@ type TurnStream = { phase: StreamPhase; shown: boolean }
 /** One run of a conversation: its goal, its steps and its answer, streamed while it runs. */
 function RunTurn({
   run,
+  logs,
+  goal,
+  going,
+  started,
   status,
   continued,
   latest,
   visible,
   takingOver,
-  pending,
+  steering,
   wake,
   onStream,
   onPlan,
   ...actions
 }: TurnActions & {
-  run: string
+  run: string // the session's first turn, which names it
+  logs: readonly string[] // the logs of its turns and tasks the conversation's list has
+  goal: string | null // what the user sent it, from the conversation's list or as it was sent from here
+  going: boolean // the conversation's list says it has not ended
+  started: boolean // started from this page just now
   status: Status | null
   continued: boolean
   latest: boolean // the conversation's last run
   visible: boolean // the conversation is shown
   takingOver: boolean // the composer asks the user to take over the desktop for this run
-  pending: Pending[] // sent to this run as it works, not read by its agents as far as the status knows
+  steering: Pending[] // sent to steer this session, until its log has them
   wake: number // changes when the runtime can be reached again, so a stream waiting to reconnect tries at once
   onStream: (run: string, stream: TurnStream) => void
   onPlan: (run: string, plan: Plan | null, active: boolean) => void
 }) {
-  const { events, phase, done, draft, streamed } = useRunEvents(
-    run,
+  const session = runningOf(status, { run })
+  const active = session !== null
+  // Its logs: those listed, those the status says are at work, and the tasks its turns name before either has them.
+  const [named, setNamed] = useState<readonly string[]>(NO_LOGS)
+  const known = [
+    ...new Set([
+      run,
+      ...logs,
+      ...(session?.turn ? [session.turn] : []),
+      ...(session?.tasks ?? []),
+      ...named,
+    ]),
+  ].sort()
+  const { events, phase, done, draft, final, streamed } = useSessionEvents(
+    known,
+    !active,
     actions.onEnded,
     wake
   )
-  const shown = events.length > 0
+  const recorded = events.flatMap((event) =>
+    event.type === "task" && event.record && !known.includes(event.record)
+      ? [event.record]
+      : []
+  )
+  // Read alongside from the next draw: once known, none of them is named again.
+  if (recorded.length) setNamed([...new Set([...named, ...recorded])])
+  // What the user sent, drawn before the log comes for a run under way (by the status, or by the list until the log
+  // has anything), just started here, or whose log can't be read now. A finished run's log comes at once: it waits for
+  // that.
+  const early =
+    goal !== null &&
+    (active ||
+      started ||
+      phase === "retrying" ||
+      (going && events.length === 0))
+      ? goal
+      : null
+  const shown = events.length > 0 || early !== null
   useEffect(
     () => onStream(run, { phase, shown }),
     [run, phase, shown, onStream]
   )
-  // The conversation's name comes in its run's stream before the list, which names it, knows of it: said once.
-  const titled = events.some((event) => event.type === "title")
-  const { onTitled } = actions
-  const named = useRef(false)
-  useEffect(() => {
-    if (!titled || named.current) return
-    named.current = true
-    onTitled()
-  }, [titled, onTitled])
   const thread = useThread(events)
-  const active = runningOf(status, { run }) !== null
   useEffect(
     () => onPlan(run, thread.plan, active),
     [run, thread.plan, active, onPlan]
   )
   const [shot, setShot] = useState<number | null>(null)
-  // Read already, by the run's log, if the status has not caught up.
-  const read = new Set(
-    thread.items.flatMap((item) => (item.kind === "message" ? [item.id] : []))
-  )
+
+  // An earlier turn read on the way up shows once it has some; one whose read fails keeps its skeleton.
+  if (visible && !latest && !shown && phase !== "retrying") return null
 
   return (
     <>
       <RunThread
         run={run}
         thread={thread}
+        sent={early}
+        dropped={phase === "retrying"}
         continued={continued}
         latest={latest}
         visible={visible}
@@ -159,10 +199,11 @@ function RunTurn({
         error={status?.error?.run === run ? status.error.message : null}
         userSince={userSince(status)}
         disconnected={status?.computer.connected === false}
-        approving={approvalFor(status, run)?.consequence ?? null}
+        approving={approvalFor(status, known)?.consequence ?? null}
         takingOver={takingOver}
-        pending={pending.filter((message) => !read.has(message.id))}
+        steering={steering}
         draft={draft}
+        answering={final}
         streamed={streamed}
         onOpenShot={(name) =>
           setShot(thread.screenshots.findIndex((each) => each.name === name))
@@ -183,35 +224,52 @@ function RunTurn({
 export function RunView({
   thread,
   runs,
+  logs,
+  goals,
+  going,
+  started,
   continued,
   listed,
   status,
   asking = null,
-  pending = null,
+  steering = null,
   offline,
   composer,
   planShown,
   onPlan,
   onClosePlan,
   onEnded,
-  onTitled,
   onOpenLive,
 }: TurnActions & {
   thread: string
-  runs: string[] // oldest first
+  runs: string[] // oldest first: each session's first turn
+  logs: ReadonlyMap<string, readonly string[]> // each session's logs, by its first turn
+  goals: ReadonlyMap<string, string> // what the user sent each run, as far as it is known yet
+  going: ReadonlySet<string> // the runs the conversation's list says have not ended
+  started: string | null // the run started from this page last
   continued: ReadonlySet<string> // runs that carry on the one before with the same goal
   listed: boolean // the list of runs has come (or failed to), so `runs` holds all the conversation's runs it knows of
   status: Status | null
   asking?: string | null // the run the composer asks the user to take over the desktop for
-  pending?: { run: string; messages: Pending[] } | null // what the user sent the run in progress, unread yet
+  steering?: { run: string; messages: Pending[] } | null // what was sent to steer the session in progress
   offline: boolean // the runtime can't be reached
   composer: ReactNode
   planShown: boolean // the header shows the plan: beside the conversation, or opened over it
-  onPlan: (plan: { has: boolean; docked: boolean }) => void // whether there is a plan, and room for it beside
+  onPlan: (plan: { has: boolean; docked: boolean }) => void // whether the run being read has a plan, and room for it beside
   onClosePlan: () => void // the plan opened over the conversation, closed from elsewhere
 }) {
   const t = useT()
-  // Each run's stream, as its turn reports it. The conversation is gone when its first run is; it can't be shown yet
+  const [first, setFirst] = useState<string | null>(
+    () => LEFT_AT.get(thread)?.first ?? null
+  )
+  const start = historyStart(runs, first)
+  if (listed && runs.length > 0 && !runs.includes(first ?? ""))
+    setFirst(runs[start])
+  // Before the list comes, the run opened (one just started, mostly) reads its events alongside it.
+  const shownRuns = listed ? runs.slice(start) : runs
+  const anchor = useRef<{ element: Element; top: number } | null>(null)
+  const earlier = useRef<HTMLDivElement>(null)
+  // Each run's stream, as its turn reports it. The conversation is gone when none read is there; it can't be shown yet
   // while none of it has arrived and a stream waits to reconnect; and once some has, a stream that dropped says so
   // above the composer, everything shown staying where it is.
   const [streams, setStreams] = useState<Record<string, TurnStream>>({})
@@ -225,14 +283,26 @@ export function RunView({
       ),
     []
   )
-  const states = runs.map((run) => streams[run])
-  const missing = states[0]?.phase === "missing"
+  const states = shownRuns.map((run) => streams[run])
+  // A historical run's first event is not the end of its replay; keep the anchor until it is complete.
+  const loadingEarlier = states
+    .slice(0, -1)
+    .some(
+      (stream) =>
+        !stream || stream.phase === "connecting" || stream.phase === "open"
+    )
+  // Only the turns read so far are known: the conversation is gone when none of them is there.
+  const missing =
+    states.length > 0 && states.every((stream) => stream?.phase === "missing")
   const shown = states.some((stream) => stream?.shown)
   const retrying = states.some((stream) => stream?.phase === "retrying")
   const placeholder = missing ? "missing" : retrying && !shown ? "failed" : null
   // Reveal once all runs have loaded to avoid showing an earlier turn alone at the bottom.
   // Once revealed, keep the conversation visible during reconnects.
-  const [ready, setReady] = useState(false)
+  // A conversation just started from here has nothing to read: what the user sent shows at once.
+  const [ready, setReady] = useState(
+    () => runs.length === 1 && runs[0] === started
+  )
   const markdownReady = useMarkdownReady()
   if (
     !ready &&
@@ -256,6 +326,7 @@ export function RunView({
   const [plans, setPlans] = useState<
     Record<string, { plan: Plan | null; active: boolean }>
   >({})
+  const [reading, setReading] = useState<string | null>(null)
   // Kept as it was while the same: a new copy every frame of a reply would draw the whole conversation again.
   const onRunPlan = useCallback(
     (run: string, plan: Plan | null, active: boolean) =>
@@ -268,7 +339,26 @@ export function RunView({
       ),
     []
   )
-  const latest = runs.map((run) => plans[run]).findLast((each) => each?.plan)
+  // The plan of the run being read: each run's own, none for a run that wrote none (or wrote it empty).
+  const current = reading ? plans[reading] : undefined
+  const hasPlan = (current?.plan?.steps.length ?? 0) > 0
+  // Any run's plan keeps the room beside the conversation, so the words do not reflow as the plan comes and goes.
+  const written = shownRuns.some(
+    (run) => (plans[run]?.plan?.steps.length ?? 0) > 0
+  )
+  // The plan the card shows, kept on its way out once the run being read has none.
+  const [kept, setKept] = useState<{
+    run: string
+    plan: Plan
+    active: boolean
+  } | null>(null)
+  if (
+    hasPlan &&
+    (kept?.run !== reading ||
+      kept.plan !== current!.plan ||
+      kept.active !== current!.active)
+  )
+    setKept({ run: reading!, plan: current!.plan!, active: current!.active })
   // Beside the conversation while it keeps room enough to read; otherwise opened over it from the header.
   const frame = useRef<HTMLDivElement>(null)
   const [width, setWidth] = useState(0)
@@ -282,8 +372,6 @@ export function RunView({
     return () => observer.disconnect()
   }, [])
   const docked = width >= PLAN_DOCKED
-  // A plan written empty is none: an earlier one does not come back.
-  const hasPlan = (latest?.plan?.steps.length ?? 0) > 0
   useEffect(() => onPlan({ has: hasPlan, docked }), [hasPlan, docked, onPlan])
   const showPlan = hasPlan && planShown && width > 0
   const [planMounted, planClosing] = usePresence(showPlan, 250)
@@ -316,11 +404,32 @@ export function RunView({
   const dock = useRef<HTMLDivElement>(null)
   const following = useRef(true)
   const lastTop = useRef(0)
+  const readLater = useRef<number | undefined>(undefined)
+  // The run across the reading line; at the end of the conversation, the last one, however little of it shows.
+  const read = useCallback(() => {
+    const element = scroller.current
+    const list = turns.current
+    if (!element || !list) return
+    const all = [...list.children].filter((child): child is HTMLElement =>
+      child.hasAttribute("data-run")
+    )
+    const line =
+      element.getBoundingClientRect().top + element.clientHeight * READING_LINE
+    const turn = atEnd(element)
+      ? all.at(-1)
+      : (all.findLast((each) => each.getBoundingClientRect().top <= line) ??
+        all[0])
+    setReading(turn?.dataset.run ?? null)
+  }, [])
+  useEffect(() => {
+    read()
+    return () => window.clearTimeout(readLater.current)
+  }, [read, ready, runs, start])
   const lastHeight = useRef(0)
   const [behind, setBehind] = useState(false)
   const lens = useLiquidGlass()
-  // The turn the user started last, its message held at the top of the view while the answer comes in under it, as
-  // ChatGPT's is; where the view is on its way to for it, if it is; the turns already seen, so only a new one is
+  // The turn the user started last, its message held at the top of the view while the answer comes in under it;
+  // where the view is on its way to for it, if it is; the turns already seen, so only a new one is
   // placed; and whether the conversation has shown yet.
   const placed = useRef<HTMLElement | null>(null)
   const placing = useRef<number | null>(null)
@@ -331,10 +440,43 @@ export function RunView({
   const working = runs.some((run) => runningOf(status, { run }) !== null)
   const latestWorking =
     runs.length > 0 && runningOf(status, { run: runs.at(-1)! }) !== null
-  const now = useRef({ shown: false, latestWorking: false })
+  const now = useRef({ shown: false, latestWorking: false, first: "" })
   useLayoutEffect(() => {
-    now.current = { shown: ready && placeholder === null, latestWorking }
+    now.current = {
+      shown: ready && placeholder === null,
+      latestWorking,
+      first: shownRuns[0] ?? "",
+    }
   })
+
+  const loadEarlier = useCallback(() => {
+    const top = scroller.current!.getBoundingClientRect().top
+    const element = [...turns.current!.children].find(
+      (child) =>
+        child.hasAttribute("data-run") &&
+        child.getBoundingClientRect().bottom > top
+    )
+    anchor.current = element
+      ? { element, top: element.getBoundingClientRect().top }
+      : null
+    following.current = false
+    placed.current = null
+    placing.current = null
+    setFirst(runs[Math.max(0, start - HISTORY_PAGE)])
+  }, [runs, start])
+
+  useEffect(() => {
+    const target = earlier.current
+    if (!target || !ready || loadingEarlier) return
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) loadEarlier()
+      },
+      { root: scroller.current }
+    )
+    observer.observe(target)
+    return () => observer.disconnect()
+  }, [ready, loadingEarlier, loadEarlier])
 
   // New events, screenshots loading and steps folding all change the height, and so does the window: stay at the
   // end while the user is, and notice when shorter content leaves nothing below, which scrolls nothing.
@@ -375,6 +517,11 @@ export function RunView({
       return unseen ? last! : null
     }
     const observer = new ResizeObserver(() => {
+      // Historical replies can keep growing after their event stream ends (markdown and images).
+      // Keep the old turn in place until the user moves again, even without native scroll anchoring.
+      const held = anchor.current
+      if (held?.element.isConnected)
+        element.scrollTop += held.element.getBoundingClientRect().top - held.top
       // It goes to the top of the view if the view was at the end, the answer coming in under it and the view
       // holding still; and in place of the skeleton that stood in for it. A conversation opened lands at its end,
       // unless its last run is still under way, or where it was left. Where the view was is where it last scrolled
@@ -383,15 +530,19 @@ export function RunView({
       if (sent) {
         const opening = !opened.current
         opened.current = true
-        const left = opening ? LEFT_AT.get(thread) : undefined
-        const back = left && list.children[left.turn]
-        if (back) {
+        const at = opening ? LEFT_AT.get(thread)?.at : null
+        const back =
+          at &&
+          [...list.children].find(
+            (child) => (child as HTMLElement).dataset.run === at.run
+          )
+        if (at && back) {
           // The browser keeps it there as what is above it loads (overflow-anchor).
           following.current = false
           element.scrollTop +=
             back.getBoundingClientRect().top -
             element.getBoundingClientRect().top +
-            left.into
+            at.into
         } else if (
           opening
             ? now.current.latestWorking
@@ -436,26 +587,36 @@ export function RunView({
       // One never opened (or set up again at once, as in development) leaves what was kept.
       if (!opened.current) return
       LEFT_AT.delete(thread)
-      if (
-        following.current ||
-        placing.current !== null ||
-        below(element) - roomLeft(placed, room) < STICK_PX
-      )
-        return
       const top = element.getBoundingClientRect().top
-      const all = [...list.children]
+      const all = [...list.children].filter((child) =>
+        child.hasAttribute("data-run")
+      )
       const turn = all.findIndex(
         (child) => child.getBoundingClientRect().bottom > top
       )
-      if (turn < 0) return
+      const end =
+        following.current ||
+        placing.current !== null ||
+        below(element) - roomLeft(placed, room) < STICK_PX ||
+        turn < 0
       LEFT_AT.set(thread, {
-        turn,
-        into: top - all[turn].getBoundingClientRect().top,
+        first: now.current.first,
+        at: end
+          ? null
+          : {
+              run: (all[turn] as HTMLElement).dataset.run!,
+              into: top - all[turn].getBoundingClientRect().top,
+            },
       })
       if (LEFT_AT.size > LEFT_AT_MAX)
         LEFT_AT.delete(LEFT_AT.keys().next().value!)
     }
   }, [thread])
+
+  // The user moving the view lets go of the turn held in place while earlier ones load.
+  const release = () => {
+    anchor.current = null
+  }
 
   function onScroll() {
     const element = scroller.current!
@@ -476,6 +637,8 @@ export function RunView({
     )
       placing.current = null
     lastTop.current = element.scrollTop
+    window.clearTimeout(readLater.current)
+    readLater.current = window.setTimeout(read, READ_AFTER_MS)
     setBehind(
       !following.current &&
         placing.current === null &&
@@ -488,8 +651,14 @@ export function RunView({
       <div
         ref={scroller}
         onScroll={onScroll}
-        // Beside the plan, the conversation keeps to the room left of it, moving over as the plan comes and goes.
-        style={{ paddingRight: docked && showPlan ? PLAN_SPACE : 0 }}
+        onPointerDownCapture={release}
+        onKeyDownCapture={release}
+        onWheelCapture={release}
+        onTouchMoveCapture={release}
+        // Beside the plan, the conversation keeps to the room left of it, moving over as the plan is shown or hidden.
+        style={{
+          paddingRight: docked && planShown && written ? PLAN_SPACE : 0,
+        }}
         className="flex min-h-0 flex-1 flex-col overflow-y-auto transition-[padding-right] duration-300 ease-(--ease-drawer) motion-reduce:transition-none"
       >
         <div
@@ -527,7 +696,7 @@ export function RunView({
               )}
             </div>
           )}
-          {!ready && placeholder === null && <TurnSkeleton />}
+          {!ready && placeholder === null && <TurnSkeleton long />}
           {/* Mounted while a placeholder shows, so their streams keep trying, and while the conversation loads. Laid
           out only once it is shown, which resizes it, so the view lands at the end in the frame it appears. */}
           <div
@@ -535,21 +704,35 @@ export function RunView({
             hidden={placeholder !== null || !ready}
             className="space-y-10"
           >
-            {runs.map((run) => (
+            {start > 0 && (
+              <div
+                ref={earlier}
+                className="flex h-8 items-center justify-center"
+              >
+                <Spinner />
+              </div>
+            )}
+            {shownRuns.map((run) => (
               <RunTurn
                 key={run}
                 run={run}
+                logs={logs.get(run) ?? NO_LOGS}
+                goal={goals.get(run) ?? null}
+                going={going.has(run)}
+                started={run === started}
                 status={status}
-                continued={continued.has(run)}
+                // Not the first one read: what it carries on from is not shown above it.
+                continued={continued.has(run) && run !== shownRuns[0]}
                 latest={run === runs.at(-1)}
                 visible={ready}
                 takingOver={asking === run}
-                pending={pending?.run === run ? pending.messages : NO_PENDING}
+                steering={
+                  steering?.run === run ? steering.messages : NO_MESSAGES
+                }
                 wake={wake}
                 onStream={onStream}
                 onPlan={onRunPlan}
                 onEnded={onEnded}
-                onTitled={onTitled}
                 onOpenLive={onOpenLive}
               />
             ))}
@@ -671,10 +854,10 @@ export function RunView({
           {!missing && composer}
         </div>
       </div>
-      {/* The plan, at the top right where the work never moves it: beside the conversation, as ChatGPT's task card is,
+      {/* The plan, at the top right where the work never moves it: beside the conversation,
         or over it like a menu when there is no room. It grows out of that corner and back into it, coming a moment after
         the conversation starts to make room for it, so it does not cover what is still moving out of its way. */}
-      {planMounted && latest?.plan && (
+      {planMounted && kept && (
         <aside
           ref={card}
           aria-label={t.run.plan}
@@ -687,7 +870,13 @@ export function RunView({
           )}
         >
           <p className="pb-1 text-sm text-muted-foreground">{t.run.plan}</p>
-          <PlanSteps plan={latest.plan} active={latest.active} />
+          {/* Another run's plan comes in whole, fading in, rather than as its steps changing one by one. */}
+          <div
+            key={kept.run}
+            className="transition-opacity duration-150 ease-(--ease-out) motion-reduce:transition-none starting:opacity-0"
+          >
+            <PlanSteps plan={kept.plan} active={kept.active} />
+          </div>
         </aside>
       )}
     </div>

@@ -1,9 +1,8 @@
-"""Who a request comes from, as Jupyter Server's identity providers say it: the runtime asks, never remembers.
+"""Who a request comes from: the runtime asks, never remembers.
 
-There are no sessions. Every request carries its own proof, a token or a header a sign-in proxy set, and is judged on
-its own, so any number of runtimes can serve the same users. Which kind of proof a runtime takes is a setting
-(CU_AUTH): none (auth.none), a shared token (auth.token), or a sign-in proxy in front of it (auth.proxy), such as
-oauth2-proxy, Cloudflare Access or Tailscale. Authenticate is the gate in front of the API."""
+There are no sessions. Every request carries its own proof, a token or a header a sign-in proxy set, so any number of
+runtimes can serve the same users. Which proof a runtime takes is a setting (CU_AUTH). Authenticate is the gate in
+front of the API."""
 
 from starlette.datastructures import Headers
 from starlette.requests import HTTPConnection
@@ -11,7 +10,7 @@ from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from computer_use.auth.base import Authenticator
-from computer_use.auth.none import NoAuthenticator, loopback
+from computer_use.auth.none import NoAuthenticator, loopback, named_here
 from computer_use.auth.proxy import ProxyAuthenticator
 from computer_use.auth.token import TokenAuthenticator
 from computer_use.config import Settings
@@ -22,7 +21,7 @@ __all__ = ["Authenticate", "build_authenticator", "loopback"]
 # site (another app on localhost, a sibling subdomain) gets the cookie too, and a form or a text/plain post from it
 # needs no CORS preflight.
 SAFE = frozenset({"GET", "HEAD", "OPTIONS"})
-OWN = frozenset({"same-origin", "none"})  # Sec-Fetch-Site: the page's own origin, or typed into the address bar
+OWN = frozenset({"same-origin", "none"})  # Sec-Fetch-Site: the page's own origin, or the address bar
 
 
 def build_authenticator(settings: Settings) -> Authenticator:
@@ -37,9 +36,9 @@ def build_authenticator(settings: Settings) -> Authenticator:
 
 class Authenticate:
     """The gate in front of the API: a request it lets through names someone, except to the authenticator's own
-    routes, which anyone may call; the rest it answers 401, saying how the page signs in. A browser's request that
-    would change something it lets through only from the page's own origin. Plain ASGI, so a stream of events passes
-    through untouched."""
+    routes; the rest get 401, saying how the page signs in. A browser's request that would change something passes
+    only from the page's own origin, and with no sign-in, any request only when it names this machine. Plain ASGI, so
+    a stream of events passes through untouched."""
 
     def __init__(self, app: ASGIApp, authenticator: Authenticator):
         self.app = app
@@ -49,7 +48,11 @@ class Authenticate:
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] != "http" or not scope["path"].startswith("/api/"):
             return await self.app(scope, receive, send)
-        site = Headers(scope=scope).get("sec-fetch-site")  # sent by browsers, not by the command line
+        headers = Headers(scope=scope)
+        if self.authenticator.login is None and not named_here(headers.get("host", "")):
+            refused = {"error": "refused: with no sign-in, the runtime answers only to localhost"}
+            return await JSONResponse(refused, 403)(scope, receive, send)
+        site = headers.get("sec-fetch-site")  # sent by browsers, not by the command line
         if scope["method"] not in SAFE and site is not None and site not in OWN:
             return await JSONResponse({"error": "refused: sent from another site"}, 403)(scope, receive, send)
         if scope["path"] not in self.open:

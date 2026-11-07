@@ -1,6 +1,6 @@
 from computer_use.agent.inbox import SUBAGENT, Inbox
 from computer_use.storage import MAIN
-from conftest import new_log, read_events
+from conftest import new_log, read_events, runs_dir
 
 
 def test_each_agent_reads_every_message_once_in_order():
@@ -19,19 +19,19 @@ def test_a_message_waits_until_an_agent_reads_it():
     inbox.take(SUBAGENT)
     waiting = inbox.put("in dark mode")
 
-    assert inbox.pending() == [waiting]
-    assert inbox.take(MAIN) == [read, waiting] and inbox.pending() == []
+    assert inbox.pending() == [waiting] and inbox.delivered() == [read]
+    assert inbox.take(MAIN) == [read, waiting] and inbox.pending() == [] and inbox.delivered() == [read, waiting]
 
 
-def test_a_message_is_logged_once_when_an_agent_first_reads_it(tmp_path):
+async def test_a_message_is_logged_once_when_an_agent_first_reads_it(tmp_path):
     inbox = Inbox()
-    inbox.log = new_log(tmp_path)
+    inbox.log = await new_log(tmp_path)
     message = inbox.put("and Italy?")
 
     inbox.take(SUBAGENT)
     inbox.take(MAIN)
 
-    logged = [event for event in read_events(tmp_path / "runs" / inbox.log.run) if event["type"] == "message"]
+    logged = [event for event in read_events(runs_dir(tmp_path) / inbox.log.run) if event["type"] == "message"]
     assert [(event["id"], event["text"]) for event in logged] == [(message.id, "and Italy?")]
 
 
@@ -56,3 +56,15 @@ def test_an_ended_run_takes_no_more_and_hands_back_what_the_main_agent_did_not_r
 
     assert inbox.close() == [only_the_desktop, nobody]
     assert inbox.put("too late") is None
+
+
+def test_a_queued_message_is_read_by_no_agent_and_handed_back_when_the_run_ends():
+    inbox = Inbox()
+    later = inbox.put("then do this", queued=True)
+    now = inbox.put("and this now")
+    dropped = inbox.put("never mind", queued=True)
+
+    assert inbox.take(SUBAGENT) == [now]
+    assert inbox.pending() == [] and inbox.queued() == [later, dropped]
+    assert inbox.withdraw(dropped.id) and inbox.queued() == [later]
+    assert inbox.close() == [later, now]  # in the order sent; the next run takes the unread ones first

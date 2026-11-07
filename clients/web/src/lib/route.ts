@@ -27,10 +27,3 @@ export const projectFromHash = () => {
 export function openProject(project: string) {
   window.location.hash = projectHref(project).slice(1)
 }
-
-// Every conversation on one page, #/chats, as Claude's "All chats" is.
-
-export const CHATS_HREF = "#/chats"
-
-/** Whether the URL opens the page of every conversation. */
-export const chatsFromHash = () => window.location.hash === CHATS_HREF

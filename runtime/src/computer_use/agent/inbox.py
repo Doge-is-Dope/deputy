@@ -1,8 +1,7 @@
 """Steering messages, read after the current action and before the next model call.
 
-The main agent reads user messages; background tasks read its instructions.
-Unread user messages continue in the next run. All access is on the server's
-event loop, so no lock is needed."""
+A queued message waits, read by no agent, for the run to end; it and the unread ones continue in the next run. All
+access is on the server's event loop, so no lock is needed."""
 
 import asyncio
 import time
@@ -15,7 +14,7 @@ from computer_use.storage import MAIN
 if TYPE_CHECKING:
     from computer_use.agent.trajectory import Trajectory
 
-# An agent the main agent hands work to (agent.subagent), as a reader; the main agent reads as MAIN.
+# The reader name of an agent the main agent hands work to; the main agent reads as MAIN.
 SUBAGENT = "subagent"
 
 
@@ -23,8 +22,9 @@ SUBAGENT = "subagent"
 class Message:
     id: str
     text: str
-    time: float  # when the user sent it
+    time: float
     read_by: set[str] = field(default_factory=set)
+    queued: bool = False
 
 
 class Inbox:
@@ -36,29 +36,30 @@ class Inbox:
         self.log: Trajectory | None = None  # where the first read of each message is logged, once the run has one
         self._arrived = asyncio.Event()
 
-    def put(self, text: str) -> Message | None:
-        """Take a message for the run; None once the run has ended."""
+    def put(self, text: str, queued: bool = False) -> Message | None:
+        """Take a message for the run, or `queued` for the next one; None once the run has ended."""
         if self.closed:
             return None
-        message = Message(str(uuid.uuid4()), text, time.time())
+        message = Message(str(uuid.uuid4()), text, time.time(), queued=queued)
         self._messages.append(message)
-        self._arrived.set()
+        if not queued:
+            self._arrived.set()
         return message
 
+    def _steering(self) -> list[Message]:
+        return [message for message in self._messages if not message.queued]
+
     def unread(self, reader: str) -> bool:
-        """Whether a message waits for this agent."""
-        return any(reader not in message.read_by for message in self._messages)
+        return any(reader not in message.read_by for message in self._steering())
 
     async def wait(self, reader: str) -> None:
-        """Until a message waits for this agent."""
         while not self.unread(reader):
             self._arrived.clear()
             await self._arrived.wait()
 
     def take(self, reader: str) -> list[Message]:
-        """The messages this agent has not read yet, now read. The first agent to read one logs it: the page shows it
-        from then on as part of the conversation."""
-        new = [message for message in self._messages if reader not in message.read_by]
+        """The messages this agent has not read yet, now read. The first agent to read one logs it."""
+        new = [message for message in self._steering() if reader not in message.read_by]
         for message in new:
             if not message.read_by and self.log is not None:
                 self.log.message(message.id, message.text)
@@ -66,15 +67,19 @@ class Inbox:
         return new
 
     def read(self, reader: str) -> list[Message]:
-        """The messages this agent has read, oldest first."""
-        return [message for message in self._messages if reader in message.read_by]
+        return [message for message in self._steering() if reader in message.read_by]
 
     def pending(self) -> list[Message]:
-        """The messages no agent has read yet."""
-        return [message for message in self._messages if not message.read_by]
+        return [message for message in self._steering() if not message.read_by]
+
+    def queued(self) -> list[Message]:
+        return [message for message in self._messages if message.queued]
+
+    def delivered(self) -> list[Message]:
+        return [message for message in self._messages if message.read_by]
 
     def withdraw(self, id: str) -> bool:
-        """Take back a message no agent has read yet; False once one has, or for one that is not here."""
+        """Take back a message no agent has read yet, or one queued; False once one has, or if it is not here."""
         message = next((each for each in self._messages if each.id == id), None)
         if message is None or message.read_by:
             return False
@@ -82,6 +87,7 @@ class Inbox:
         return True
 
     def close(self) -> list[Message]:
-        """Take no more messages, and return those the main agent has not read: the run ended before it could."""
+        """Take no more messages, and return those the main agent has not read, queued ones included, in the order
+        sent."""
         self.closed = True
         return [message for message in self._messages if MAIN not in message.read_by]

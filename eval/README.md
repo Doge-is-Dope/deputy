@@ -4,7 +4,7 @@ Run Windows desktop tasks through the runtime, grade the results by hand, and co
 
 ## Quick start
 
-First, complete the [runtime setup](../README.md#quick-start). Keep the runtime container running and its Windows connection active. Use a dedicated test desktop.
+First, complete the [runtime setup](../runtime/README.md#setup). Keep the runtime container running and its Windows connection active. Use a dedicated test desktop.
 
 From the repository root, install the local Python environment used by `eval/ev`:
 
@@ -18,60 +18,55 @@ Close unrelated windows on the Windows machine. Once the desktop is ready for te
 eval/ev reset --accept
 ```
 
-Then list the tasks, run a sample in English and create the report:
+Then list the tasks, run a sample and create the report:
 
 ```bash
 eval/ev tasks              # list the tasks
-eval/ev run 11 14 --lang en # run tasks 11 and 14 in English
+eval/ev run 10 13          # run tasks 10 and 13
 eval/ev report             # pass rates, the grading sheet and the HTML report
 ```
 
-`eval/ev` runs [eval.py](eval.py) with the runtime's Python. It needs the runtime container up
-(`docker compose up` in `runtime/`) and the Windows PC connected. Each `run` copies the selected `runtime/src` into
-the container and serves it there on port 8001, beside the server the web page uses, so source changes do not require
-rebuilding the image. Dependency changes still require rebuilding it. The eval drives that server through the
-[CLI](../clients/cli/README.md)'s API client, as any client would.
+`eval/ev` runs [eval.py](eval.py) with the runtime's Python and the [CLI](../clients/cli/README.md)'s API client. Each run copies the selected `runtime/src` into the running container and starts an eval server on port 8001. Source changes need no image rebuild; dependency changes do.
 
-Both servers share the container's runs and its desktop lock, so only one run uses the desktop at a time. The web page
-lists the eval's conversations under the eval project; to follow one live, point a web page at port 8001
-(`CU_API_URL=http://127.0.0.1:8001 bun run dev` in `clients/web/`). Versions from before the CLI became an API client have
-no server the eval can drive, so they cannot be run this way.
+To try a version by hand the same way, `eval/ev serve [--version REF]` serves it on port 8001 until Ctrl-C. Docker commands use your current Docker context (`docker context use` or `DOCKER_CONTEXT`).
+
+The eval and web servers share stored runs and the desktop lock. Only one run can use the desktop at a time. Eval conversations appear under the eval project in the web UI. To follow them live, run `CU_API_URL=http://127.0.0.1:8001 bun run dev` in `clients/web/`. Versions predating the CLI's HTTP API client are unsupported.
 
 ## Tasks
 
-[tasks.jsonl](tasks.jsonl) holds 20 tasks, one per line, each asked in Traditional Chinese (default) or English
-(`--lang en`). `eval/ev tasks 11` shows one task in full, with the PowerShell that sets it up.
+[tasks.jsonl](tasks.jsonl) holds 22 tasks, one per line. `eval/ev tasks 10` shows one task in full, with the
+PowerShell that sets it up.
 
 | Kind | Tasks |
 |---|---|
 | Windows Agent Arena | 01–07: Notepad, Calculator, Paint, Explorer, Settings, Chrome |
-| Back-office web pages | 08–10: look up a table, fill a form, reconcile a page with a spreadsheet |
-| OSWorld Windows (Office) | 11–13, 15–17: Excel, Word, PowerPoint, multi-app |
-| Typing Traditional Chinese | 14 |
-| Infeasible: the right answer is "this cannot be done" | 18–19, scored apart |
-| Distractor: a similar open file must be left alone | 20 |
+| Back-office web pages | 08–09: fill a form, reconcile a page with a spreadsheet; 21: an ID from one page, its phone from a 250-page table |
+| OSWorld Windows (Office) | 10–12, 14–16: Excel, Word, PowerPoint, multi-app |
+| Typing Traditional Chinese | 13 |
+| Infeasible: the right answer is "this cannot be done" | 17–18, scored apart |
+| Distractor: a similar open file must be left alone | 19 |
+| Keyboard only: a submenu ignores the mouse | 20: export from a menu whose submenu takes only the keyboard |
+| Professional system: function codes, query mode, value lists, maker-checker | 22: a local mock, change a party's phone and leave it unauthorized |
 
-Each line defines one task: its number (`no`), ID (`id`), source, starting state (`start`), goal in both languages
-(`goal`), expected result (`expect`) and setup steps (`setup`). The setup steps are converted to PowerShell by
+Each line defines one task: its number (`no`), ID (`id`), source, starting state (`start`), goal (`goal`),
+expected result (`expect`) and setup steps (`setup`). The setup steps are converted to PowerShell by
 `step_script` in [winsetup.py](winsetup.py). Optional fields are `feasible: false` and `max_steps` (default 60).
 
-The `{name}` placeholder becomes `ev-<version>-<no>-<attempt>`, giving each attempt its own files. Keep existing task numbers stable when editing the task list.
+The `{name}` placeholder becomes `ev-<version>-<no>-<attempt>`, giving each attempt its own files. Keep task numbers stable while results filed under them are kept.
 
 ## Running
 
 ```bash
-eval/ev run 11 14 --trials 3 --lang en                    # run each task three times
-eval/ev run 11 --version HEAD --lang en                   # use the latest committed runtime source
-eval/ev run 11 --computer openai:gpt-6-luna medium --lang en # override the desktop model and effort
+eval/ev run 10 13 --trials 3                       # run each task three times
+eval/ev run 10 --version HEAD                      # use the latest committed runtime source
+eval/ev run 10 --computer openai:gpt-6-luna medium # override the desktop model and effort
 ```
 
-Omit the task numbers to run all 20 tasks. Omit `--lang en` to use Traditional Chinese. Without `--version`, the evaluator uses the current working-tree source, including uncommitted changes under `runtime/src`.
+Omit the task numbers to run all 22 tasks. Without `--version`, the evaluator uses the current working-tree source, including uncommitted changes under `runtime/src`.
 
-Before each task, `run` checks that the desktop is connected (waiting up to a minute for it to come back), that
-nobody else has it, and that the screen matches `clean-desktop.png` (local, not in Git). It then builds the starting
-state by pasting PowerShell into the Run dialog, runs the goal, and closes what the run opened without saving. It
-never closes windows it did not open: if the desktop is cluttered before the first task, close them yourself, or run
-`eval/ev reset --accept` if only the wallpaper changed.
+Before each task, `run` checks that the desktop is connected, available and matches the local `clean-desktop.png` baseline. It waits up to a minute for reconnection. It then sets up the task through PowerShell, runs the goal and closes any windows it opened without saving.
+
+Close unrelated windows yourself before testing. If only the wallpaper changed, update the baseline with `eval/ev reset --accept`.
 
 Steps the agent asks approval for are approved automatically; add `--ask` to answer them yourself.
 
@@ -82,20 +77,13 @@ as `computer-use export` writes them). See [versions and prompts](#versions-and-
 
 The eval compares results: of two prompt versions, two code versions or two model setups.
 
-A version is named by its short commit. When `runtime/src` has uncommitted changes, a digest of the source is added
-(`e856315-80cad5`), so each set of changes is a version of its own: tweak a prompt, run again, and the results go to a
-new folder rather than mixing with the last one. Name what a version changes with `--note`; the report and the
-terminal summary call the version by it, and it stays until a later run gives another.
+Versions use the short commit hash. Uncommitted changes under `runtime/src` add a source digest, such as `e856315-80cad5`, keeping each revision's results separate. Use `--note` to give the version a readable label in reports. The label stays until a later run replaces it.
 
 ```bash
-eval/ev run 11 14 --trials 3 --note "shorter plan steps"
+eval/ev run 10 13 --trials 3 --note "shorter plan steps"
 ```
 
-The runtime keeps everything its agents are told in `runtime/src/computer_use/prompts/`. Each version's `version.json`
-records a digest of that folder and one of the rest of the code, and the report says of the two versions picked
-whether only their prompts differ, so a change in results can be put down to the prompts. When they do, it shows how
-the prompts changed, below the numbers. Each version's folder keeps `src/`, the source it ran, which those diffs come
-from and which keeps the wording of a prompt that did well, even one never committed.
+Each version saves its tested source in `src/`, including uncommitted prompts. Its `version.json` records separate digests for `runtime/src/computer_use/prompts/` and the remaining code. The report identifies comparisons where only prompts changed and shows their diff below the results.
 
 ## Grading
 
@@ -108,29 +96,21 @@ The report's thumbnails link to the screenshots next to it, so keep it in `resul
 
 ## Settings and repeated trials
 
-New `result.json` files keep `settings.requested_agents` and the resolved `settings.agents`, using the tested
-server's defaults and supported efforts. The readable `model` field stays available to the HTML report. Pruning
-metadata (`settings.screenshots`, `keep`/`every`) comes from literal constants in the saved source, without importing
-that code; an implementation without those constants is recorded as unknown. No runtime defaults are changed.
+`result.json` records requested agents in `settings.requested_agents` and effective models and efforts in `settings.agents`. The HTML report also uses the readable `model` field. Screenshot pruning settings (`settings.screenshots`, `keep`/`every`) are read from constants in the saved source without executing it. Missing constants are recorded as unknown; runtime defaults stay unchanged.
 
-The terminal report uses **all trials**, grouped by source, effective models/efforts, pruning settings, language,
-step limit and approval mode. It shows pass/graded, ungraded and not-started counts, endings, total main/subagent
-calls (`M/S`), per-task successful-run p50/p95 seconds and all-started-trial agent cost. Failed and ungraded trials do not
-make the latency numbers look faster; their timings remain in the individual results. Small-sample p95 is
-descriptive, not a reliable tail-latency estimate.
-Infeasible tasks are marked and graded separately. The HTML keeps its existing latest-trial comparison for diagnosis;
-use the terminal groups when assessing repeated A/B runs.
+The terminal report groups **all trials** by source, effective models and efforts, pruning settings, language, step limit and approval mode. Each group shows:
 
-Token/cache summaries use the exported end event's per-agent/model usage, not model usage added to it again.
-Reasoning tokens are already part of output. Cache-read ratios are weighted by recorded input tokens. Interrupted
-calls and missing usage/cost remain unknown: `?` is unknown, and `0.01200+?1` is a known subtotal with one unknown
-trial. Independent title costs are shown separately. Legacy records get available metrics from their exports but
-missing settings stay `legacy`/`unknown`, rather than being assigned today's defaults. Exports and result files
-are not rewritten by `report`.
+- Pass/graded, ungraded and not-started counts, plus task endings.
+- Main/subagent calls (`M/S`) and agent cost across all started trials.
+- Per-task p50/p95 duration for successful runs. Failed and ungraded timings remain in individual results. Small-sample p95 is descriptive, not a reliable tail estimate.
 
-A report reads each result and trajectory once, shares compact action/text summaries between the grading sheet
-and HTML, and releases the full trajectory data. Statistics do not decode screenshots or retain full conversations
-in a persistent cache. Offline regression checks use the existing runtime test environment:
+Infeasible tasks are graded separately. Use terminal groups for repeated A/B comparisons; the HTML compares the latest trials for diagnosis.
+
+Usage totals come from the exported end event, counted once per agent and model. Reasoning tokens are included in output; cache-read ratios are weighted by input tokens. Title costs are shown separately.
+
+Missing usage and interrupted calls stay unknown: `?` means unknown, and `0.01200+?1` means a known subtotal plus one unknown trial. Older records use available export metrics and mark missing settings as `legacy` or `unknown`. Generating a report never rewrites exports or results.
+
+Reports read each result and trajectory once, then share compact summaries between the grading sheet and HTML. Statistics skip screenshot decoding and do not cache full conversations. Run offline regression checks in the runtime test environment:
 
 ```bash
 cd runtime

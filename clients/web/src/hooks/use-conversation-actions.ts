@@ -38,7 +38,7 @@ export function useConversationActions({
   showLive,
   refreshStatus,
   confirmControl,
-  refreshRuns,
+  refreshConversations,
 }: {
   thread: string | null
   project: string | null // the project whose home is open: a new conversation begins in it
@@ -49,7 +49,7 @@ export function useConversationActions({
   showLive: (focus?: boolean) => void
   refreshStatus: () => void
   confirmControl: (control: Status["control"]) => void
-  refreshRuns: () => void
+  refreshConversations: () => void
 }) {
   const say = useT()
   const input = useRef<HTMLTextAreaElement>(null)
@@ -59,58 +59,94 @@ export function useConversationActions({
   // Command-line runs have no inbox, so they cannot take messages while working.
   const takesMessages = working?.pending !== undefined
   const userHasControl = status?.control.owner === "user"
-  const approval = approvalFor(status, current)
+  // The step any log of the session in progress waits to have approved: its turn's or a task's.
+  const approval = approvalFor(
+    status,
+    working
+      ? [working.run, ...(working.turn ? [working.turn] : []), ...working.tasks]
+      : []
+  )
 
-  // Messages appear immediately, until status lists them or their run ends. RunView replaces read messages from its log.
-  const [justSent, setJustSent] = useState<{ run: string; message: Pending }[]>(
-    []
-  )
+  // The run started last from here and what was sent to it, drawn at once, before its log or the conversation's list
+  // has it.
+  const [started, setStarted] = useState<{
+    run: string
+    thread: string
+    goal: string
+  } | null>(null)
+
+  // Messages appear immediately. One queued, until status lists it queued, or its run ends. One that steers the
+  // session, until its run ends: read, it is in the run's log a moment after the status says so, and the turn draws it
+  // from the log once it has it (RunThread), so it never goes missing in between.
+  const [justSent, setJustSent] = useState<
+    { run: string; message: Pending; queued: boolean }[]
+  >([])
   const listed = new Set(
-    status?.running.flatMap((each) => each.pending ?? []).map((each) => each.id)
+    status?.running.flatMap((each) =>
+      (each.queued ?? []).map((message) => message.id)
+    )
   )
-  const stillShown = (each: { run: string; message: Pending }) =>
-    !listed.has(each.message.id) &&
+  const stillShown = (each: {
+    run: string
+    message: Pending
+    queued: boolean
+  }) =>
+    !(each.queued && listed.has(each.message.id)) &&
     runningOf(status, { run: each.run }) !== null
   if (status && !justSent.every(stillShown))
     setJustSent(justSent.filter(stillShown))
-  // Kept while the same, so the turn it is shown in is not drawn again on every keystroke.
-  const shownPending = working?.pending
-  const pending = useMemo(
+  // What was sent to steer the session, which the conversation shows where it goes, and what waits for it to end,
+  // which the composer shows. Kept while the same, so the turn they are shown in is not drawn again on every keystroke.
+  const shownSteering = working?.pending
+  const shownQueued = working?.queued
+  const steering = useMemo(() => {
+    const waiting = shownSteering ?? []
+    const sent = justSent
+      .filter((each) => each.run === current && !each.queued)
+      .map((each) => each.message)
+    return [
+      ...waiting,
+      ...sent.filter(
+        (message) => !waiting.some((each) => each.id === message.id)
+      ),
+    ]
+  }, [shownSteering, justSent, current])
+  const queued = useMemo(
     () => [
-      ...(shownPending ?? []),
+      ...(shownQueued ?? []),
       ...justSent
-        .filter((each) => each.run === current)
+        .filter((each) => each.run === current && each.queued)
         .map((each) => each.message),
     ],
-    [shownPending, justSent, current]
+    [shownQueued, justSent, current]
   )
 
   /**
-   * Does what the user asked of the runtime, null if it failed: a notice says why, unless `ignore` says the
-   * failure is no news (`missing`, what a 404 means), and the status and, if `runs` may have changed, the list of
-   * conversations are read again either way.
+   * Runs an API action and returns null on failure. Shows errors unless `ignore` matches;
+   * `missing` supplies the 404 message. Always refreshes status, whose revision brings the lists along when runs
+   * change; `conversations` refreshes them too, for project writes, which it does not count.
    */
   async function act<T>(
     action: () => Promise<T>,
     {
       missing,
       ignore,
-      runs = true,
+      conversations = false,
     }: {
       missing?: string
       ignore?: (error: unknown) => boolean
-      runs?: boolean
+      conversations?: boolean
     } = {}
   ): Promise<T | null> {
+    let result: T | null = null
     try {
-      return await action()
+      result = await action()
     } catch (error) {
       if (!ignore?.(error)) showError(explain(error, missing))
-      return null
-    } finally {
-      refreshStatus()
-      if (runs) refreshRuns()
     }
+    refreshStatus()
+    if (conversations) refreshConversations()
+    return result
   }
 
   // Sending @Computer asks before handing the user's desktop back, except on a phone where sending is the answer.
@@ -139,7 +175,7 @@ export function useConversationActions({
   }, [handover, owner, thread])
 
   // A new conversation opens with a composer of its own in place of the one its first message was sent from: it takes
-  // the focus over, as ChatGPT's stays in the composer after sending.
+  // the focus over, so the focus stays in the composer after sending.
   const refocus = useRef<string | null>(null)
   useEffect(() => {
     if (refocus.current === null || refocus.current !== thread) return
@@ -147,14 +183,17 @@ export function useConversationActions({
     input.current?.focus()
   }, [thread])
 
-  async function start(goal: string) {
+  // `queue`: while the session works, the message waits for it to end rather than steering it.
+  async function start(goal: string, queue = false) {
     if (current !== null && takesMessages) {
-      const sent = await act(() => api.start(goal, thread ?? undefined))
+      const sent = await act(() =>
+        api.start(goal, thread ?? undefined, false, undefined, queue)
+      )
       const message = sent?.message
       if (sent && message)
         setJustSent((list) => [
           ...list,
-          { run: sent.id, message: { id: message, text: goal } },
+          { run: sent.id, message: { id: message, text: goal }, queued: queue },
         ])
       return sent !== null
     }
@@ -166,6 +205,7 @@ export function useConversationActions({
       api.start(goal, thread ?? undefined, takeControl, project ?? undefined)
     )
     if (created) {
+      setStarted({ run: created.id, thread: created.thread, goal })
       if (created.thread !== thread) refocus.current = created.thread
       open(created.thread)
     }
@@ -173,15 +213,14 @@ export function useConversationActions({
   }
 
   function stop() {
-    if (current) return act(() => api.stop(current))
+    if (current && thread) return act(() => api.stop(thread))
   }
 
-  // A message read meanwhile is in the conversation already, which is no news.
+  // A queued message the session started the next one with meanwhile is in the conversation already, which is no news.
   async function withdraw(message: Pending) {
     if (current === null) return
     await act(() => api.withdraw(current, message.id), {
       ignore: (error) => error instanceof ApiError && error.status === 409,
-      runs: false,
     })
     setJustSent((list) => list.filter((each) => each.message.id !== message.id))
   }
@@ -193,14 +232,6 @@ export function useConversationActions({
     })
     if (deleted && conversation === thread) open(null)
     return deleted !== null
-  }
-
-  // Deleted conversations back from the runtime's trash: true once all are.
-  async function restore(conversations: string[]) {
-    const restored = await Promise.all(
-      conversations.map((each) => act(() => api.restoreConversation(each)))
-    )
-    return restored.every((each) => each !== null)
   }
 
   function rename(conversation: string, title: string) {
@@ -217,20 +248,17 @@ export function useConversationActions({
 
   // A project's id once made (or the viewer's by that name already), renamed, or deleted; null if not.
   function createProject(name: string) {
-    return act(() => api.createProject(name))
+    return act(() => api.createProject(name), { conversations: true })
   }
 
   function renameProject(project: string, name: string) {
-    return act(() => api.renameProject(project, name))
+    return act(() => api.renameProject(project, name), {
+      conversations: true,
+    })
   }
 
   function deleteProject(project: string) {
-    return act(() => api.deleteProject(project))
-  }
-
-  // Not said if it fails: its conversations come back all the same, in the recents.
-  function restoreProject(project: string) {
-    return act(() => api.restoreProject(project), { ignore: () => true })
+    return act(() => api.deleteProject(project), { conversations: true })
   }
 
   // The live view presents control failures itself; only skipping a takeover reports one in the conversation.
@@ -267,7 +295,6 @@ export function useConversationActions({
       () => api.approval(id, decision, note).then(() => true),
       {
         ignore: (error) => error instanceof ApiError && error.status === 409,
-        runs: false,
       }
     )
     return done !== null
@@ -278,20 +305,20 @@ export function useConversationActions({
     current,
     takesMessages,
     approval,
-    pending,
+    steering,
+    queued,
     handover,
     asking,
+    started,
     start,
     stop,
     withdraw,
     remove,
-    restore,
     rename,
     move,
     createProject,
     renameProject,
     deleteProject,
-    restoreProject,
     setControl,
     takeOver,
     skip,

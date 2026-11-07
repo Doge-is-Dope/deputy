@@ -7,19 +7,16 @@ import computer_use.agent.computer_agent as computer_agent
 import computer_use.desktop.executor
 from computer_use.agent.inbox import Inbox
 from computer_use.agent.review import Verdict
-from computer_use.storage.files import FileRunStore
-from conftest import run_turn
-from conftest import read_events, run_dir
+from conftest import run_turn, runner_of
+from conftest import events_of, first_run, run_file, task_states
 from computer_use.config import RunChoices
 from computer_use.desktop.control import ApprovalFile, ControlFile
-from computer_use.runner import Runner
 from conftest import (
     computer_use_result,
     delegate,
     fixture_png,
     handed_back,
     logged,
-    run_folder,
     sent_while_pressing,
     telling,
     tool_call,
@@ -61,11 +58,11 @@ async def test_a_step_runs_only_once_the_user_approves_it(settings, computer, mo
     assert await user == [[]]
     assert computer.calls == [("click", (1180, 92), "left", 1, [])]
     kinds = ("model", "confirm", "decision", "action")
-    events = [event for event in read_events(run_dir(settings, result.run)) if event["type"] in kinds and "agent" not in event]
+    events = [event for event in events_of(settings, result.run) if event["type"] in kinds and "agent" not in event]
     assert [event["type"] for event in events] == ["model", "confirm", "decision", "action", "model"]
     confirm, decision = events[1], events[2]
     assert confirm["consequence"] == "寄出週報給 bob@example.com" and confirm["args"] == {"coordinate": [1180, 92]}
-    assert (run_dir(settings, result.run) / confirm["screenshot"]).exists()
+    assert run_file(settings, result.run, confirm["screenshot"]).exists()
     assert (decision["outcome"], decision["by"]) == ("approved", "web")
     assert not settings.approval_path.exists()
     assert handed_back(result)["reply"] == "Sent it."
@@ -97,7 +94,7 @@ async def test_taking_the_desktop_answers_a_step_awaiting_approval(settings, com
             await asyncio.sleep(0.01)
         control.write("user", "taken over by user")
         while not any(
-            "The user has control" in event.get("text", "") for event in read_events(run_folder(settings))
+            "The user has control" in event.get("text", "") for event in events_of(settings, first_run(settings))
         ):
             await asyncio.sleep(0.01)
         control.write("agent", "returned by user")
@@ -172,13 +169,13 @@ async def test_stopping_a_run_while_it_waits_for_approval_sends_nothing(settings
         await run
 
     assert computer.calls == [] and not settings.approval_path.exists()
-    (end,) = [event for event in read_events(run_folder(settings)) if event["type"] == "end"]
-    assert end["stop_reason"] == "cancelled"
+    # The turn that handed it over had ended; the task waiting for approval ends stopped.
+    assert task_states(settings, first_run(settings)) == [("t1", "started"), ("t1", "stopped")]
 
 
 async def test_a_step_approved_after_the_screen_changed_where_it_lands_is_asked_again(settings, computer, monkeypatch):
     monkeypatch.setattr(computer_use.desktop.executor, "MOVING_WATCH_SECONDS", 0)
-    step = {"coordinate": [200, 90], "needs_confirmation": True, "consequence": "刪除 report.txt"}
+    step = {"coordinate": [300, 90], "needs_confirmation": True, "consequence": "刪除 report.txt"}
     use_script(monkeypatch, [asking("c1", **step), asking("c2", **step), AIMessage(content="Deleted.")])
     approvals = ApprovalFile(settings.approval_path)
 
@@ -197,7 +194,7 @@ async def test_a_step_approved_after_the_screen_changed_where_it_lands_is_asked_
 
     stale, done = logged(result, "action")
     assert stale["status"] == "error" and "the screen changed since your last screenshot" in stale["result"]
-    assert done["status"] == "success" and computer.calls == [("click", (200, 90), "left", 1, [])]
+    assert done["status"] == "success" and computer.calls == [("click", (300, 90), "left", 1, [])]
     assert len(logged(result, "confirm")) == 2
 
 
@@ -279,7 +276,7 @@ async def test_with_auto_review_on_a_step_it_lets_through_goes_ahead_without_the
 
     assert computer.calls == [("press", [["delete"]])]
     kinds = ("confirm", "review", "decision", "action")
-    events = [event for event in read_events(run_dir(settings, result.run)) if event["type"] in kinds and "agent" not in event]
+    events = [event for event in events_of(settings, result.run) if event["type"] in kinds and "agent" not in event]
     assert [event["type"] for event in events] == ["confirm", "review", "decision", "action"]
     review, decision = events[1], events[2]
     assert review["allow"] and review["reason"] == "a.txt 是這段對話剛建立的"
@@ -307,7 +304,7 @@ async def test_a_step_auto_review_does_not_let_through_waits_for_the_user(settin
 
 
 async def test_auto_review_turned_off_while_a_run_works_asks_the_user_from_its_next_step(
-    settings, computer, monkeypatch
+    settings, computer, control, monkeypatch
 ):
     looking, turned_off = asyncio.Event(), asyncio.Event()
 
@@ -320,7 +317,7 @@ async def test_auto_review_turned_off_while_a_run_works_asks_the_user_from_its_n
     monkeypatch.setattr(computer_agent, "review_step", review_step)
     use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", **DELETE)]), asking("c2"),
                              AIMessage(content="Sent it.")])
-    runner = Runner(settings, computer, FileRunStore(settings.data_dir))
+    runner = runner_of(settings, computer, control)
     run = await runner.start("刪掉 a.txt 再寄出週報", 10, choices=AUTO)
     task = runner.runs[run].task
 
@@ -331,7 +328,7 @@ async def test_auto_review_turned_off_while_a_run_works_asks_the_user_from_its_n
     await asyncio.wait_for(task, 20)
     await user
 
-    events = list(read_events(run_folder(settings)))
+    events = list(events_of(settings, first_run(settings)))
     assert [e["auto_review"] for e in events if e["type"] == "confirm"] == [True, False]
     assert [e["by"] for e in events if e["type"] == "decision"] == ["auto", "web"]
     assert not runner.choose(run, "auto")

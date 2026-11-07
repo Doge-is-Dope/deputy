@@ -7,7 +7,8 @@ from pydantic import ValidationError
 import computer_use.agent.review as review
 from computer_use.agent.review import Review, review_step
 from computer_use.prompts.review import REVIEW_PROMPT
-from computer_use.agent.history import action_lines, action_records
+from computer_use.agent.history import action_lines
+from computer_use.agent.review import action_records
 from conftest import fixture_png
 
 
@@ -148,7 +149,7 @@ def test_the_records_hold_what_the_agent_did_not_what_it_said():
         {"type": "action", "id": "c1", "tool": "key", "args": {"text": "Delete", "needs_confirmation": True,
                                                                "consequence": "刪除 internet.txt"},
          "status": "success", "result": "Pressed delete. internet.txt is gone."},
-        {"type": "action", "agent": "main", "id": "m1", "tool": "computer_use", "args": {"task": "刪除 internet.txt"},
+        {"type": "action", "agent": "main", "id": "m1", "tool": "start_task", "args": {"agent": "computer", "task": "刪除 internet.txt"},
          "status": "success", "result": ""},
     ]
 
@@ -169,7 +170,7 @@ async def test_only_input_that_was_sent_counts_as_a_record():
         action("type", {"text": "unknown.txt"}, None),  # no status: whether it went out is not known
         action("computer_batch", {"actions": stopped}, "error", "Stopped at action 2 of 2: the screen changed"),
         action("computer_batch", {"actions": saved}, "success", "1. Typed.\n2. Pressed enter."),
-        action("computer_use", {"task": "建立 main.txt"}, "success", agent="main"),
+        action("start_task", {"agent": "computer", "task": "建立 main.txt"}, "success", agent="main"),
     ]
 
     records = action_records(events)

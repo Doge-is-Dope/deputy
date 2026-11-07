@@ -4,12 +4,13 @@ import {
   releaseFullCanvas,
   type FullCanvas,
 } from "@/lib/webgl"
+import { reducedMotion } from "@/lib/motion"
 
 /**
  * The takeover's blue as one liquid surface, drawn on a canvas by a fragment shader: the tab (the pill's button
  * widening to the whole tab, up to the screen) and the frame (a stroke drawn on from the tab's ends both ways round
- * the screen, meeting at the top), joined by a smooth union so they always meet in a curve. live-view.tsx uses the CSS
- * takeover in index.css instead where this can't be drawn.
+ * the screen, meeting at the top), joined by a smooth union so they always meet in a curve. With motion reduced it is
+ * placed at once; where it can't be drawn, live-view.tsx shows a plain ring instead (index.css).
  */
 
 // The timing (index.css: --ease-out, --ease-in-out). Taking over, as the CSS takeover's: the tab widens out of the
@@ -295,7 +296,7 @@ export type LiquidParts = {
 }
 
 export type LiquidTakeover = {
-  /** Toward the takeover (true) or away from it. The first call only places it there. */
+  /** Toward the takeover (true) or away from it. The first call, and any with motion reduced, only places it there. */
   setTarget(on: boolean): void
   dispose(): void
 }
@@ -475,7 +476,7 @@ export function createLiquidTakeover(
 
   return {
     setTarget(next) {
-      if (!placed) {
+      if (!placed || reducedMotion()) {
         placed = true
         on = next
         tab = still(next ? 1 : 0)

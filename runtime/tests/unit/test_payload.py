@@ -4,11 +4,11 @@ Uses each integration's private `_get_request_payload`, so a dependency upgrade
 that changes serialization fails here before it costs a real model call.
 """
 
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, message_to_dict
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage, message_to_dict
 
 from computer_use.agent.models import build_chat_model
 from computer_use.config import Choice
-from computer_use.agent.history import restore
+from conftest import restore
 
 
 def _payload(settings, conversation, spec):
@@ -34,6 +34,20 @@ def test_anthropic_puts_image_inside_tool_result(settings, observe_conversation)
     assert image["type"] == "image"
     assert image["source"]["type"] == "base64"
     assert image["source"]["media_type"] == "image/png"
+
+
+def test_anthropic_caches_the_system_prompt_apart_from_the_conversation(settings, observe_conversation):
+    # Pruning screenshots changes the conversation, never what comes before it: the system prompt keeps its own entry.
+    tools, messages = observe_conversation
+    sections = SystemMessage(content=[{"type": "text", "text": "Rules."}, {"type": "text", "text": "\n\nSkills."}])
+    payload = _payload(settings, (tools, [sections, *messages]), "anthropic:claude-sonnet-5-5")
+    assert payload["system"] == [
+        {"type": "text", "text": "Rules."},
+        {"type": "text", "text": "\n\nSkills.", "cache_control": {"type": "ephemeral"}},
+    ]
+    payload = _payload(settings, (tools, [SystemMessage("Rules."), *messages]), "anthropic:claude-sonnet-5-5")
+    assert payload["system"] == [{"type": "text", "text": "Rules.", "cache_control": {"type": "ephemeral"}}]
+    assert payload["cache_control"] == {"type": "ephemeral"}  # and the conversation, up to its newest block
 
 
 def test_anthropic_gets_a_failed_result_with_the_screen_as_a_plain_one(settings, observe_conversation):
@@ -85,18 +99,19 @@ def test_only_a_model_built_to_stream_streams(settings):
 
 def test_openai_is_offered_the_hand_over_tools_and_left_to_choose_among_them(settings):
     from computer_use.agent.computer_agent import ComputerAgent
-    from computer_use.agent.main_agent import handover_tools
+    from computer_use.tools.tasks import handover_tools, TaskTool
 
     settings.openai_api_key = "sk-offline"
-    desktop = ComputerAgent(settings, None, None, None, "thread", "@Computer open Notepad", 10)  # never run here
-    tools = handover_tools([desktop], lock=None, background=None, user=None)
+    desktop = TaskTool(ComputerAgent.agent, ComputerAgent.about, None)  # schema only
+    tools = handover_tools([desktop], background=None, user=None)
     bound = build_chat_model(Choice("openai:gpt-6-luna", "high"), settings).bind_tools(tools)
     payload = bound.bound._get_request_payload([HumanMessage("@Computer open Notepad")], **bound.kwargs)
 
     assert "tool_choice" not in payload  # a message for the desktop is not forced (agent.main_agent DESKTOP_ASKED)
-    # Without a code runner, it is not offered the coding agent's write_code.
-    assert [each["name"] for each in payload["tools"]] == ["computer_use", "tell_task", "stop_task"]
-    assert list(payload["tools"][0]["parameters"]["properties"]) == ["title", "task"]
+    # Without a code runner, start_task offers only the computer agent.
+    assert [each["name"] for each in payload["tools"]] == ["start_task", "tell_task", "stop_task"]
+    assert list(payload["tools"][0]["parameters"]["properties"]) == ["agent", "title", "task"]
+    assert payload["tools"][0]["parameters"]["properties"]["agent"]["enum"] == ["computer"]
     assert list(payload["tools"][2]["parameters"]["properties"]) == ["task_id"]
 
 

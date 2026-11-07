@@ -9,9 +9,9 @@ from pydantic import ValidationError
 
 import computer_use.desktop.executor
 import computer_use.desktop.screen
-from computer_use.agent.tools import BatchAction, desktop_tools
-from computer_use.desktop.actions import CONFIRMABLE
-from computer_use.computers import ComputerError, Frame
+from computer_use.tools.desktop import desktop_tools
+from computer_use.desktop.actions import BATCHABLE, CONFIRMABLE
+from computer_use.computers import ComputerError
 from computer_use.desktop.screen import NOISE, changed_pixels, lasting_changed_pixels, mark, settle
 from conftest import fixture_png, tool_call
 
@@ -82,8 +82,6 @@ def test_every_input_action_must_say_whether_it_needs_the_users_approval(tools):
         schema = each.args_schema.model_json_schema()
         assert ("needs_confirmation" in schema.get("required", [])) == (name in CONFIRMABLE), name
         assert ("consequence" in schema["properties"]) == (name in CONFIRMABLE), name
-    # A batch says it once, for all its actions.
-    assert "needs_confirmation" not in BatchAction.model_json_schema()["properties"]
 
 
 async def test_an_input_action_without_the_flag_sends_nothing(tools, computer):
@@ -97,10 +95,10 @@ async def test_an_input_action_without_the_flag_sends_nothing(tools, computer):
 def test_a_mark_rings_where_a_step_acts_and_nothing_else():
     screen = screen_with()
     marked = mark(screen, [(100, 100)])
-    assert changed_pixels(screen, marked, around=[(100, 100)]) >= NOISE
-    assert changed_pixels(screen, marked, around=[(600, 400)]) == 0
+    assert changed_pixels(gray(screen), gray(marked), around=[(100, 100)]) >= NOISE
+    assert changed_pixels(gray(screen), gray(marked), around=[(600, 400)]) == 0
     drag = mark(screen, [(100, 100), (500, 100)])
-    assert changed_pixels(screen, drag, around=[(300, 100)]) >= NOISE
+    assert changed_pixels(gray(screen), gray(drag), around=[(300, 100)]) >= NOISE
 
 
 def screen_with(*boxes, ants: int | None = None):
@@ -123,25 +121,37 @@ def screen_with(*boxes, ants: int | None = None):
     return buffer.getvalue()
 
 
+def gray(png: bytes) -> Image.Image:
+    return Image.open(io.BytesIO(png)).convert("L")
+
+
 def test_changes_count_on_the_whole_screen_or_around_pointer_targets():
-    before, after = screen_with(), screen_with((1000, 700, 1100, 760))  # e.g. a toast in the corner
+    before, after = gray(screen_with()), gray(screen_with((1000, 700, 1100, 760)))  # e.g. a toast in the corner
     assert changed_pixels(before, after) >= NOISE
     assert changed_pixels(before, after, around=[(100, 100)]) == 0
     assert changed_pixels(before, after, around=[(100, 100), (1050, 700)]) >= NOISE
 
 
+def test_a_tooltip_below_a_pointer_target_is_not_a_change_there_and_a_change_at_it_is():
+    # As logged over RDP: hovering Excel's name box at (51, 182) shows its tooltip 14-33 pixels below the point.
+    point, tooltip, digit = (51, 182), (29, 196, 81, 215), (48, 175, 55, 189)
+    blank = gray(screen_with())
+    assert changed_pixels(blank, gray(screen_with(tooltip)), around=[point]) < NOISE
+    assert changed_pixels(blank, gray(screen_with(digit)), around=[point]) >= NOISE
+
+
 def test_one_typed_character_is_a_change_and_the_clock_turning_a_minute_is_not():
     # Sizes as measured over RDP: one digit typed in Notepad changes 104-123 pixels, the clock 28-39.
-    blank, digit, clock = screen_with(), screen_with((100, 100, 107, 114)), screen_with((1200, 770, 1205, 775))
+    blank, digit, clock = map(gray, (screen_with(), screen_with((100, 100, 107, 114)), screen_with((1200, 770, 1205, 775))))
     assert changed_pixels(blank, digit) >= NOISE > changed_pixels(blank, clock)
 
 
 def test_a_change_that_stays_counts_and_marching_ants_do_not():
-    seen, now, later = screen_with(ants=0), screen_with(ants=2), screen_with(ants=5)
+    seen, now, later = map(gray, (screen_with(ants=0), screen_with(ants=2), screen_with(ants=5)))
     assert changed_pixels(seen, now) >= NOISE
     assert lasting_changed_pixels(seen, now, later) < NOISE
     dialog = (400, 300, 700, 500)
-    now, later = screen_with(dialog, ants=2), screen_with(dialog, ants=5)
+    now, later = gray(screen_with(dialog, ants=2)), gray(screen_with(dialog, ants=5))
     assert lasting_changed_pixels(seen, now, later) >= NOISE
 
 
@@ -165,19 +175,27 @@ async def test_input_is_held_back_when_the_screen_changed_where_it_would_land(ex
     assert computer.calls == [("press", [["ctrl", "a"]])]
 
 
-async def test_settle_waits_for_a_late_effect_to_finish_drawing(computer, settings, fast_polls):
+def settle_waits(monkeypatch, no_change: float, quiet: float, longest: float) -> None:
+    """The waits after an action a test needs: for a change that never comes, for stillness, and the longest."""
+    monkeypatch.setattr(computer_use.desktop.executor, "SETTLE_SECONDS", no_change)
+    monkeypatch.setattr(computer_use.desktop.screen, "SETTLE_QUIET_SECONDS", quiet)
+    monkeypatch.setattr(computer_use.desktop.screen, "SETTLE_MAX_SECONDS", longest)
+
+
+async def test_settle_waits_for_a_late_effect_to_finish_drawing(computer, monkeypatch, fast_polls):
     # Like "enter" in Windows search: nothing for a while, then the app draws in two frames and holds still.
     desktop, half, app = screen_with(), screen_with((0, 0, 640, 400)), screen_with((0, 0, 1280, 400))
     frames = iter([desktop] * 5 + [half] + [app] * 1000)
     computer.screen = lambda: next(frames)
-    settings.settle_seconds, settings.settle_quiet_seconds, settings.settle_max_seconds = 1.0, 0.05, 2.0
-    assert changed_pixels((await settle(computer, settings, Frame.of(desktop))).png, app) == 0
+    settle_waits(monkeypatch, 1.0, 0.05, 2.0)
+    frame, _ = await settle(computer, gray(desktop), 1.0)
+    assert changed_pixels(gray(frame.png), gray(app)) == 0
 
 
-async def test_settle_stops_waiting_when_nothing_changes(computer, settings, fast_polls):
-    settings.settle_seconds, settings.settle_quiet_seconds, settings.settle_max_seconds = 0.05, 0.5, 2.0
+async def test_settle_stops_waiting_when_nothing_changes(computer, monkeypatch, fast_polls):
+    settle_waits(monkeypatch, 0.05, 0.5, 2.0)
     started = asyncio.get_running_loop().time()
-    await settle(computer, settings, await computer.screenshot())
+    await settle(computer, gray(computer.screen()), 0.05)
     assert asyncio.get_running_loop().time() - started < 0.5
 
 
@@ -228,34 +246,33 @@ async def test_key_repeats_and_hold_key_holds_one_combo(tools, computer):
     ("ctrl+a Delete", 1, 1.5, 1.5), ("home end", 1, 1.5, 1.5), ("enter", 1, 1.5, 1.5),
 ])
 async def test_only_single_home_end_and_select_all_shorten_no_change_wait(
-    tools, executor, settings, monkeypatch, text, repeat, configured, expected,
+    tools, monkeypatch, text, repeat, configured, expected,
 ):
-    settings.settle_seconds, settings.settle_quiet_seconds, settings.settle_max_seconds = configured, 0.5, 3.0
+    settle_waits(monkeypatch, configured, 0.5, 3.0)
     observed = []
 
-    async def capture_settings(computer, current, before):
-        observed.append((current.settle_seconds, current.settle_quiet_seconds, current.settle_max_seconds))
-        return await computer.screenshot()
+    async def capture_wait(computer, before, no_change_seconds):
+        observed.append(no_change_seconds)
+        return await computer_use.desktop.screen.capture(computer)
 
-    monkeypatch.setattr(computer_use.desktop.executor, "settle", capture_settings)
+    monkeypatch.setattr(computer_use.desktop.executor, "settle", capture_wait)
     assert (await call(tools, "key", text=text, repeat=repeat)).status == "success"
-    assert observed == [(expected, 0.5, 3.0)]
-    assert executor.settings is settings and settings.settle_seconds == configured
+    assert observed == [expected]
 
 
-async def test_batch_shortcuts_keep_the_configured_wait(tools, settings, monkeypatch):
-    settings.settle_seconds = 1.5
+async def test_batch_shortcuts_keep_the_configured_wait(tools, monkeypatch):
+    settle_waits(monkeypatch, 1.5, 0, 0)
     waits = []
 
-    async def capture_settings(computer, current, before):
-        waits.append(current.settle_seconds)
-        return await computer.screenshot()
+    async def capture_wait(computer, before, no_change_seconds):
+        waits.append(no_change_seconds)
+        return await computer_use.desktop.screen.capture(computer)
 
-    monkeypatch.setattr(computer_use.desktop.executor, "settle", capture_settings)
+    monkeypatch.setattr(computer_use.desktop.executor, "settle", capture_wait)
     result = await call_batch(tools, *(("key", {"text": key}) for key in ["home", "end", "ctrl+a"]))
     assert result.status == "success" and waits == [1.5, 1.5, 1.5]
     await call(tools, "key", text="home")
-    assert waits == [1.5, 1.5, 1.5, 0.8] and settings.settle_seconds == 1.5
+    assert waits == [1.5, 1.5, 1.5, 0.8]
 
 
 async def test_same_shortcut_in_and_out_of_a_batch_still_counts_as_repeated(executor):
@@ -269,9 +286,9 @@ async def test_same_shortcut_in_and_out_of_a_batch_still_counts_as_repeated(exec
 
 @pytest.mark.parametrize("key", ["home", "end", "ctrl+a"])
 async def test_shortcut_wait_captures_a_700ms_effect_before_the_next_input(
-    executor, computer, settings, monkeypatch, key,
+    executor, computer, monkeypatch, key,
 ):
-    settings.settle_seconds, settings.settle_quiet_seconds, settings.settle_max_seconds = 1.5, 0.5, 3.0
+    settle_waits(monkeypatch, 1.5, 0.5, 3.0)
     elapsed, pending, deleted = 0.0, False, False
     before, selected, after = (fixture_png(label) for label in ["Before shortcut", "Shortcut applied", "Deleted"])
 
@@ -413,9 +430,24 @@ async def test_a_batch_checks_the_arguments_of_every_action_before_sending_any(t
     assert computer.calls == [("press", [["ctrl", "s"]])]
 
 
-async def test_a_batch_ignores_arguments_its_actions_do_not_take(tools, computer):
-    result = await call_batch(tools, ("left_click", {"coordinate": [10, 10], "repeat": 3, "duration": 1}))
-    assert result.status == "success" and computer.calls == [("click", (10, 10), "left", 1, [])]
+def test_a_batch_step_offers_only_its_own_actions_arguments(tools):
+    kinds = tools["computer_batch"].tool_call_schema.model_json_schema()["properties"]["actions"]["items"]["anyOf"]
+    offered = {name: set(kind["properties"]) - {"action"} for kind in kinds for name in kind["properties"]["action"]["enum"]}
+    assert set(offered) == set(BATCHABLE)
+    for name, arguments in offered.items():
+        own = set(tools[name].tool_call_schema.model_fields) - {"needs_confirmation", "consequence"}
+        assert arguments == own, name  # a batch says once whether it needs approval
+    assert all(kind["additionalProperties"] is False for kind in kinds)
+
+
+async def test_a_batch_refuses_arguments_its_actions_do_not_take_and_reads_null_as_left_out(tools, computer):
+    foreign = await call_batch(tools, ("left_click", {"coordinate": [10, 10], "repeat": 3}))
+    unknown = await call_batch(tools, ("screenshot", {}))
+    assert foreign.status == "error" and foreign.content.startswith("Nothing was sent: action 1 of 1 (left_click): repeat")
+    assert unknown.status == "error" and "'screenshot' cannot be batched" in unknown.content
+    assert computer.calls == []
+    nulls = await call_batch(tools, ("scroll", {"scroll_direction": "down", "scroll_amount": None, "coordinate": None}))
+    assert nulls.status == "success" and computer.calls[0][0] == "scroll" and computer.calls[0][3] == 3
 
 
 async def test_only_input_and_wait_can_be_batched(executor, computer):

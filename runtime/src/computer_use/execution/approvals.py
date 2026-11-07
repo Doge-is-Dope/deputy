@@ -4,6 +4,7 @@ Approval covers one call; silence never approves. Flags are validated with the
 tool schema, and actions needing approval must be sent outside batches.
 Auto review settings are read for each step."""
 
+import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable
@@ -12,16 +13,16 @@ from langchain_core.messages import ToolMessage
 from pydantic import ValidationError
 
 from computer_use.agent.review import Verdict
-from computer_use.agent.tools import not_executed
-from computer_use.desktop.actions import CONFIRMABLE, KEYBOARD
-from computer_use.agent.trajectory import Trajectory, shown_args
+from computer_use.agent.trajectory import Trajectory
 from computer_use.computers import ComputerError
+from computer_use.desktop.actions import CONFIRMABLE, KEYBOARD
 from computer_use.desktop.control import Approval, ApprovalFile, Control
 from computer_use.desktop.executor import Executor
 from computer_use.desktop.screen import mark
+from computer_use.events import shown_args
 from computer_use.prompts.computer import BATCHED, TOOK_CONTROL, UNEXPLAINED, declined
+from computer_use.tools.common import not_executed
 
-# Stop the task after three declined steps.
 MAX_DECLINES = 3
 
 
@@ -36,8 +37,8 @@ class Confirmations:
         control: Control,
         executor: Executor,
         log: Trajectory,
-        review: Callable[[str, bytes | None], Awaitable[Verdict]] | None = None,
-        auto: Callable[[], bool] = lambda: True,
+        review: Callable[[str, bytes | None], Awaitable[Verdict]],
+        auto: Callable[[], bool],
     ):
         self.approvals = approvals
         self.control = control
@@ -45,7 +46,7 @@ class Confirmations:
         self.log = log
         self.review = review
         self.auto = auto
-        self.declined = 0  # steps the user declined in this task
+        self.declined = 0
 
     @property
     def exhausted(self) -> bool:
@@ -70,8 +71,8 @@ class Confirmations:
         if not consequence:
             return not_executed(call, UNEXPLAINED, "unexplained")
         png = await self._marked(call["name"], args)
-        auto = self.review is not None and self.auto()
-        screenshot = self.log.confirm(call, consequence, png, auto)
+        auto = self.auto()
+        screenshot = await self.log.confirm(call, shown_args(call["args"]), consequence, png, auto)
         if auto and await self._reviewed(call, consequence, png):
             self.executor.approve_next()
             return None
@@ -92,7 +93,6 @@ class Confirmations:
         return not_executed(call, declined(answer.note), "declined")
 
     async def _reviewed(self, call: dict, consequence: str, png: bytes | None) -> bool:
-        """Whether auto review lets the step through."""
         step = (
             f"{call['name']} {json.dumps(shown_args(call['args']), ensure_ascii=False)}\n"
             f"The computer-use agent's description of it (its claim, to check against the screen): {consequence}"
@@ -115,4 +115,4 @@ class Confirmations:
                 points = [await self.executor.computer.cursor_position()]
             except ComputerError:  # the screen still shows what the step would act on
                 points = []
-        return mark(shown.png, points)
+        return await asyncio.to_thread(mark, shown.png, points) if points else shown.png

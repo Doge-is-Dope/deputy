@@ -49,10 +49,10 @@ import {
   Thumbnail,
 } from "@/components/conversation/steps"
 
-// Each agent the main agent hands work to, in its own icon, by the tool that hands it over (agent/subagent.py).
+// Each agent the main agent hands work to, in its own icon, by its name (agent/subagent.py).
 const AGENT_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
-  computer_use: MonitorIcon,
-  write_code: CodeIcon,
+  computer: MonitorIcon,
+  coding: CodeIcon,
 }
 
 // What an agent reported: in markdown as a reply is, without a mark.
@@ -120,7 +120,7 @@ export function TaskGroup({
   const stopped =
     task.outcome === "stopped" || (!running && task.outcome === "running")
   const failed = task.outcome === "failed"
-  const Kind = AGENT_ICONS[task.tool] ?? ToolIcon
+  const Kind = AGENT_ICONS[task.agent] ?? ToolIcon
   const shots = task.entries.flatMap((entry) =>
     entry.kind === "step" && entry.step.action?.screenshot
       ? [entry.step.action.screenshot]

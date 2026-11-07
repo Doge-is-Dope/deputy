@@ -64,7 +64,7 @@ export function AgentsGroup({
   const computer =
     working && !full
       ? tasks.find(
-          (task) => task.outcome === "running" && task.tool === "computer_use"
+          (task) => task.outcome === "running" && task.agent === "computer"
         )
       : undefined
   const liveShot = computer?.entries.findLast(

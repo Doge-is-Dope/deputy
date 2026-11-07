@@ -12,19 +12,35 @@ permissions:
 jobs:
   runtime-unit:
     name: runtime unit tests
-    runs-on: ubuntu-latest
+    # Kernel 6.8: mongod 8.3 refuses to start on kernels 6.19 to 7.0.13 (SERVER-121912), ubuntu-24.04's is 7.0.0.
+    runs-on: ubuntu-22.04
     timeout-minutes: 10
     defaults:
       run:
         working-directory: runtime
     steps:
       - uses: actions/checkout@v7.0.1
-      # Unit tests block network sockets in tests/conftest.py.
+      # The store contract tests also run on each database (tests marked mongo); every other test blocks network
+      # sockets (tests/conftest.py). A service container cannot take --replSet, so the replica set is started here.
+      - name: Start MongoDB
+        run: |
+          docker run -d --name mongo -p 27017:27017 mongo:8.3.13 --replSet rs0
+          for _ in $(seq 60); do
+            docker exec mongo mongosh --quiet --eval 'try { rs.status() } catch (e) {
+              rs.initiate({_id: "rs0", members: [{_id: 0, host: "localhost:27017"}]}) }
+              quit(db.hello().isWritablePrimary ? 0 : 1)' && exit 0
+            sleep 1
+          done
+          docker logs mongo
+          exit 1
       - uses: astral-sh/setup-uv@v10.3.2
         with:
           version: "0.13.5"
           working-directory: runtime
-      - run: uv run --frozen pytest tests/unit -q
+      - run: uv run --frozen ruff check src tests
+      - run: uv run --frozen pytest tests/unit -q -m "not model"
+        env:
+          CU_TEST_MONGO_URL: mongodb://localhost:27017/?replicaSet=rs0
 
   cli-unit:
     name: cli unit tests

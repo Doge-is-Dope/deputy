@@ -10,7 +10,6 @@ import contextlib
 import hashlib
 import io
 import json
-import os
 import re
 import shutil
 import statistics
@@ -31,11 +30,11 @@ from computer_use.storage import MAIN
 from computer_use.agent.history import action_lines, tasks
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "clients" / "cli" / "src"))  # the CLI's client: no packages needed
-from computer_use_cli.client import ApiError, Client  # noqa: E402
+from computer_use_cli.client import ApiError, Client, Follow  # noqa: E402
 from computer_use_cli.main import choices  # noqa: E402
 from computer_use_cli.render import line as shown  # noqa: E402
 
-from html_report import PROMPTS, read_events, render, said, version_key, version_title
+from html_report import PROMPTS, end_screen, read_events, render, said, version_key, version_title
 from winsetup import setup_script
 
 EVAL = Path(__file__).resolve().parent
@@ -49,8 +48,6 @@ EVAL_PORT = 8001
 SERVER_PID = "/tmp/ev-server.pid"  # in the container
 SERVER_LOG = "/tmp/ev-server.log"
 SERVER_SECONDS = 60  # for it to answer once started
-LANGS = ("zh", "en")  # each task's goal is asked in either
-ENV = {**os.environ, "DOCKER_CONTEXT": "colima"}
 
 MAX_STEPS = 60
 RUN_TIMEOUT = 1800
@@ -83,8 +80,8 @@ def load_tasks() -> dict[str, dict]:
     rows = [json.loads(line) for line in TASKS_FILE.read_text(encoding="utf-8").splitlines() if line.strip()]
     for row in rows:
         setup_script(row.get("setup", []), "check")
-        if set(row["goal"]) != set(LANGS):
-            raise SystemExit(f"{row['id']}: the goal needs each of {', '.join(LANGS)}")
+        if not isinstance(row["goal"], str) or not row["goal"]:
+            raise SystemExit(f"{row['id']}: the goal needs to be text")
     if len({row["no"] for row in rows}) != len(rows):
         raise SystemExit("every task needs its own number (no)")
     return {row["id"]: row for row in rows}
@@ -111,11 +108,9 @@ def task_ids(names: list[str]) -> list[str]:
     return found or IDS
 
 
-def task_for(name: str, lang: str, file_name: str) -> Task:
-    """The task asked in `lang`, with {name} replaced by the trial's own name (letters, digits and '-', so the JSON
-    stays valid)."""
-    row = json.loads(json.dumps(TASKS[name], ensure_ascii=False).replace("{name}", file_name))
-    return Task(**row | {"goal": row["goal"][lang]})
+def task_for(name: str, file_name: str) -> Task:
+    """The task with {name} replaced by the trial's own name (letters, digits and '-', so the JSON stays valid)."""
+    return Task(**json.loads(json.dumps(TASKS[name], ensure_ascii=False).replace("{name}", file_name)))
 
 
 # The runtime the eval drives: the web page's server, until `version_server` serves the version under test.
@@ -129,7 +124,7 @@ def compose(
     flags = [flag for key, value in (env or {}).items() for flag in ("-e", f"{key}={value}")]
     return subprocess.run(
         ["docker", "compose", "exec", "-T", *(["-d"] if detach else []), *flags, "runtime", *args],
-        cwd=RUNTIME, env=ENV, capture_output=True, text=True, timeout=timeout, input=stdin,
+        cwd=RUNTIME, capture_output=True, text=True, timeout=timeout, input=stdin,
     )
 
 
@@ -191,8 +186,8 @@ def install(version: dict, source: Path) -> str:
     target = f"/tmp/ev-{version_key(version)}"
     compose("rm", "-rf", target, timeout=60)
     compose("mkdir", "-p", target, timeout=60)
-    subprocess.run(["docker", "compose", "cp", str(source), f"runtime:{target}/src"], cwd=RUNTIME, env=ENV,
-                   capture_output=True, check=True, timeout=300)
+    subprocess.run(["docker", "compose", "cp", str(source), f"runtime:{target}/src"], cwd=RUNTIME, capture_output=True,
+                   check=True, timeout=300)
     return f"{target}/src"
 
 
@@ -222,11 +217,14 @@ def version_server(code: str):
     the tasks run with, apart from the server the web page uses. Both share the container's data and its desktop
     lock, so only one run uses the desktop at a time. `api` drives it until the block ends, which stops it."""
     global api
+    served, before = Client(f"http://127.0.0.1:{EVAL_PORT}"), api
+    with contextlib.suppress(ApiError):  # nothing answers there: nothing to stop
+        if (status := served.status())["active"] or status["running"]:
+            raise SystemExit(f"the server on port {EVAL_PORT} has a run going, perhaps another eval's; let it end first")
     stop_server()
     serve = f"echo $$ > {SERVER_PID}; exec python -m computer_use.serve --host 0.0.0.0 --port {EVAL_PORT} " \
             f">{SERVER_LOG} 2>&1"
     compose("sh", "-c", serve, timeout=60, env={"PYTHONPATH": code}, detach=True)
-    served, before = Client(f"http://127.0.0.1:{EVAL_PORT}"), api
     try:  # from here on, however this ends, the server stops
         deadline = time.monotonic() + SERVER_SECONDS
         while True:
@@ -261,10 +259,12 @@ def approve_steps(stop: threading.Event) -> None:
         print(f"   approved: {approval.get('consequence')}", flush=True)
 
 
-def run_agent(goal: str, max_steps: int, approve: bool = True, agents: dict | None = None) -> tuple[str | None, str]:
-    """Send the desktop a goal and follow its run to the end: its id, and the end of what it showed, as the command
-    line shows it. With `approve`, the steps it asks approval for are approved; without, they wait for a person, as
-    in any run. `agents` chooses the agents' models (`choices`). A run past RUN_TIMEOUT is stopped."""
+def run_agent(goal: str, max_steps: int, approve: bool = True, agents: dict | None = None
+              ) -> tuple[str | None, str, bool]:
+    """Send the desktop a goal and follow its session to the end, every log of it: its first turn's id, the end of
+    what it showed, as the command line shows it, and whether it was stopped. With `approve`, the steps it asks
+    approval for are approved; without, they wait for a person, as in any run. `agents` chooses the agents' models
+    (`choices`). A session past RUN_TIMEOUT is stopped."""
     stop = threading.Event()
     if approve:
         threading.Thread(target=approve_steps, args=(stop,), daemon=True).start()
@@ -274,25 +274,26 @@ def run_agent(goal: str, max_steps: int, approve: bool = True, agents: dict | No
             # Under the eval project, so the web page lists these conversations apart from the user's own.
             run = api.start(goal, project="eval", max_steps=max_steps, computer=True, agents=agents)["id"]
         except ApiError as error:
-            return None, f"Not started: {error}"
-        deadline, last, done = time.monotonic() + RUN_TIMEOUT, -1, False
-        while not done:  # a stream cut off goes on from the last line it had
-            for event in api.events(run, last):
-                if event.kind == "line":
-                    last = event.index
-                    if (text := shown(event.data)) is not None:
-                        lines.append(text)
-                    if event.data["type"] == "end":
-                        lines.append(f"Agent: {event.data.get('summary', '')}")
-                done = done or event.kind == "done"
-                if not done and time.monotonic() > deadline:
-                    lines.append(f"Stopped after {RUN_TIMEOUT} s.")
-                    with contextlib.suppress(ApiError):  # it ended meanwhile
-                        api.stop(run)
-                    deadline = float("inf")  # and wait for it to end
+            return None, f"Not started: {error}", False
+        feed, deadline, stopped, reply = Follow(api, run), time.monotonic() + RUN_TIMEOUT, False, None
+        kinds: dict[str, str] = {}
+        for log, event in feed.lines():
+            if event["type"] == "start":
+                kinds[log] = event.get("kind", "turn")
+            if (text := shown(event)) is not None:
+                lines.append(text)
+            if event["type"] == "end" and kinds.get(log) == "turn":
+                reply = event.get("summary", "")
+            if not stopped and time.monotonic() > deadline:
+                lines.append(f"Stopped after {RUN_TIMEOUT} s.")
+                with contextlib.suppress(ApiError):  # it ended meanwhile
+                    api.stop(feed.thread or run)
+                stopped = True  # and wait for it to end
+        if reply is not None:
+            lines.append(f"Agent: {reply}")
     finally:
         stop.set()
-    return run, "\n".join(lines)[-1500:]
+    return run, "\n".join(lines)[-1500:], stopped
 
 
 def disconnected() -> str:
@@ -354,8 +355,10 @@ def model_names(agents: dict) -> str:
 def screenshot_settings(source: Path) -> dict | None:
     """Read literal pruning constants from the tested snapshot, never import or execute that version's code.
     An older/different implementation is unknown, rather than silently assigned the evaluator's defaults."""
-    path = source / "computer_use/agent/middleware.py"
-    if not path.is_file():
+    # Where the constants live, then where older versions kept them.
+    paths = (source / "computer_use/middleware/common.py", source / "computer_use/agent/middleware.py")
+    path = next((path for path in paths if path.is_file()), None)
+    if path is None:
         return None
     found = {}
     names = {"KEEP_SCREENSHOTS": "keep", "PRUNE_EVERY": "every"}
@@ -453,20 +456,25 @@ def prepare(task: Task, after_run: bool) -> tuple[Path | None, str]:
     return (observe() if result["ok"] else None), result["detail"]
 
 
-# Notes every run has: the goal it starts with, and how it finished.
+# Notes every run has: the goal it starts with, and, before turns and tasks had logs of their own, how it finished.
 ROUTINE_NOTES = {"goal", "runFinished"}
 
 
 def summarize(events: list[dict]) -> dict:
-    """What the run's log says: how it ended, the desktop tasks the main agent handed over, what else the runtime
-    noted (notes such as gone or stuck, and why actions were held back, such as taskLimit), and what it cost."""
-    end = next((e for e in reversed(events) if e["type"] == "end"), {})
-    desktop = [task for task in tasks(events) if task["tool"] == "computer_use"]
+    """What the run's logs say: how it ended (its last turn's end), the desktop tasks the main agent handed over, what
+    else the runtime noted (notes such as gone or stuck, and why actions were held back, such as taskLimit), and what
+    it cost, every log's."""
+    kinds = {e.get("log"): e.get("kind", "turn") for e in events if e["type"] == "start"}
+    ends = [e for e in events if e["type"] == "end"]
+    end = next((e for e in reversed(ends) if kinds.get(e.get("log"), "turn") == "turn"), {})
+    desktop = [task for task in tasks(events) if task["agent"] == "computer"]
     codes = Counter(e["code"] for e in events if e["type"] == "note" and e.get("code") not in ROUTINE_NOTES | {None})
     codes.update(e["reason"] for e in events if e["type"] == "action" and e.get("reason"))
-    shots = [e["screenshot"] for e in events if e.get("screenshot")]
+    shots = [e["screenshot"] for e in events if e.get("screenshot") and "zoom" not in e["screenshot"]]  # full screens
     titles = [e.get("cost") for e in events if e["type"] == "title" and e.get("model")]
-    costs = [end.get("cost"), *titles]
+    spent = [e.get("cost") for e in ends] or [None]
+    costs = [*spent, *titles]
+    usage = {kind: sum((e.get("usage") or {}).get(kind, 0) for e in ends) for kind in (end.get("usage") or {})}
 
     def count(kind: str, main: bool) -> int:
         return sum(e["type"] == kind and (e.get("agent") == MAIN) == main for e in events)
@@ -483,9 +491,9 @@ def summarize(events: list[dict]) -> dict:
         "actions": count("action", False),
         "seconds": round((end or events[-1])["time"] - events[0]["time"], 1) if events else None,
         "cost": round(sum(sum(cost.values()) for cost in costs), 5) if all(cost is not None for cost in costs) else None,
-        "agent_cost": sum(end["cost"].values()) if end.get("cost") is not None else None,
+        "agent_cost": sum(sum(cost.values()) for cost in spent) if all(cost is not None for cost in spent) else None,
         "title_cost": sum(sum(cost.values()) for cost in titles) if titles and all(cost is not None for cost in titles) else None,
-        "usage": end.get("usage"), "agents": end.get("agents"),
+        "usage": usage or end.get("usage"), "agents": [agent for e in ends for agent in e.get("agents") or []],
         "unknown_calls": sum(e["type"] == "model" and e.get("usage") is None for e in events),
     }
 
@@ -506,6 +514,17 @@ def cmd_run(args) -> None:
         agents = choices(args.main, args.computer)
         with version_server(code):
             run_tasks(args, names, version, source, agents)
+
+
+def cmd_serve(args) -> None:
+    ref = args.version or "worktree"
+    with tempfile.TemporaryDirectory() as tmp:
+        source = copy_source(ref, Path(tmp))
+        with version_server(install(version_of(ref, source), source)):
+            print(f"Serving {ref} at http://127.0.0.1:{EVAL_PORT} until Ctrl-C. For the web page, run "
+                  f"CU_API_URL=http://127.0.0.1:{EVAL_PORT} bun run dev in clients/web.", flush=True)
+            with contextlib.suppress(KeyboardInterrupt):
+                threading.Event().wait()
 
 
 def run_tasks(args, names: list[str], version: dict, source: Path, agents: dict | None) -> None:
@@ -529,16 +548,17 @@ def run_tasks(args, names: list[str], version: dict, source: Path, agents: dict 
             raise SystemExit(f"Stopped before run {index} of {len(plan)}: {reason}.")
         task_dir = folder / task_folder(name)
         attempt = 1 + max((int(path.name) for path in task_dir.glob("[0-9]*") if path.name.isdigit()), default=0)
-        task = task_for(name, args.lang, f"ev-{key}-{NUMBERS[name]:02d}-{attempt}")
+        task = task_for(name, f"ev-{key}-{NUMBERS[name]:02d}-{attempt}")
         start_screen, setup = prepare(task, after_run)
         if start_screen is None and not after_run and setup == CLUTTERED:
             raise SystemExit("The desktop is not clean before the first run; nothing was run.")
         out = task_dir / str(attempt)
         out.mkdir(parents=True)  # the version's folder with it, so an eval stopped before any task leaves none
         keep(folder, version, source)
+        # Every goal is in English; older results asked most in Chinese, and their "lang" keeps them apart.
         row = {
             "no": task.no, "task": name, "attempt": attempt, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "lang": args.lang, "goal": task.goal, "expect": task.expect, "source": task.source, "start": task.start,
+            "lang": "en", "goal": task.goal, "expect": task.expect, "source": task.source, "start": task.start,
             "max_steps": task.max_steps, "feasible": task.feasible, "model": model, "setup": setup, "version": version,
             "settings": settings,
             "approve": not args.ask, "run": None,
@@ -547,13 +567,15 @@ def run_tasks(args, names: list[str], version: dict, source: Path, agents: dict 
             row["stop_reason"] = "setup_failed"
         else:
             started = time.time()
-            run_id, output = run_agent(task.goal, task.max_steps, not args.ask, agents)
+            run_id, output, timed_out = run_agent(task.goal, task.max_steps, not args.ask, agents)
             after_run = True
             shutil.copyfile(start_screen, out / "start.png")
             row |= {"run": run_id, "start_screen": "start.png", "wall": round(time.time() - started, 1)}
             if run_id:
-                api.export(run_id, out / "run")  # the log and its screenshots
+                api.export_session(run_id, out / "run")  # every log of its session and their screenshots
                 row |= summarize(read_events(out / "run"))
+                if timed_out:  # the session the eval stopped, which may have ended no turn of its own
+                    row["stop_reason"] = "cancelled"
             if not run_id or row["stop_reason"] != "replied":
                 row["output"] = output
         (out / "result.json").write_text(json.dumps(row, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -623,8 +645,9 @@ def section(folder: Path, row: dict, grade: str) -> str:
     if row.get("output"):
         lines += ["", "```text", row["output"].strip()[-1200:], "```"]
     lines += ["", image(f"{where}/{row['start_screen']}" if row.get("start_screen") else None, "Start screen")]
-    if row.get("end_screen"):
-        lines.append(image(f"{where}/run/{row['end_screen']}", "End screen"))
+    end = end_screen(row["dir"] / "run", row.get("end_screen"))
+    if end:
+        lines.append(image(end.relative_to(folder).as_posix(), "End screen"))
     if row.get("run"):
         history = row["steps"] if "steps" in row else action_lines(read_events(row["dir"] / "run"))
         listed = "\n".join(f"{i}. {line}" for i, line in enumerate(history, 1))
@@ -767,7 +790,7 @@ def cmd_report(args) -> None:
 def cmd_tasks(args) -> None:
     """Every task in brief; with one named, all of it, with the PowerShell that sets it up."""
     for name in task_ids([args.task]) if args.task else IDS:
-        task = task_for(name, args.lang, f"ev-sample-{NUMBERS[name]:02d}-1")
+        task = task_for(name, f"ev-sample-{NUMBERS[name]:02d}-1")
         if not args.task:
             print(f"{task_folder(name):<23}{task.source}")
             continue
@@ -793,7 +816,6 @@ def main() -> None:
     run = sub.add_parser("run", help="run tasks from their starting states, then build the grading sheet")
     run.add_argument("tasks", nargs="*", help="task numbers or ids (default: all)")
     run.add_argument("--trials", type=int, default=1, help="runs of each task")
-    run.add_argument("--lang", choices=LANGS, default=LANGS[0], help="the language the goals are asked in")
     run.add_argument("--version", help='a git ref whose runtime/src the tasks run with (default: "worktree", the '
                      "working tree as it is)")
     for agent, example in (("main", "openai:gpt-6.1-sol low"), ("computer", "openai:gpt-6-luna high")):
@@ -803,17 +825,18 @@ def main() -> None:
     run.add_argument("--note", help="what this version changes, as the report names it (kept until another is given)")
     run.add_argument("--ask", action="store_true",
                      help="wait for a person to answer the steps a run asks approval for (default: approve them all)")
+    serve = sub.add_parser("serve", help="serve a version on the eval's port until Ctrl-C, to try it by hand")
+    serve.add_argument("--version", help='a git ref (default: "worktree", the working tree as it is)')
     report = sub.add_parser("report", help="rebuild grading sheets, print pass rates and write the HTML report")
     report.add_argument("versions", nargs="*", help="versions under eval/results (default: the one run last)")
     tasks_ = sub.add_parser("tasks", help="list the tasks; with one named, show it and its setup PowerShell")
     tasks_.add_argument("task", nargs="?", help="a task number or id")
-    tasks_.add_argument("--lang", choices=LANGS, default=LANGS[0])
     reset_ = sub.add_parser("reset", help="say whether the desktop is clean")
     what = reset_.add_mutually_exclusive_group()
     what.add_argument("--close", action="store_true", help="close what is open WITHOUT SAVING, by an agent run")
     what.add_argument("--accept", action="store_true", help="make the current screen the clean desktop")
     args = parser.parse_args()
-    {"run": cmd_run, "report": cmd_report, "tasks": cmd_tasks, "reset": cmd_reset}[args.command](args)
+    {"run": cmd_run, "serve": cmd_serve, "report": cmd_report, "tasks": cmd_tasks, "reset": cmd_reset}[args.command](args)
 
 
 if __name__ == "__main__":

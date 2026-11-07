@@ -269,10 +269,11 @@ export function RemoteScreen({
       event.clientY
     )
     // At most one move per frame; the runtime also keeps only the latest one it has not applied yet.
-    frame.current ||= requestAnimationFrame(() => {
-      frame.current = 0
-      if (pendingMove.current) send({ type: "move", ...pendingMove.current })
-    })
+    if (!frame.current)
+      frame.current = requestAnimationFrame(() => {
+        frame.current = 0
+        if (pendingMove.current) send({ type: "move", ...pendingMove.current })
+      })
   }
 
   function onPointerButton(

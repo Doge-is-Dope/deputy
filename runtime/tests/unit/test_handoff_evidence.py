@@ -1,4 +1,5 @@
-from computer_use.agent.history import action_lines, text_entry_screens
+from computer_use.agent.computer_agent import text_entry_screens
+from computer_use.agent.history import action_lines
 
 
 def action(number, tool, args, result="", screenshot=None, status="success"):

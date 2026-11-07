@@ -1,5 +1,4 @@
-"""The runtime's entry point: serve the HTTP API that every client reaches it through, the web page, the command line
-(clients/cli) and the eval alike."""
+"""The runtime's entry point: serves the HTTP API every client reaches it through."""
 
 import argparse
 import asyncio
@@ -13,7 +12,6 @@ from computer_use.auth import loopback
 from computer_use.config import Settings, get_settings
 from computer_use.server import create_app
 
-# Default model-call budget per desktop task; a message's max_steps overrides it.
 MAX_STEPS = 60
 
 
@@ -26,8 +24,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 def open_to_anyone(settings: Settings, host: str) -> str | None:
     """Why the runtime will not serve with no sign-in on an address other machines can reach; None when it will.
-    Setting CU_AUTH=none in so many words says the address is reachable only from this machine all the same, as a
-    container's port published on the host's loopback address is (compose.yaml)."""
+    Setting CU_AUTH=none explicitly says the address is reachable only from this machine, as a container's port
+    published on the host's loopback address is."""
     if settings.auth != "none" or loopback(host) or "auth" in settings.model_fields_set:
         return None
     return (f"Refusing to serve {host} with no sign-in: set CU_AUTH=token with CU_AUTH_TOKEN, or CU_AUTH=proxy behind a "
@@ -35,9 +33,8 @@ def open_to_anyone(settings: Settings, host: str) -> str | None:
 
 
 def signed_in_link(settings: Settings) -> tuple[Settings, str]:
-    """The settings with a token, a new one each start unless CU_AUTH_TOKEN keeps one, and the page's link that signs
-    in with it, as Jupyter prints its own: the token after "#", which a browser never sends, so no server or proxy
-    logs it; the page takes it from there (clients/web, lib/session.ts)."""
+    """The settings with a token, new each start unless CU_AUTH_TOKEN keeps one, and the page's link that signs in
+    with it: the token is after "#", which a browser never sends, so no server or proxy logs it."""
     if settings.auth_token is None or not settings.auth_token.get_secret_value():
         settings = settings.model_copy(update={"auth_token": SecretStr(secrets.token_urlsafe(32))})
     return settings, f"{settings.web_url.rstrip('/')}/#token={settings.auth_token.get_secret_value()}"

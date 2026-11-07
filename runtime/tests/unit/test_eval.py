@@ -3,12 +3,14 @@
 import copy
 import importlib.util
 import json
+import re
 import sys
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 
 MODEL = "openai:offline-model"
@@ -118,6 +120,14 @@ def test_unsupported_choices_still_stop_before_a_run(evaluator, monkeypatch, cho
         evaluator.models({"computer": choice})
 
 
+def test_a_version_server_never_replaces_one_with_a_run_going(evaluator, monkeypatch):
+    busy = {"active": None, "running": [{"run": "r1", "thread": "r1"}]}
+    monkeypatch.setattr(evaluator.Client, "status", lambda self: busy)
+    with pytest.raises(SystemExit, match="has a run going"):  # before compose, which the fixture forbids
+        with evaluator.version_server("/tmp/ev-x/src"):
+            pass
+
+
 def test_pruning_metadata_comes_from_the_snapshot_without_executing_it(evaluator, tmp_path):
     source = tmp_path / "src"
     file = source / "computer_use/agent/middleware.py"
@@ -144,7 +154,7 @@ def test_run_records_requested_and_resolved_settings_and_exported_usage(evaluato
     monkeypatch.setattr(evaluator.api, "status", status)
     monkeypatch.setattr(evaluator, "desktop_busy", lambda: "")
     monkeypatch.setattr(evaluator, "prepare", lambda *args: (screen, "ok"))
-    monkeypatch.setattr(evaluator, "run_agent", lambda *args: sent.append(args) or ("offline-run", ""))
+    monkeypatch.setattr(evaluator, "run_agent", lambda *args: sent.append(args) or ("offline-run", "", False))
     monkeypatch.setattr(evaluator, "reset", lambda *args: None)
     monkeypatch.setattr(evaluator, "build_sheet", lambda folder: folder / "grade.md")
 
@@ -153,7 +163,7 @@ def test_run_records_requested_and_resolved_settings_and_exported_usage(evaluato
         into.mkdir()
         (into / "steps.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events({"input": .01})))
 
-    monkeypatch.setattr(evaluator.api, "export", exported)
+    monkeypatch.setattr(evaluator.api, "export_session", exported)
     evaluator.run_tasks(SimpleNamespace(trials=1, ask=True, lang="zh"), ["paint-canvas"], version(), source, requested)
     row = json.loads((folder / "03-paint-canvas/1/result.json").read_text())
     assert sent[0][-1] == requested and sent[0][-2] is False
@@ -287,9 +297,88 @@ def test_build_sheet_merges_new_grades_without_losing_existing_ones(evaluator):
     assert evaluator.read_grades(folder) == {"run-1": "pass original reason", "run-2": "fail another reason"}
 
 
+def save_session(where, logs):
+    """A run as `computer-use export` writes it: {log: {name: colour}}, each log in its folder, or in `where` for ""."""
+    clock = 0
+    for log, screens in logs.items():
+        folder = where / log
+        folder.mkdir(parents=True, exist_ok=True)
+        lines = []
+        for name, colour in screens.items():
+            Image.new("RGB", (8, 8), colour).save(folder / name)
+            clock += 1
+            if not name.startswith("main-"):  # an image in a message, not a screen an action took
+                lines.append({"type": "action", "tool": "key", "args": {}, "status": "success", "result": "",
+                              "time": clock, "screenshot": name})
+        lines.append({"type": "end", "time": clock + .5, "stop_reason": "replied", "summary": "Done."})
+        (folder / "steps.jsonl").write_text("".join(json.dumps(line) + "\n" for line in lines))
+
+
+@pytest.mark.parametrize("logs, end", [
+    # The last task's last screen: not the same name in an earlier task, nor the earlier screens the main agent was sent.
+    ({"a-turn": {}, "b-task": {"000-observe.png": "red", "001-key.png": "red"},
+      "c-task": {"000-observe.png": "red", "001-key.png": "blue"},
+      "d-turn": {"main-000-task-ended.png": "red", "main-000-task-ended-2.png": "red"}}, "c-task/001-key.png"),
+    ({"": {"000-observe.png": "red", "001-key.png": "blue", "main-001-task-ended.png": "red"}}, "001-key.png"),  # one log
+], ids=["a log per folder", "one log"])
+def test_a_rebuilt_sheet_and_the_report_show_the_runs_end_screen_and_keep_its_grade(evaluator, logs, end):
+    folder = save_version(evaluator)
+    row = trial(evaluator, start_screen="start.png")
+    where = save_trial(folder, row)
+    (where / "run" / "steps.jsonl").unlink()
+    Image.new("RGB", (8, 8), "white").save(where / "start.png")
+    save_session(where / "run", logs)
+    row |= evaluator.summarize(evaluator.read_events(where / "run"))
+    (where / "result.json").write_text(json.dumps(row))
+    (folder / "grade.md").write_text("# Grades\n\n## one · `run-1`\n\nGrade: pass kept reason\n")
+
+    evaluator.cmd_report(SimpleNamespace(versions=[]))
+
+    sheet = (folder / "grade.md").read_text()
+    links = re.findall(r'src="([^"]+)"', sheet)
+    assert links == ["03-paint-canvas/1/start.png", f"03-paint-canvas/1/run/{end}"]
+    assert all((folder / link).is_file() for link in links)
+    assert evaluator.read_grades(folder) == {"run-1": "pass kept reason"}
+    assert f"{folder.name}/03-paint-canvas/1/run/{end}" in (evaluator.RESULTS / "report.html").read_text()
+
+
+def test_a_run_without_a_screen_on_disk_has_no_end_screen_on_its_sheet(evaluator):
+    folder = save_version(evaluator)
+    save_trial(folder, trial(evaluator, end_screen="001-key.png"))  # named by the log, but the export has no such file
+    assert "End screen" not in evaluator.build_sheet(folder).read_text()
+
+
+def test_the_end_screen_is_never_a_zoomed_in_crop(evaluator):
+    log = [{"type": "action", "tool": "key", "time": 1, "screenshot": "001-key.png"},
+           {"type": "action", "tool": "zoom", "time": 2, "screenshot": "002-zoom.png"}]
+    assert evaluator.summarize(log)["end_screen"] == "001-key.png"
+
+
 def test_empty_report_and_missing_version_fail_offline(evaluator):
     with pytest.raises(SystemExit, match="no eval runs"):
         evaluator.cmd_report(SimpleNamespace(versions=[]))
     save_version(evaluator)
     with pytest.raises(SystemExit, match="no such versions"):
         evaluator.cmd_report(SimpleNamespace(versions=["missing"]))
+
+
+def test_a_sessions_logs_read_back_in_order_and_summed(evaluator, tmp_path):
+    run = tmp_path / "run"
+    logs = {
+        "a-turn": [{"type": "start", "kind": "turn", "time": 1}, {"type": "model", "agent": "main", "text": "On it.", "time": 2},
+                   {"type": "end", "stop_reason": "replied", "summary": "On it.", "cost": {"input": .01}, "time": 3}],
+        "b-task": [{"type": "start", "kind": "task", "time": 2.5}, {"type": "action", "tool": "key", "time": 4},
+                   {"type": "end", "stop_reason": "ended", "summary": "Opened.", "cost": {"input": .02}, "time": 5}],
+        "c-turn": [{"type": "start", "kind": "turn", "time": 6},
+                   {"type": "end", "stop_reason": "replied", "summary": "Start is open.", "cost": {"input": .03}, "time": 7}],
+    }
+    for name, events_of_log in logs.items():
+        (run / name).mkdir(parents=True)
+        (run / name / "steps.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events_of_log))
+
+    events = evaluator.read_events(run)
+    result = evaluator.summarize(events)
+
+    assert [event["time"] for event in events] == [1, 2, 2.5, 3, 4, 5, 6, 7]
+    assert (result["stop_reason"], result["summary"], result["actions"]) == ("replied", "Start is open.", 1)
+    assert result["agent_cost"] == pytest.approx(.06) and result["seconds"] == 6

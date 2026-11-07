@@ -73,13 +73,11 @@ export function CreateProjectDialog({
 export function DeleteProjectDialog({
   open,
   project,
-  count,
   onOpenChange,
   onDelete,
 }: {
   open: boolean
   project: string
-  count: number // its conversations
   onOpenChange: (open: boolean) => void
   onDelete: () => void
 }) {
@@ -88,7 +86,7 @@ export function DeleteProjectDialog({
     <ActionDialog
       open={open}
       onOpenChange={onOpenChange}
-      title={t.sidebar.deleteProjectAsk(project, count)}
+      title={t.sidebar.deleteProjectAsk(project)}
       action={t.sidebar.deleteProject}
       onAction={onDelete}
       destructive

@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react"
 
-import { MemoryList } from "@/components/settings/memory"
+import { MemoryList } from "@/components/memory/list"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { useT } from "@/lib/i18n"
 import {

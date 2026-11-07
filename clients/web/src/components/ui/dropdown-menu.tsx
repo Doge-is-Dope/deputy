@@ -61,27 +61,9 @@ function DropdownMenuItem({
       data-slot="dropdown-menu-item"
       data-variant={variant}
       className={cn(
-        "flex cursor-default items-center gap-2 rounded-md py-1.5 pr-3 pl-2 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+        "flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
         variant === "destructive" &&
           "text-destructive data-highlighted:bg-destructive/10 data-highlighted:text-destructive",
-        className
-      )}
-      {...props}
-    />
-  )
-}
-
-const DropdownMenuGroup = MenuPrimitive.Group
-
-/** What a group of choices is about, small and grey above them. */
-function DropdownMenuLabel({
-  className,
-  ...props
-}: MenuPrimitive.GroupLabel.Props) {
-  return (
-    <MenuPrimitive.GroupLabel
-      className={cn(
-        "px-2 pt-1.5 pb-1 text-xs text-muted-foreground",
         className
       )}
       {...props}
@@ -152,9 +134,7 @@ function DropdownMenuSeparator({
 export {
   DropdownMenu,
   DropdownMenuContent,
-  DropdownMenuGroup,
   DropdownMenuItem,
-  DropdownMenuLabel,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSeparator,

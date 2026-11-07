@@ -9,6 +9,61 @@ afterEach(() => {
 })
 
 describe("deferred Markdown", () => {
+  it("downloads workspace links through the API while preserving ordinary links", async () => {
+    vi.doMock("@/components/copy-button", () => ({ CopyButton: () => null }))
+    const { Markdown } = await import("./markdown-content")
+    const html = renderToStaticMarkup(
+      createElement(Markdown, {
+        text: "[CSV](/workspace/abc123/reports/budget.csv) [網站](https://example.com/workspace/abc123/a.csv)",
+      })
+    )
+    expect(html).toContain(
+      'href="/api/conversations/abc123/files/reports/budget.csv"'
+    )
+    expect(html).toContain('download=""')
+    expect(html).toContain('target="_self"')
+    expect(html).toContain('href="https://example.com/workspace/abc123/a.csv"')
+  })
+
+  it("holds a fence that is still opening back while streaming, and sizes a block by its lines", async () => {
+    vi.doMock("@/components/copy-button", () => ({ CopyButton: () => null }))
+    const { Markdown } = await import("./markdown-content")
+    const draw = (text: string, streaming = true) =>
+      renderToStaticMarkup(createElement(Markdown, { text, streaming }))
+    for (const text of [
+      "內容：\n`",
+      "內容：\n``",
+      "內容：\n```",
+      "內容：\n```te",
+    ]) {
+      expect(draw(text)).not.toContain("<pre")
+      expect(draw(text)).not.toContain("`")
+    }
+    expect(draw("內容：\n```text\n")).toContain(">text<")
+    expect(draw("`code` 開頭的一行")).toContain("<code")
+    expect(draw("```text\na\nb\n```", false)).toContain(
+      "contain-intrinsic-size:auto 88px"
+    )
+  })
+
+  it("draws a table being written only as a table, each row once it is whole", async () => {
+    vi.doMock("@/components/copy-button", () => ({ CopyButton: () => null }))
+    const { Markdown } = await import("./markdown-content")
+    const text = "計算：\n\n| 數字 | 平方 |\n|---:|---:|\n| 1 | 1 |\n| 2 | 4 |"
+    let rows = 0
+    for (let end = 1; end <= text.length; end++) {
+      const html = renderToStaticMarkup(
+        createElement(Markdown, { text: text.slice(0, end), streaming: true })
+      )
+      // Never the table's pipes as words, and never a row taken back.
+      expect(html.replace(/<[^>]*>/g, "")).not.toContain("|")
+      const now = html.split("<tr").length - 1
+      expect(now).toBeGreaterThanOrEqual(rows)
+      rows = now
+    }
+    expect(rows).toBe(2) // the header and the first row; the last row shows once the reply is whole
+  })
+
   it("shares a pending preload and renders the latest streaming props once ready", async () => {
     let resolve!: (module: typeof import("./markdown-content")) => void
     const pending = new Promise<typeof import("./markdown-content")>((done) => {

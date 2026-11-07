@@ -47,7 +47,7 @@ export type TaskEntry =
 /** Work handed over to an agent: to the computer agent, or to the coding agent. */
 export type Task = {
   key: string
-  tool: string // the main agent's tool that handed it over: computer_use or write_code
+  agent: string // the agent it was handed to: computer or coding
   brief: string // what the main agent asked
   title: string // a few words for the user, the main agent's name for it
   started: number
@@ -70,7 +70,7 @@ export type Item =
   | {
       kind: "held"
       key: string
-      tool: string
+      agent: string
       brief: string
       reason: NonNullable<ActionEvent["reason"]>
       result: string
@@ -92,7 +92,7 @@ export type Item =
   // What the main agent said, where it said it: in a run that works in the background, it talks as it goes.
   | { kind: "reply"; key: string; text: string; time: number; at: number }
   // What the main agent remembered, where it called remember, before what it said after: one chip for the rules one
-  // reply of its saved, as Claude marks a memory written. `updated`: one of them replaced a rule it had.
+  // reply of its saved. `updated`: one of them replaced a rule it had.
   | { kind: "memory"; key: string; memories: Remembered[]; updated: boolean }
 
 /** A step of the main agent's plan for the work (its write_todos calls: langchain's TodoListMiddleware). */
@@ -137,20 +137,15 @@ export type Thread = {
   tasks: Map<string, Task>
 }
 
-// The main agent's tools that steer a task under way (agent/main_agent.py); every other tool of its hands work over
-// to an agent, one tool per agent.
-const STEERING = ["tell_task", "stop_task"]
+// The main agent's tool that hands work over to an agent, and the one that tells a task under way something
+// (tools/tasks.py).
+const START_TASK = "start_task"
 const TELL_TASK = "tell_task"
 const WRITE_TODOS = "write_todos"
 const REMEMBER = "remember"
 // What remember says it saved (runtime memory/tools.py): the id is the last word of a result that saved one.
 const REMEMBERED = /^Remembered as (\S+?)\.?$/
-// The main agent's tools that neither steer nor hand over: its plan, its search of the other conversations, and its
-// memory (runtime memory/tools.py).
-const NO_HANDOVER = [WRITE_TODOS, "search_conversations", REMEMBER, "forget"]
 const STATUSES: readonly string[] = ["pending", "in_progress", "completed"]
-const handsOver = (tool: string) =>
-  !STEERING.includes(tool) && !NO_HANDOVER.includes(tool)
 
 // The runtime's notes, as the conversation tells them in the interface's language.
 function note(event: NoteEvent): string {
@@ -263,13 +258,13 @@ export function buildThread(events: RunEvent[]): Thread {
   const task = (
     key: string,
     time: number,
-    tool: string,
+    agent: string,
     brief: string,
     title: string
   ): Task => {
     const created: Task = {
       key,
-      tool,
+      agent,
       brief,
       title,
       started: time,
@@ -302,7 +297,7 @@ export function buildThread(events: RunEvent[]): Thread {
           // Handed over just before: its start is when it started.
           const at = handing.findIndex(
             (each) =>
-              each.task.tool === event.tool && each.task.brief === event.brief
+              each.task.agent === event.agent && each.task.brief === event.brief
           )
           if (at < 0) {
             // Handed over by the runtime, as a message for the desktop the main agent's reply did not hand over
@@ -310,7 +305,7 @@ export function buildThread(events: RunEvent[]): Thread {
             const handed = task(
               `task-${index}`,
               event.time,
-              event.tool,
+              event.agent,
               event.brief,
               event.title
             )
@@ -325,7 +320,7 @@ export function buildThread(events: RunEvent[]): Thread {
         } else {
           end(
             running.get(event.id) ?? null,
-            event.state === "stopped" ? "stopped" : "done",
+            event.state === "ended" ? "done" : event.state,
             event.time
           )
           thread.thinking = true // the runtime tells the main agent how it ended
@@ -403,12 +398,12 @@ export function buildThread(events: RunEvent[]): Thread {
             }
           // Each task it hands over at once, keyed by its call's place too.
           event.tool_calls
-            .filter((call) => handsOver(call.name))
+            .filter((call) => call.name === START_TASK)
             .forEach((call, n) => {
               const started = task(
                 n === 0 ? `task-${index}` : `task-${index}-${n}`,
                 event.time,
-                call.name,
+                String(call.args.agent ?? ""),
                 String(call.args.task ?? ""),
                 String(call.args.title ?? "")
               )
@@ -493,13 +488,13 @@ export function buildThread(events: RunEvent[]): Thread {
               add(remembered, index)
             }
           }
-          if (!handsOver(event.tool)) break
+          if (event.tool !== START_TASK) break
           if (event.reason) {
             // Turned away before it started (e.g. another task had the computer): never ran.
-            // The hand-over it answers, by its tool and brief.
+            // The hand-over it answers, by its agent and brief.
             const at = handing.findIndex(
               (each) =>
-                each.task.tool === event.tool &&
+                each.task.agent === String(event.args.agent ?? "") &&
                 each.task.brief === String(event.args.task ?? "")
             )
             if (at >= 0) {
@@ -507,7 +502,7 @@ export function buildThread(events: RunEvent[]): Thread {
               const held: Item = {
                 kind: "held",
                 key: turned.key,
-                tool: turned.task.tool,
+                agent: turned.task.agent,
                 brief: turned.task.brief,
                 reason: event.reason,
                 result: event.result,
@@ -602,7 +597,7 @@ export function buildThread(events: RunEvent[]): Thread {
   })
   // The computer agent has the run from its task's start till its end.
   thread.usingComputer = [...running.values()].some(
-    (each) => each.tool === "computer_use"
+    (each) => each.agent === "computer"
   )
 
   thread.items = thread.items
@@ -748,7 +743,7 @@ export const runningTask = (thread: Thread): Task | null => {
   const tasks = [...thread.tasks.values()].filter(
     (task) => task.outcome === "running"
   )
-  return tasks.find((task) => task.tool === "computer_use") ?? tasks[0] ?? null
+  return tasks.find((task) => task.agent === "computer") ?? tasks[0] ?? null
 }
 
 /** The rules the run's tasks were handed over with (their memoryUsed notes), each once, in the order first cited. */

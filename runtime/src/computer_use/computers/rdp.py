@@ -6,7 +6,6 @@ notches and pointer reads use a persistent X connection."""
 import asyncio
 import contextlib
 import fcntl
-import io
 import logging
 import os
 import stat
@@ -24,6 +23,8 @@ from Xlib.ext import damage
 
 from computer_use.computers import Button, Combo, ComputerError, Direction, Frame, Point, Status
 
+XK.load_keysym_group("xkb")  # ISO_Left_Tab, for Tab (KEYSYMS)
+
 BUTTONS = {"left": 1, "middle": 2, "right": 3}
 SCROLL_BUTTONS = {"up": 4, "down": 5, "left": 6, "right": 7}
 
@@ -32,10 +33,11 @@ SCROLL_BUTTONS = {"up": 4, "down": 5, "left": 6, "right": 7}
 KEYSYMS = {
     "win": "super",
     "enter": "Return",
-    "esc": "Escape",
-    "tab": "Tab",
+    # Keysyms without text on these keys (rdp-entrypoint.sh): FreeRDP would send Escape, Tab and Delete as characters.
+    "esc": "Cancel",
+    "tab": "ISO_Left_Tab",
     "backspace": "BackSpace",
-    "delete": "Delete",
+    "delete": "Select",
     "insert": "Insert",
     "up": "Up",
     "down": "Down",
@@ -62,6 +64,11 @@ KEYSYMS = {
 FULL_KEYSYMS = {"ctrl": "Control_L", "alt": "Alt_L", "shift": "Shift_L", "super": "Super_L"}
 
 TEXT_TIMEOUT_SECONDS = 3
+# FreeRDP reads the text pipe 63 bytes at a time; 15 characters never take more.
+TEXT_CHUNK_CHARACTERS = 15
+# FreeRDP sends a press and a release per UTF-16 unit, 5 ms apart. Faster garbles text: Windows queues 100 key events,
+# and when the network delivers more at once, later characters replace earlier ones.
+TEXT_KEY_EVENT_SECONDS = 0.005
 # A command still running after this has hung: even a 10 s hold_key takes far less.
 COMMAND_TIMEOUT_SECONDS = 60
 
@@ -87,7 +94,6 @@ def xdotool_combo(combo: Combo) -> str:
 
 
 def held(modifiers: Combo, *actions: str) -> list[str]:
-    """xdotool arguments that press the modifiers, run the actions, then release them."""
     down = [arg for key in modifiers for arg in ("keydown", keysym(key))]
     up = [arg for key in reversed(modifiers) for arg in ("keyup", keysym(key))]
     return [*down, *actions, *up]
@@ -116,11 +122,28 @@ class ScreenChanges:
     def __init__(self, display: str):
         self.count = 0
         self._changed = asyncio.Event()
+        self._loop = asyncio.get_running_loop()
         self._x = xlib.Display(display)
-        self._x.damage_query_version()
-        self._damage = self._x.screen().root.damage_create(damage.DamageReportNonEmpty)
-        self._x.flush()
-        asyncio.get_running_loop().add_reader(self._x.fileno(), self._on_events)
+        self._closed = False
+        try:
+            self._fd = self._x.fileno()
+            self._x.damage_query_version()
+            self._damage = self._x.screen().root.damage_create(damage.DamageReportNonEmpty)
+            self._x.flush()
+            self._loop.add_reader(self._fd, self._on_events)
+        except Exception:
+            self._x.close()
+            raise
+
+    def close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._loop.remove_reader(self._fd)
+        finally:
+            self._changed.set()
+            self._x.close()
 
     def _on_events(self) -> None:
         for _ in range(self._x.pending_events()):
@@ -147,6 +170,16 @@ class RdpComputer:
         self._xtest: xlib.Display | None = None  # the lasting connection (_lasting), opened on first use
         self._changes: ScreenChanges | None = None  # watched once the live view first asks
         self._no_changes = False  # the display reports no changes: every call counts as one
+
+    async def close(self) -> None:
+        changes, self._changes = self._changes, None
+        display, self._xtest = self._xtest, None
+        try:
+            if changes is not None:
+                changes.close()
+        finally:
+            if display is not None:
+                display.close()
 
     async def _run(self, *args: str, timeout: float = COMMAND_TIMEOUT_SECONDS) -> None:
         proc = await asyncio.create_subprocess_exec(
@@ -177,8 +210,9 @@ class RdpComputer:
             "xdotool", "search", "--onlyvisible", "--class", "rdp-session",
             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, env=self._env,
         )
-        connected = await proc.wait() == 0
-        return Status(connected, f"RDP session: {'connected' if connected else 'DISCONNECTED'}")
+        code = await proc.wait()
+        detail = "connected" if code == 0 else f"DISCONNECTED (xdotool {code})"
+        return Status(code == 0, f"RDP session: {detail}")
 
     async def screenshot(self) -> Frame:
         return await asyncio.to_thread(self._grab)
@@ -193,10 +227,7 @@ class RdpComputer:
             raise ComputerError(f"screenshot failed: {error}") from error
 
     def _grab(self) -> Frame:
-        image = self._capture()
-        buffer = io.BytesIO()
-        image.save(buffer, format="PNG")
-        return Frame(buffer.getvalue(), image.width, image.height)
+        return Frame.encode(self._capture())
 
     async def click(self, point: Point | None, button: Button, count: int, modifiers: Combo) -> None:
         click = ["click", "--repeat", str(count), "--delay", "50" if count == 1 else "80", str(BUTTONS[button])]
@@ -214,7 +245,6 @@ class RdpComputer:
         await self._run("xdotool", *moved(start, await self.cursor_position()), *held(modifiers, *steps))
 
     async def _here(self, point: Point | None) -> Point | None:
-        """Where the pointer is, when an action is about to move it to point."""
         return None if point is None else await self.cursor_position()
 
     def _lasting(self) -> xlib.Display:
@@ -225,7 +255,6 @@ class RdpComputer:
         return self._xtest
 
     def _fake_input(self, event_type: int, detail: int = 0, x: int = 0, y: int = 0) -> None:
-        """One input event over the lasting connection, with XTest."""
         try:
             self._lasting().xtest_fake_input(event_type, detail, x=x, y=y)
             self._xtest.sync()
@@ -275,29 +304,27 @@ class RdpComputer:
                 if number:
                     await self.press([["enter"]])
                 chunk = ""
-                for char in line:
-                    if len((chunk + char).encode()) > 60:
-                        await self._unicode_chunk(chunk)
-                        chunk = ""
-                    chunk += char
-                if chunk:
+                for start in range(0, len(line), TEXT_CHUNK_CHARACTERS):
+                    chunk = line[start:start + TEXT_CHUNK_CHARACTERS]
                     await self._unicode_chunk(chunk)
+                # FreeRDP has just read the last chunk: let it type that before Enter or the next action.
+                await asyncio.sleep(0.05 + len(chunk.encode("utf-16-le")) * TEXT_KEY_EVENT_SECONDS)
 
     async def _unicode_chunk(self, text: str) -> None:
-        # FreeRDP reads 63 bytes at a time. Keep every write on a UTF-8 character boundary,
-        # wait until it has been read, then allow the reader to dispatch it before a control key.
+        # Return once FreeRDP has read it, which it does after typing the chunk before.
         reader = None
         try:
+            if not stat.S_ISFIFO(os.stat(self.keyboard_pipe).st_mode):
+                raise ComputerError("The RDP text input path is not a pipe; nothing was sent.")
+            # Open and write back to back: FreeRDP stops reading the pipe for good if it finds a writer but no text.
             writer = os.open(self.keyboard_pipe, os.O_WRONLY | os.O_NONBLOCK)
             try:
-                if not stat.S_ISFIFO(os.fstat(writer).st_mode):
-                    raise ComputerError("The RDP text input path is not a pipe; nothing was sent.")
-                reader = os.open(self.keyboard_pipe, os.O_RDONLY | os.O_NONBLOCK)
                 payload = text.encode("utf-8")
                 if os.write(writer, payload) != len(payload):
                     raise ComputerError("The RDP text transfer was partial; check the screen before retrying.")
             finally:
                 os.close(writer)
+            reader = os.open(self.keyboard_pipe, os.O_RDONLY | os.O_NONBLOCK)
             due = time.monotonic() + TEXT_TIMEOUT_SECONDS
             while True:
                 pending = array("i", [0])
@@ -307,7 +334,6 @@ class RdpComputer:
                 if time.monotonic() >= due:
                     raise ComputerError("RDP did not take the text; check the connection before retrying.")
                 await asyncio.sleep(0.002)
-            await asyncio.sleep(0.01 + len(text.encode("utf-16-le")) * 0.0015)
         except OSError as error:
             raise ComputerError("The RDP text input pipe is unavailable; check the desktop connection.") from error
         finally:

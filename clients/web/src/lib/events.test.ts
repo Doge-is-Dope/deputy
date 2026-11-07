@@ -19,7 +19,7 @@ function body(text: string, size = 1): ReadableStream<Uint8Array> {
   })
 }
 
-const start: RunEvent = { type: "start", v: 4, goal: "你好", time: 1 }
+const start: RunEvent = { type: "start", v: 6, goal: "你好", time: 1 }
 const reply: RunEvent = {
   type: "model",
   agent: "main",
@@ -40,7 +40,12 @@ const frame = (event: RunEvent, id: string) =>
   `id: ${id}\ndata: ${JSON.stringify(event)}\n\n`
 const draft = (text: string, whole = false) =>
   `event: ${whole ? "draft" : "delta"}\ndata: ${JSON.stringify({ text })}\n\n`
-const fresh = (): EventState => ({ events: [], draft: "", streamed: new Set() })
+const fresh = (): EventState => ({
+  events: [],
+  draft: "",
+  final: false,
+  streamed: new Set(),
+})
 
 describe("run event stream", () => {
   it("reads complete events and unicode split across arbitrary byte boundaries", async () => {
@@ -80,7 +85,7 @@ describe("run event stream", () => {
     ).toBe(false)
     expect(cursor).toBe("0")
     expect(state.events).toEqual([start])
-    // useRunEvents reconnects with Last-Event-ID: 0 and clears the transient draft before replaying its current value.
+    // The shared stream reconnects with Last-Event-ID: 0 and clears the transient draft before replaying its current value.
     write("", true)
     expect(
       await readEvents(
@@ -111,6 +116,29 @@ describe("run event stream", () => {
     expect(state.draft).toBe("next")
     expect([...state.streamed]).toEqual([1])
     expect(applyEventBatch(state, [{ event: end }]).draft).toBe("")
+  })
+
+  it("keeps a draft final from the start its model said so until it is logged", async () => {
+    const said: { text: string; whole: boolean; final: boolean }[] = []
+    await readEvents(
+      body(
+        `event: draft\ndata: ${JSON.stringify({ text: "", final: true })}\n\n` +
+          draft("Paris.") +
+          "event: done\ndata: {}\n\n"
+      ),
+      () => {},
+      (text, whole, final) => said.push({ text, whole, final })
+    )
+    expect(said).toEqual([
+      { text: "", whole: true, final: true },
+      { text: "Paris.", whole: false, final: false },
+    ])
+    const writing = applyEventBatch(fresh(), [
+      { draft: "", whole: true, final: true },
+      { draft: "Paris.", whole: false },
+    ])
+    expect([writing.draft, writing.final]).toEqual(["Paris.", true])
+    expect(applyEventBatch(writing, [{ event: reply }]).final).toBe(false)
   })
 
   it("does not clear the main draft when a worker model event arrives", () => {

@@ -7,8 +7,8 @@ import { type Pending } from "@/lib/api"
 import { useT } from "@/lib/i18n"
 
 /**
- * What was sent while the run works and its agents have not read yet, on a card tucked behind the composer's top edge:
- * read, a message leaves it for the conversation; deleted before that, the agents never see it. It sinks behind the
+ * What was queued while the run works (⌘/Ctrl+Enter), on a card tucked behind the composer's top edge: once the run
+ * ends, the first starts the next and leaves it for the conversation; deleted before that, the agents never see it. It sinks behind the
  * composer while the composer asks something, as the question rises out of it, and comes back once that is answered.
  */
 export function Queue({

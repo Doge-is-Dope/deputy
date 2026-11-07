@@ -8,29 +8,29 @@ import computer_use.serve as serve
 from computer_use.auth.base import LOCAL, identity
 from computer_use.serve import open_to_anyone, signed_in_link
 from computer_use.server import create_app
-from conftest import use_script
+from conftest import listed_runs, use_script
 from langchain_core.messages import AIMessage
 
 
 def client(settings, computer, address: str = "127.0.0.1") -> httpx.AsyncClient:
     app = create_app(settings, max_steps=10, computer=computer)
     transport = httpx.ASGITransport(app=app, client=(address, 50000))
-    return httpx.AsyncClient(transport=transport, base_url="http://test")
+    return httpx.AsyncClient(transport=transport, base_url="http://localhost")
 
 
 async def test_with_no_sign_in_anyone_who_reaches_it_is_the_local_user(settings, computer):
     async with client(settings, computer) as api:
         assert (await api.get("/api/session")).json() == {"id": "local", "name": "Local user", "login": None}
-        assert (await api.get("/api/runs")).status_code == 200
+        assert (await api.get("/api/conversations")).status_code == 200
 
 
 async def test_a_token_is_taken_as_a_bearer_or_from_the_cookie_signing_in_sets(settings, computer):
     settings = settings.model_copy(update={"auth": "token", "auth_token": SecretStr("s3cret")})
     async with client(settings, computer) as api:
-        refused = await api.get("/api/runs")
+        refused = await api.get("/api/conversations")
         assert (refused.status_code, refused.json()["login"]) == (401, "token")
-        assert (await api.get("/api/runs", headers={"Authorization": "Bearer wrong"})).status_code == 401
-        assert (await api.get("/api/runs", headers={"Authorization": "Bearer s3cret"})).status_code == 200
+        assert (await api.get("/api/conversations", headers={"Authorization": "Bearer wrong"})).status_code == 401
+        assert (await api.get("/api/conversations", headers={"Authorization": "Bearer s3cret"})).status_code == 200
 
         assert (await api.post("/api/login", json={"token": "wrong"})).status_code == 401
         signed_in = await api.post("/api/login", json={"token": "s3cret"})
@@ -92,7 +92,22 @@ async def test_a_browser_may_change_things_only_from_the_pages_own_origin(settin
             headers = {"Sec-Fetch-Site": site} if site else {}  # none: the command line
             sent = await api.post("/api/runs/nope/stop", headers=headers)
             assert sent.status_code == status, site
-        assert (await api.get("/api/runs", headers={"Sec-Fetch-Site": "cross-site"})).status_code == 200
+        assert (await api.get("/api/conversations", headers={"Sec-Fetch-Site": "cross-site"})).status_code == 200
+
+
+async def test_with_no_sign_in_only_a_request_naming_this_machine_gets_through(settings, computer):
+    same_origin = {"Sec-Fetch-Site": "same-origin"}  # what a page whose name was pointed here sends
+    async with client(settings, computer) as api:
+        for host in ("localhost:8000", "127.0.0.1:5173", "[::1]:8000", "LOCALHOST"):
+            assert (await api.get("/api/session", headers={"Host": host})).status_code == 200, host
+        for host in ("rebind.attacker.example:8000", "192.168.1.9:8000", "[::1", ""):
+            assert (await api.get("/api/conversations", headers={"Host": host})).status_code == 403, host
+            sent = await api.post("/api/runs", json={"goal": "x"}, headers={"Host": host, **same_origin})
+            assert sent.status_code == 403, host
+    token = settings.model_copy(update={"auth": "token", "auth_token": SecretStr("s3cret")})
+    async with client(token, computer) as api:  # the token is the proof, whatever the name
+        signed = {"Host": "runtime.example", "Authorization": "Bearer s3cret"}
+        assert (await api.get("/api/conversations", headers=signed)).status_code == 200
 
 
 def test_the_server_takes_the_connections_own_address_not_a_forwarded_one(settings, monkeypatch):
@@ -124,11 +139,12 @@ async def test_each_user_sees_and_changes_only_their_own_conversations(settings,
                 break
             await asyncio.sleep(0.01)
 
-        assert [each["id"] for each in (await api.get("/api/runs", headers=alice)).json()] == [run]
-        assert (await api.get("/api/runs", headers=bob)).json() == []
+        assert [each["id"] for each in (await listed_runs(api, alice))] == [run]
+        assert (await listed_runs(api, bob)) == []
         assert (await api.get("/api/search", params={"q": "notes"}, headers=bob)).json() == []
         for method, path, body in (
             ("GET", f"/api/runs/{run}/events", None),
+            ("GET", f"/api/conversations/{thread}/files/report.csv", None),
             ("POST", f"/api/runs/{run}/stop", None),
             ("PATCH", f"/api/conversations/{thread}", {"title": "mine now"}),
             ("DELETE", f"/api/conversations/{thread}", None),
@@ -138,5 +154,4 @@ async def test_each_user_sees_and_changes_only_their_own_conversations(settings,
         assert continued.status_code == 404
 
         assert (await api.delete(f"/api/conversations/{thread}", headers=alice)).status_code == 200
-        assert (await api.post(f"/api/conversations/{thread}/restore", headers=bob)).status_code == 404
-        assert (await api.post(f"/api/conversations/{thread}/restore", headers=alice)).status_code == 200
+        assert (await api.get(f"/api/runs/{run}/events", headers=alice)).status_code == 404

@@ -3,15 +3,12 @@ JSON value a line, so a person can read and fix one by hand."""
 
 import json
 import os
-import re
 import time
 from dataclasses import asdict, fields, replace
 from pathlib import Path
 
-from computer_use.memory import EDITABLE, Memory, Source
+from computer_use.memory import EDITABLE, NAME, Memory, Source
 
-# A user's id, a memory's id: each names a folder or a file, so nothing else may.
-NAME = re.compile(r"[0-9a-z]{1,64}")
 HEADER = [each.name for each in fields(Memory) if each.name != "text"]
 
 
@@ -33,6 +30,9 @@ def read(text: str) -> Memory:
 class FileMemoryStore:
     def __init__(self, data_dir: Path):
         self.users = data_dir / "users"
+
+    async def close(self) -> None:
+        pass
 
     def _folder(self, user: str) -> Path:
         if not NAME.fullmatch(user):

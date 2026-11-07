@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
 
-import type { Project } from "@/lib/api"
-import { sectionsOf, type Conversation } from "@/lib/conversations"
+import type { Conversation, Project } from "@/lib/api"
+import { sectionsOf } from "@/lib/conversations"
 import { reducedMotion } from "@/lib/motion"
 import { openRun } from "@/lib/route"
 import { DROP } from "@/components/sidebar/motion"
@@ -82,6 +82,15 @@ export function useSidebarLists({
   // Projects being deleted, as they were with their conversations and name, listed in their place a moment longer
   // while they fold shut (ProjectGroup's leaving).
   const [closing, setClosing] = useState<[string, Conversation[], string][]>([])
+  // Projects being deleted, by id: out of the list until the runtime no longer has them; back should the delete fail.
+  const [deleting, setDeleting] = useState<string[]>([])
+  const erased = deleting.filter(
+    (id) => !made?.some((project) => project.id === id)
+  )
+  if (erased.length > 0) {
+    setDeleting((ids) => ids.filter((id) => !erased.includes(id)))
+    setOrder((list) => list.filter((id) => !erased.includes(id)))
+  }
   // Each project's name by id: as just renamed, else the runtime's, else as it was while it folds shut.
   const names = useMemo(
     () =>
@@ -93,23 +102,28 @@ export function useSidebarLists({
     [closing, made, renamed]
   )
   const { projects: listed, recents } = useMemo(() => {
-    const known = new Set((made ?? []).map((project) => project.id))
+    const known = new Set(
+      (made ?? [])
+        .map((project) => project.id)
+        .filter((id) => !deleting.includes(id))
+    )
     const kept = (conversations ?? []).filter(
       (conversation) => !removed.includes(conversation.id)
     )
-    // In the recents, one whose project is gone.
+    // In the recents, one whose project is gone. A copy only where the project differs, so other rows stay the same
+    // objects and skip rendering.
     const shown = kept.map((conversation) => {
-      const project =
+      const placedIn =
         conversation.id in placed
           ? placed[conversation.id]
           : conversation.project
-      return {
-        ...conversation,
-        project: project !== null && known.has(project) ? project : null,
-      }
+      const project = placedIn !== null && known.has(placedIn) ? placedIn : null
+      return project === conversation.project
+        ? conversation
+        : { ...conversation, project }
     })
     const sections = sectionsOf(
-      [...shown, ...left].toSorted((a, b) => b.updated - a.updated)
+      [...shown, ...left].toSorted((a, b) => b.last - a.last)
     )
     const listed = new Set(sections.projects.map(([id]) => id))
     // Those with no conversation too.
@@ -124,7 +138,7 @@ export function useSidebarLists({
       items,
     ])
     return { ...sections, projects: [...standing, ...shutting] }
-  }, [closing, conversations, left, made, placed, removed])
+  }, [closing, conversations, deleting, left, made, placed, removed])
   const unordered = listed.map(([id]) => id).filter((id) => !order.includes(id))
   if (unordered.length > 0)
     setOrder((list) => [
@@ -161,28 +175,34 @@ export function useSidebarLists({
     if (!(await onDelete([conversation.id], null)))
       setRemoved((ids) => ids.filter((id) => id !== conversation.id))
   }
-  // All of it at once: its conversations out of the list and its row folding shut with them, rather than each going
-  // as its delete is done; then the project itself, once they are all gone. Those that fail to go come back, and the
-  // project stays with them.
-  const deleteProject = async (project: string, items: Conversation[]) => {
+  // All of it at once: its conversations out of the list and its row folding shut with them; the runtime erases the
+  // project with every conversation in it. Should it not, they come back.
+  const deleteProject = async (
+    project: string,
+    items: Conversation[],
+    loaded = true
+  ) => {
     const ids = items.map((conversation) => conversation.id)
     setRemoved((list) => [...list, ...ids])
+    setDeleting((list) => [...list, project])
     if (project === selectedProject) openRun(null)
     const forget = () => {
       setClosing((list) => list.filter(([id]) => id !== project))
       setOpened(project, false)
-      setOrder((list) => list.filter((each) => each !== project))
     }
     if (reducedMotion()) forget()
     else {
       setClosing((list) => [...list, [project, items, names[project] ?? ""]])
       setTimeout(forget, DROP.duration)
     }
-    if (ids.length > 0 && !(await onDelete(ids, project))) {
+    const deleted =
+      loaded && ids.length === 0
+        ? (await onDeleteProject(project)) !== null
+        : await onDelete(ids, project)
+    if (!deleted) {
       setRemoved((list) => list.filter((id) => !ids.includes(id)))
-      return
+      setDeleting((list) => list.filter((id) => id !== project))
     }
-    await onDeleteProject(project)
   }
   // It goes back should the move fail. A project stays when its last conversation moves out.
   const move = async (conversation: Conversation, project: string | null) => {

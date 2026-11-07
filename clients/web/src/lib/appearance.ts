@@ -8,8 +8,8 @@ import {
   type Variant,
 } from "@/lib/themes"
 
-// How the app looks: light or dark, the system's unless one was chosen, and a theme for each of the two, as the
-// ChatGPT desktop app keeps them. A theme is three colors (lib/themes.ts) and the one it started from; the colors can
+// How the app looks: light or dark, the system's unless one was chosen, and a theme for each of the
+// two. A theme is three colors (lib/themes.ts) and the one it started from; the colors can
 // be changed one by one, and the theme stays named as it was. All of it is kept in this browser. It ends up on <html>:
 // the mode as data-mode, the mode's three colors as --theme-surface, --theme-ink and --theme-accent, which index.css
 // works every other color out from. index.html sets them once before the first paint, so the page never flashes other
@@ -155,92 +155,6 @@ function isDefault(choice: ThemeChoice, variant: Variant) {
 /** The themes there are for a mode. */
 export const presetsFor = (variant: Variant) =>
   PRESETS.filter((preset) => preset[variant])
-
-// A theme passed around as one line of text, in the ChatGPT desktop app's own format, so one copied there opens here
-// and the other way round. It holds more than this app keeps: the rest is filled with that app's defaults for the
-// mode, and read back as nothing. Its theme ids are ChatGPT's, the default one's "codex"; it turns down one it doesn't
-// list, so a theme here goes out under its own id, or the default's.
-const SHARE_PREFIX = "codex-theme-v1:"
-
-const CHATGPT_DEFAULTS = {
-  light: {
-    contrast: 45,
-    semanticColors: {
-      diffAdded: "#00a240",
-      diffRemoved: "#ba2623",
-      skill: "#924ff7",
-    },
-  },
-  dark: {
-    contrast: 60,
-    semanticColors: {
-      diffAdded: "#40c977",
-      diffRemoved: "#fa423e",
-      skill: "#ad7bf9",
-    },
-  },
-}
-
-export function shareTheme(variant: Variant, choice: ThemeChoice) {
-  const { id, surface, ink, accent } = choice
-  return (
-    SHARE_PREFIX +
-    JSON.stringify({
-      codeThemeId: id === DEFAULT_THEME.id ? "codex" : id,
-      theme: {
-        accent,
-        accentSource: "custom",
-        contrast: CHATGPT_DEFAULTS[variant].contrast,
-        fonts: { code: null, ui: null },
-        ink,
-        opaqueWindows: false,
-        semanticColors: CHATGPT_DEFAULTS[variant].semanticColors,
-        surface,
-      },
-      variant,
-    })
-  )
-}
-
-/** The theme a line of text holds, and the mode it is for; null if it holds none. */
-export function readTheme(
-  text: string
-): { variant: Variant; choice: ThemeChoice } | null {
-  const line = text.trim()
-  if (!line.startsWith(SHARE_PREFIX)) return null
-  try {
-    const rest = line.slice(SHARE_PREFIX.length)
-    const shared = JSON.parse(
-      rest.startsWith("{") ? rest : decodeURIComponent(rest)
-    )
-    const variant = shared?.variant
-    if (variant !== "light" && variant !== "dark") return null
-    const id =
-      PRESETS.find(
-        (preset) =>
-          preset.id ===
-          (shared.codeThemeId === "codex"
-            ? DEFAULT_THEME.id
-            : shared.codeThemeId)
-      )?.id ?? DEFAULT_THEME.id
-    const choice = {
-      id,
-      surface: String(shared.theme?.surface).toLowerCase(),
-      ink: String(shared.theme?.ink).toLowerCase(),
-      accent: String(shared.theme?.accent).toLowerCase(),
-    }
-    return isChoice(choice) ? { variant, choice } : null
-  } catch {
-    return null
-  }
-}
-
-/** Take a theme from a line of text into the mode it is for. */
-export function importTheme(text: string) {
-  const shared = readTheme(text)
-  if (shared) setChoice(shared.variant, shared.choice)
-  return shared
-}
 
 function subscribe(listener: () => void) {
   listeners.add(listener)

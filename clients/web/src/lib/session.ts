@@ -2,7 +2,7 @@
 // proof, a cookie with the token, or the sign-in proxy's own, and sends it with every request. What the runtime said
 // of who the page is lives here, kept up to date for the components that show it (useSession).
 
-import { useSyncExternalStore } from "react"
+import { store } from "@/lib/store"
 
 /** How a runtime that turned the page away wants it to sign in. */
 export type Login = "token" | "proxy"
@@ -16,19 +16,11 @@ export type Session = { user: User | null; login: Login | null }
 // Asked no longer than this: a runtime or proxy that never answers leaves the page to say it cannot reach it.
 const WAIT = 5000
 
-let session: Session = { user: null, login: null }
-const listeners = new Set<() => void>()
+const session = store<Session>({ user: null, login: null })
 let asking: Promise<Login | null> | null = null
 
 /** The session, the component showing it drawn again as it changes. */
-export const useSession = () =>
-  useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => listeners.delete(listener)
-    },
-    () => session
-  )
+export const useSession = session.use
 
 /** Asks the runtime who the page is: null when it says, or cannot be reached; how to sign in when it turns the page
  * away. One question at a time. */
@@ -42,8 +34,7 @@ function ask(): Promise<Login | null> {
         const login = ["token", "proxy"].includes(answer.login)
           ? answer.login
           : null
-        session = { user: { id: answer.id, name: answer.name }, login }
-        listeners.forEach((listener) => listener())
+        session.set({ user: { id: answer.id, name: answer.name }, login })
       }
       return null
     })
@@ -57,7 +48,7 @@ function ask(): Promise<Login | null> {
  * who it is yet (the runtime was not up when it started), is the moment to ask. */
 export function answered(response: Response) {
   if (response.status === 401) window.location.reload()
-  else if (response.ok && !session.user) void ask()
+  else if (response.ok && !session.get().user) void ask()
 }
 
 /** Drops the token's cookie and starts again, signed out. */
@@ -67,7 +58,7 @@ export async function signOut() {
 }
 
 /** Signs in with the token of the link the runtime printed (#token=…, which the browser never sends anywhere),
- * taking it out of the address first, as Jupyter's link works; then asks who the page is. Null when signed in, or
+ * taking it out of the address first; then asks who the page is. Null when signed in, or
  * when the runtime cannot be reached (the page says so itself); else how to sign in. */
 export async function signIn(): Promise<Login | null> {
   const token = window.location.hash.match(/^#token=(.+)$/)?.[1]

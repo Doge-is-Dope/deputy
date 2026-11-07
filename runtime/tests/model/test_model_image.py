@@ -1,4 +1,4 @@
-"""Real model calls against CU_MODEL. Run with `uv run pytest -m model`; needs an API key in .env."""
+"""Real model calls against CU_COMPUTER_MODEL. Run with `uv run pytest -m model`; needs an API key in .env."""
 
 import os
 
@@ -28,9 +28,8 @@ async def test_screenshot_reaches_model(observe_conversation, computer):
 async def test_the_main_agent_answers_a_question_itself_and_says_what_it_will_do_as_it_hands_desktop_work_over():
     from langchain_core.messages import HumanMessage, SystemMessage
 
-    from computer_use.agent.background import MAX_TASKS
-    from computer_use.agent.main_agent import handover_tools
-    from computer_use.prompts.main import main_prompt
+    from computer_use.tools.tasks import handover_tools, TaskTool
+    from computer_use.prompts.main import MAIN_PROMPT
 
     settings = Settings()
     provider = settings.main_model.partition(":")[0]
@@ -38,14 +37,14 @@ async def test_the_main_agent_answers_a_question_itself_and_says_what_it_will_do
         pytest.skip(f"no API key for {settings.main_model}")
     main = build_chat_model(chosen(settings, "main"), settings)
     # Only the tools' descriptions reach the model here; nothing calls them, so they need no desktop or task.
-    desktop = ComputerAgent(settings, None, None, None, "thread", "", 10)
-    model = main.bind_tools(handover_tools([desktop], None, None, None))
+    desktop = TaskTool(ComputerAgent.agent, ComputerAgent.about, None)  # schema only
+    model = main.bind_tools(handover_tools([desktop], None, None))
 
     async def reply(message: str):
-        return await model.ainvoke([SystemMessage(main_prompt(MAX_TASKS, ())), HumanMessage(message)])
+        return await model.ainvoke([SystemMessage(MAIN_PROMPT), HumanMessage(message)])
 
     assert (await reply("What is 128 times 37?")).tool_calls == []
     handed = await reply("Open Notepad on my computer and type hello.")
-    assert [call["name"] for call in handed.tool_calls] == ["computer_use"]
+    assert [(call["name"], call["args"]["agent"]) for call in handed.tool_calls] == [("start_task", "computer")]
     # Until the task ends, these words are all the user hears from it.
     assert handed.text.strip(), "it handed the task over without a word to the user"

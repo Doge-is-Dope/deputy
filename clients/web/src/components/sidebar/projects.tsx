@@ -1,5 +1,6 @@
 import {
   Children,
+  useEffect,
   useLayoutEffect,
   useRef,
   useState,
@@ -17,8 +18,9 @@ import {
   useSidebar,
 } from "@/components/ui/sidebar"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
-import { isComposing } from "@/lib/keys"
-import { type Conversation } from "@/lib/conversations"
+import { NameField } from "@/components/sidebar/name-field"
+import { PROJECT_PAGE, RETRY_MS, type Conversation } from "@/lib/api"
+import { Spinner } from "@/components/ui/spinner"
 import { useT } from "@/lib/i18n"
 import { reducedMotion } from "@/lib/motion"
 import { projectHref } from "@/lib/route"
@@ -41,11 +43,9 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { carriedBy, NEW_PROJECT } from "@/components/sidebar/drag"
 import { FOLD, fold } from "@/components/sidebar/motion"
+import type { Lists } from "@/hooks/use-api"
 
-/** How many conversations a project lists as it opens; Show more lists as many again, as ChatGPT's projects do. */
-const PROJECT_PAGE = 5
-
-/** The row that makes a project while there is none, as ChatGPT lists New project under its Projects: a folder with a
+/** The row that makes a project while there is none, under Projects: a folder with a
  * plus on the folders' column, as a project's row has its folder. A conversation dropped on it goes into the project it makes, the
  * row lit meanwhile as a project's is. Where the last project is folding shut, it opens as that closes up, so the list
  * below moves one way only. */
@@ -105,6 +105,7 @@ export function ProjectGroup({
   onDelete,
   leaving = false,
   reading,
+  lists,
   children,
 }: {
   project: string // its id
@@ -120,9 +121,35 @@ export function ProjectGroup({
   onRename: (name: string) => Promise<void>
   onDelete: () => void // its menu's 刪除: asked about first, unless it is empty
   leaving?: boolean // deleted: its row and its conversations fold shut as one
+  lists: Lists // its conversations beyond those listed, and loading them
   children: ReactNode
 }) {
   const t = useT()
+  const { read, load } = lists
+  const loading = lists.loading(project)
+  // Only a first read retries by itself; a page after it fails back to Show more.
+  const failedRead = lists.failed(project) && !lists.loaded(project)
+  const failures = useRef(0)
+  useEffect(() => {
+    if (!open || leaving) {
+      failures.current = 0
+      return
+    }
+    if (!failedRead) {
+      failures.current = 0
+      read(project)
+      return
+    }
+    if (loading) return
+    const timer = window.setTimeout(
+      () => {
+        failures.current++
+        load(project)
+      },
+      RETRY_MS[Math.min(failures.current, RETRY_MS.length - 1)]
+    )
+    return () => window.clearTimeout(timer)
+  }, [open, leaving, project, read, load, loading, failedRead])
   const { isMobile, setOpenMobile } = useSidebar()
   // Enter or blur renames it to a changed, nonempty name; Escape cancels, as a conversation's rename does.
   const [draft, setDraft] = useState<string | null>(null)
@@ -152,6 +179,9 @@ export function ProjectGroup({
   // Shut as it is picked up, so it moves as one row and the others make room for that alone, the others left as they
   // are; open again as it is dropped, if it was, unfolding under its row as that glides into place (DROP).
   const shown = open && !held
+  // It unfolds once its first page is in: Base UI measures the panel as it opens, and a spinner measured there held
+  // the fold to one line, the rows snapping in at its end. A first read that failed opens on the spinner, retrying.
+  const unfolded = shown && (lists.loaded(project) || failedRead)
   // A conversation from elsewhere carried over it, or over its conversations: its row lit and its folder open, to take
   // it in. One of its own is home already.
   const carried = carriedBy(active)
@@ -182,7 +212,7 @@ export function ProjectGroup({
         leaving && "pointer-events-none"
       )}
     >
-      <Collapsible open={shown}>
+      <Collapsible open={unfolded}>
         <div className="group/menu-item relative">
           <SidebarMenuButton
             // Its folder as the commands' icons above it: 20px, in the text's color, on the same column (pl-2.5).
@@ -227,18 +257,12 @@ export function ProjectGroup({
           {draft !== null && (
             <div className="absolute inset-0 z-10 flex items-center gap-2.5 rounded-md bg-sidebar-accent pr-2 pl-2.5 text-sidebar-accent-foreground">
               <Folder className="shrink-0" />
-              <input
-                autoFocus
+              <NameField
                 value={draft}
-                aria-label={t.sidebar.projectName}
-                onChange={(event) => setDraft(event.target.value)}
-                onFocus={(event) => event.currentTarget.select()}
-                onBlur={commit}
-                onKeyDown={(event) => {
-                  if (isComposing(event.nativeEvent)) return
-                  if (event.key === "Enter") commit()
-                  if (event.key === "Escape") setDraft(null)
-                }}
+                label={t.sidebar.projectName}
+                onChange={setDraft}
+                onSave={commit}
+                onCancel={() => setDraft(null)}
                 className="h-full min-w-0 flex-1 bg-transparent text-sm outline-none"
               />
             </div>
@@ -300,8 +324,14 @@ export function ProjectGroup({
               panel, not on it: the panel's own padding would hold its height above zero until it unmounts, and the
               list below would jump by that much at the end. */}
           <SidebarMenuSub className="mx-0 translate-x-0 gap-0.5 border-0 pt-0.5 pr-0 pb-1.5 pl-0">
-            {items.length > 0 ? (
-              <ProjectRows reading={reading}>{children}</ProjectRows>
+            {!lists.loaded(project) ? (
+              <li className="flex h-8 items-center justify-center">
+                <Spinner />
+              </li>
+            ) : items.length > 0 ? (
+              <ProjectRows project={project} reading={reading} lists={lists}>
+                {children}
+              </ProjectRows>
             ) : (
               <li className="flex h-8 animate-in items-center pr-2 pl-10 text-sm text-muted-foreground duration-200 ease-(--ease-out) fade-in motion-reduce:animate-none pointer-coarse:h-10">
                 {t.sidebar.noChats}
@@ -314,35 +344,52 @@ export function ProjectGroup({
   )
 }
 
-/** A project's conversations: the first five, and five more for each Show more under them, as ChatGPT's projects list
- * theirs; and the one whose page is open, after them, while it is further down, so the page open is always in the
+/** A project's conversations: the first five, and five more for each Show more under them;
+ * and the one whose page is open, after them, while it is further down, so the page open is always in the
  * list, with Show more only while some are still unlisted. In the project's panel, which unmounts as the project
  * shuts, so an opened project lists five again. */
 function ProjectRows({
+  project,
   reading,
+  lists,
   children,
 }: {
+  project: string
   reading: number // the index of the conversation whose page is open, or -1
+  lists: Lists
   children: ReactNode
 }) {
   const t = useT()
   const [limit, setLimit] = useState(PROJECT_PAGE)
   const rows = Children.toArray(children)
+  const more = lists.more(project) // the runtime has conversations beyond those given
   // The one whose page is open, listed after the first five while it is further down; no Show more for it alone.
   const appended = reading >= limit
   return (
     <>
       {rows.slice(0, limit)}
       {appended && rows[reading]}
-      {rows.length > limit + (appended ? 1 : 0) && (
-        <SidebarMenuItem>
-          <SidebarMenuButton
-            className="h-8 pl-10 text-muted-foreground pointer-coarse:h-10"
-            onClick={() => setLimit((n) => n + PROJECT_PAGE)}
-          >
-            {t.sidebar.showMore}
-          </SidebarMenuButton>
-        </SidebarMenuItem>
+      {lists.loading(project) ? (
+        <li className="flex h-8 items-center justify-center">
+          <Spinner />
+        </li>
+      ) : (
+        (rows.length > limit + (appended ? 1 : 0) || more) && (
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              className="h-8 pl-10 text-muted-foreground pointer-coarse:h-10"
+              onClick={() => {
+                // The next page from the runtime, only when those loaded cannot fill the longer list: a list opened
+                // again lists five of those it has, and shows the rest first.
+                if (more && rows.length < limit + PROJECT_PAGE)
+                  lists.load(project)
+                setLimit((n) => n + PROJECT_PAGE)
+              }}
+            >
+              {t.sidebar.showMore}
+            </SidebarMenuButton>
+          </SidebarMenuItem>
+        )
       )}
     </>
   )

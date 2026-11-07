@@ -11,6 +11,10 @@ import { zhHant, type Messages } from "@/locales/zh-Hant"
 const MESSAGES = { "zh-Hant": zhHant, en } satisfies Record<string, Messages>
 
 export type Locale = keyof typeof MESSAGES
+
+/** A word in every language the interface has, so a search finds it in any of them whichever is shown. */
+export const everyLanguage = (word: (messages: Messages) => string) =>
+  Object.values(MESSAGES).map(word)
 export type Language = "auto" | Locale
 
 /** The languages to choose from, each named in itself. */

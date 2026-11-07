@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { toast } from "sonner"
+import { toast, type ExternalToast } from "sonner"
 
 import { CloseIcon, WarningIcon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
@@ -58,21 +58,44 @@ export function Notice({
   )
 }
 
-/** Why what the user asked did not go through, as a notice with the others: one at a time, a new one in its place. */
-export function showError(text: string) {
+/** Shows a notice; one with the same `id` takes the place of the last. Its action and its close button dismiss it. */
+export function notify(
+  notice: {
+    icon: ReactNode
+    text: string
+    action?: string
+    onAction?: () => void
+  },
+  options: ExternalToast = {}
+) {
+  const { onAction, ...shown } = notice
   toast.custom(
     (id) => (
       <Notice
-        icon={
-          <WarningIcon
-            aria-hidden
-            className="size-5 shrink-0 text-destructive"
-          />
-        }
-        text={text}
+        {...shown}
         onDismiss={() => toast.dismiss(id)}
+        onAction={
+          onAction &&
+          (() => {
+            toast.dismiss(id)
+            onAction()
+          })
+        }
       />
     ),
-    { id: "error", className: "w-full" }
+    { className: "w-full", ...options }
+  )
+}
+
+/** Why what the user asked did not go through, as a notice with the others: one at a time, a new one in its place. */
+export function showError(text: string) {
+  notify(
+    {
+      icon: (
+        <WarningIcon aria-hidden className="size-5 shrink-0 text-destructive" />
+      ),
+      text,
+    },
+    { id: "error" }
   )
 }

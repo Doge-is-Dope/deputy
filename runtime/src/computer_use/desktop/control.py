@@ -25,7 +25,6 @@ from computer_use.computers import Computer, ComputerError
 
 Owner = Literal["agent", "user"]
 Decision = Literal["approve", "reject"]
-# How often a wait for control to come back looks at the control file.
 POLL_SECONDS = 1.0
 # How often a wait for the user's approval looks for their answer: the approved step goes out this soon after.
 APPROVAL_POLL_SECONDS = 0.25
@@ -40,6 +39,11 @@ class ControlState:
     owner: Owner
     since: float
     reason: str = ""
+    ready: bool = True
+
+    def allows_input(self, owner: Owner) -> bool:
+        """Human input needs ownership; agent input also respects an implementation's readiness barrier."""
+        return self.owner == owner and (owner == "user" or self.ready)
 
 
 class Control(Protocol):
@@ -47,23 +51,37 @@ class Control(Protocol):
     def write(self, owner: Owner, reason: str = "") -> ControlState: ...
     def locked(self) -> AbstractAsyncContextManager[ControlState]: ...
     async def wait_for_agent(self) -> float | None: ...
+    async def synchronize(self, state: ControlState) -> None: ...
+
+
+class ControlSyncError(ComputerError):
+    """The desktop is unavailable or a work barrier still prevents returning control."""
 
 
 class ControlFile:
+    """Controller-owned desktop state, independent of optional remote tool services."""
+
     def __init__(self, path: Path):
         self.path = path
 
-    def read(self) -> ControlState:
+    def requested(self) -> ControlState:
         try:
             return ControlState(**json.loads(self.path.read_text()))
         except FileNotFoundError:  # never switched: the agent's since the start of time
             return ControlState("agent", 0.0)
 
+    def read(self) -> ControlState:
+        return self.requested()
+
+    async def synchronize(self, state: ControlState) -> None:
+        # Local state needs no acknowledgement; other Controls may enforce work barriers.
+        return
+
     def write(self, owner: Owner, reason: str = "") -> ControlState:
         state = ControlState(owner, time.time(), reason)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         tmp = self.path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(asdict(state)))
+        tmp.write_text(json.dumps({"owner": owner, "since": state.since, "reason": reason}))
         tmp.replace(self.path)
         return state
 
@@ -82,11 +100,11 @@ class ControlFile:
             yield self.read()
 
     async def wait_for_agent(self) -> float | None:
-        """Block while the user has control; return how long they had it, or None if they never did."""
+        """Wait for acknowledged agent ownership; return time since the blocked revision, or None if already ready."""
         state = self.read()
-        if state.owner == "agent":
+        if state.allows_input("agent"):
             return None
-        while self.read().owner != "agent":
+        while not self.read().allows_input("agent"):
             await asyncio.sleep(POLL_SECONDS)
         return time.time() - state.since
 
@@ -103,7 +121,7 @@ class Approval:
     screenshot: str | None  # the screen it decided from, its target marked: a file in the run's folder
     since: float
     decision: Decision | None = None
-    note: str = ""  # what the user said with a rejection
+    note: str = ""
     by: str = ""  # where they answered: "web" or "cli"
 
 
@@ -170,10 +188,27 @@ class ApprovalFile:
 async def hand_over(control: Control, computer: Computer, owner: Owner, reason: str) -> ControlState:
     """Give the desktop to owner once the action in flight is sent, then let go of every key and button still down:
     after a takeover the agent sends nothing more, and neither side keeps what the other held down."""
-    async with control.locked():
+    async with control.locked() as current:
+        if owner == "user" and current.owner == "user":
+            return current
+        if owner == "agent":
+            try:
+                status = await computer.status()
+                if status.connected:
+                    await computer.screenshot()
+            except ComputerError as error:
+                raise ControlSyncError("Observe the desktop successfully before returning desktop control.") from error
+            if not status.connected:
+                raise ControlSyncError("Reconnect the desktop before returning desktop control.")
         state = control.write(owner, reason)
         await let_go(computer)
-    return state
+        if owner == "agent":
+            try:
+                await control.synchronize(state)
+            except (Exception, asyncio.CancelledError):
+                control.write("user", "desktop control synchronization interrupted")
+                raise
+    return control.read()
 
 
 async def release_input(control: Control, computer: Computer, owner: Owner) -> None:
@@ -185,7 +220,6 @@ async def release_input(control: Control, computer: Computer, owner: Owner) -> N
 
 
 async def let_go(computer: Computer) -> None:
-    """Let go of every key and button still down."""
     try:
         await computer.release_all()
     except ComputerError as error:  # e.g. the display is gone: nothing is held there, and control changes anyway
@@ -241,7 +275,6 @@ class RunLock:
         self.release()
 
     def name(self, run: str) -> None:
-        """Say which run has the desktop, once its log exists."""
         self._write({"run": run, "pid": os.getpid()})
 
     def _write(self, holder: dict) -> None:

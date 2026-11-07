@@ -6,18 +6,20 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 
 import computer_use.agent.main_agent as main_agent
+import computer_use.agent.session as session
 import computer_use.agent.title as title
 from computer_use.agent.models import build_chat_model
 from computer_use.config import Choice, RunChoices, Settings
 from computer_use.agent.history import has_title
+from computer_use.storage.files import FileRuns
 from conftest import run_turn
-from conftest import read_events, run_dir
-from conftest import SCRIPTED_TITLE, ScriptedModel, run_folder, use_script
+from conftest import events_of, first_run
+from conftest import SCRIPTED_TITLE, ScriptedModel, use_script
 
 
 @pytest.fixture(autouse=True)
 async def titles(settings, store, monkeypatch):
-    jobs = title.Titles(settings, store)
+    jobs = title.Titles(settings)
     run = main_agent.run_turn
 
     async def run_with_titles(*args, **kwargs):
@@ -148,7 +150,7 @@ async def test_model_setup_failure_does_not_fail_the_conversation(settings, comp
 
     monkeypatch.setattr(title, "build_chat_model", fail)
     result = await run_turn(settings, "Hi", max_steps=10, computer=computer)
-    events = read_events(run_dir(settings, result.run))
+    events = events_of(settings, result.run)
     assert events[-1]["type"] == "end" and events[-1]["stop_reason"] == "replied"
     assert not await has_title(store, result.run)
 
@@ -156,12 +158,12 @@ async def test_model_setup_failure_does_not_fail_the_conversation(settings, comp
 async def test_a_title_that_cannot_start_does_not_fail_the_run(settings, store, computer, monkeypatch, capsys):
     use_script(monkeypatch, [], main=[AIMessage("Hello.")])
 
-    async def unreadable(*_):
+    async def unreadable(*_, **__):
         raise ValueError("unreadable log")
 
-    monkeypatch.setattr(store, "events", unreadable)
+    monkeypatch.setattr(FileRuns, "events", unreadable)  # the run's own view of the store, which the title job reads
     result = await run_turn(settings, "Hi", max_steps=10, computer=computer)
-    assert read_events(run_dir(settings, result.run))[-1]["stop_reason"] == "replied"
+    assert events_of(settings, result.run)[-1]["stop_reason"] == "replied"
     assert "no title: ValueError: unreadable log" in capsys.readouterr().out
 
 
@@ -176,7 +178,7 @@ async def test_a_new_conversation_is_named_once_in_its_first_run(settings, compu
         choices=RunChoices(agents={"computer": {"model": "follow"}, "main": {"model": "openai:gpt-6.1-sol"}}),
     )
     await titles.close(cancel=False)
-    events = read_events(run_dir(settings, first.run))
+    events = events_of(settings, first.run)
     (named,) = [event for event in events if event["type"] == "title"]
     assert named["text"] == SCRIPTED_TITLE and named["usage"]["input"] >= 0 and named["seconds"] >= 0
     assert built == [title.title_model(settings)] and built[0].model == "openai:independent-title-model"
@@ -184,7 +186,7 @@ async def test_a_new_conversation_is_named_once_in_its_first_run(settings, compu
     assert await has_title(store, first.run)
 
     second = await run_turn(settings, "Sure?", max_steps=10, computer=computer, thread=first.run)
-    assert [event["type"] for event in read_events(run_dir(settings, second.run)) if event["type"] == "title"] == []
+    assert [event["type"] for event in events_of(settings, second.run) if event["type"] == "title"] == []
 
 
 async def test_a_conversation_left_unnamed_is_named_at_its_next_run(settings, computer, monkeypatch, titles, store):
@@ -209,7 +211,7 @@ async def test_a_conversation_left_unnamed_is_named_at_its_next_run(settings, co
     # Named from the conversation's first message, not the one that started this run.
     await titles.close(cancel=False)
     assert calls == ["What is 128 x 37?", "What is 128 x 37?"]
-    (event,) = [event for event in read_events(run_dir(settings, second.run)) if event["type"] == "title"]
+    (event,) = [event for event in events_of(settings, second.run) if event["type"] == "title"]
     assert event["text"] == "Multiplying numbers"
 
 
@@ -228,18 +230,18 @@ async def test_a_title_outlives_its_run_and_is_not_duplicated_by_the_next(settin
     first = await asyncio.wait_for(run_turn(settings, "128 x 37?", max_steps=10, computer=computer), 1)
     await asked.wait()
     assert first.run in titles.tasks and not await has_title(store, first.run)
-    assert read_events(run_dir(settings, first.run))[-1]["type"] == "end"
+    assert events_of(settings, first.run)[-1]["type"] == "end"
     second = await run_turn(settings, "Sure?", max_steps=10, computer=computer, thread=first.run)
     assert calls == ["128 x 37?"] and not await has_title(store, first.run)
-    before = read_events(run_dir(settings, first.run))[-1]
+    before = events_of(settings, first.run)[-1]
     revision = await store.revision()
     gate.set()
     await titles.close(cancel=False)
-    events = read_events(run_dir(settings, first.run))
+    events = events_of(settings, first.run)
     assert events[-1]["type"] == "title" and events[-1]["text"] == "Multiplying numbers"
     assert events[-1]["model"] == title.MODEL and events[-1]["cost"]["output"] > 0
     assert next(event for event in events if event["type"] == "end") == before
-    assert not any(event["type"] == "title" for event in read_events(run_dir(settings, second.run)))
+    assert not any(event["type"] == "title" for event in events_of(settings, second.run))
     assert not titles.tasks and await store.revision() > revision
 
 
@@ -257,7 +259,7 @@ async def test_stopping_or_failing_the_agent_does_not_cancel_its_title(settings,
         raise RuntimeError("agent failed")
 
     monkeypatch.setattr(title, "generate_title", slow)
-    monkeypatch.setattr(main_agent, "speak", fail)
+    monkeypatch.setattr(session, "speak", fail)
     use_script(monkeypatch, [], main=[])
     task = asyncio.create_task(run_turn(settings, "Hi", max_steps=10, computer=computer))
     await asked.wait()
@@ -267,11 +269,11 @@ async def test_stopping_or_failing_the_agent_does_not_cancel_its_title(settings,
         fail_agent.set()
     with pytest.raises(asyncio.CancelledError if outcome == "stopped" else RuntimeError):
         await task
-    folder = run_folder(settings)
-    assert folder.name in titles.tasks and read_events(folder)[-1]["type"] == "end"
+    run = first_run(settings)
+    assert run in titles.tasks and events_of(settings, run)[-1]["type"] == "end"
     finish_title.set()
     await titles.close(cancel=False)
-    assert read_events(folder)[-1]["text"] == "Independent title"
+    assert events_of(settings, run)[-1]["text"] == "Independent title"
 
 
 async def test_runtime_shutdown_cancels_pending_titles(settings, computer, monkeypatch, titles, store):

@@ -1,7 +1,6 @@
-import { useSyncExternalStore } from "react"
-
 import type { Approvals, Choice, Status } from "@/lib/api"
 import { EFFORTS } from "@/lib/efforts"
+import { store } from "@/lib/store"
 
 // Browser-owned model, effort, approval and memory choices, sent with each message.
 // Reset restores status.defaults. Model changes apply next run; approval changes
@@ -46,11 +45,9 @@ function load(): Choices {
   return { agents, approvals, memory }
 }
 
-let state = load()
-const listeners = new Set<() => void>()
+const state = store(load())
 
 function save(next: Choices) {
-  state = next
   try {
     if (Object.keys(next.agents).length)
       localStorage.setItem(AGENTS_KEY, JSON.stringify(next.agents))
@@ -66,33 +63,20 @@ function save(next: Choices) {
   } catch {
     // Not stored; the choice still holds until the page reloads.
   }
-  for (const listener of listeners) listener()
+  state.set(next)
 }
 
 // A choice made in another tab applies here too.
 addEventListener("storage", (event) => {
   if (event.key === null || KEYS.includes(event.key)) {
-    state = load()
-    for (const listener of listeners) listener()
+    state.set(load())
   }
 })
 
 /** What is chosen now, as a message sends it. */
-export function currentChoices(): Choices {
-  return state
-}
+export const currentChoices = state.get
 
-export function useChoices(): Choices {
-  return useSyncExternalStore(
-    (listener) => {
-      listeners.add(listener)
-      return () => {
-        listeners.delete(listener)
-      }
-    },
-    () => state
-  )
-}
+export const useChoices = state.use
 
 /** The highest of a model's efforts at or below this one; its lowest when none is (the runtime's models.clamp). */
 function clamp(effort: string, levels: string[]): string {
@@ -132,25 +116,25 @@ export function chooseModel(
   agent: string,
   change: Partial<Choice>
 ) {
-  const main = resolve(status, MAIN, state.agents)
-  const own = { ...state.agents[agent] }
+  const main = resolve(status, MAIN, state.get().agents)
+  const own = { ...state.get().agents[agent] }
   for (const key of ["model", "effort"] as const) {
     const value = change[key]
     if (value === undefined) continue
     own[key] = agent !== MAIN && value === main[key] ? FOLLOW : value
   }
-  save({ ...state, agents: { ...state.agents, [agent]: own } })
+  save({ ...state.get(), agents: { ...state.get().agents, [agent]: own } })
 }
 
 /** Every agent's model and effort as the runtime starts them. */
 export function resetModels() {
-  save({ ...state, agents: {} })
+  save({ ...state.get(), agents: {} })
 }
 
 export function setApprovals(approvals: Approvals) {
-  save({ ...state, approvals })
+  save({ ...state.get(), approvals })
 }
 
 export function setMemory(change: Partial<MemoryChoice>) {
-  save({ ...state, memory: { ...state.memory, ...change } })
+  save({ ...state.get(), memory: { ...state.get().memory, ...change } })
 }

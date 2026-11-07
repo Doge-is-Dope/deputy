@@ -1,13 +1,7 @@
-import { useRef, useState } from "react"
+import { useState } from "react"
 import { Radio } from "@base-ui/react/radio"
 import { RadioGroup } from "@base-ui/react/radio-group"
-import { toast } from "sonner"
 
-import { ImportIcon } from "@/components/icons"
-import { CopyButton } from "@/components/copy-button"
-import { Notice } from "@/components/notice"
-import { Button } from "@/components/ui/button"
-import { ActionDialog } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -22,19 +16,15 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import {
-  importTheme,
   presetsFor,
-  readTheme,
   seedStyle,
   setColor,
   setMode,
   setTheme,
-  shareTheme,
   useAppearance,
   type ColorRole,
   type Mode,
   type Seed,
-  type ThemeChoice,
   type Variant,
 } from "@/lib/appearance"
 import { PRESETS } from "@/lib/themes"
@@ -114,7 +104,7 @@ function ModePicture({
   )
 }
 
-/** A theme by name, beside an "Aa" in its accent on its background, as the ChatGPT desktop app shows its themes. */
+/** A theme by name, beside an "Aa" in its accent on its background. */
 function ThemeName({
   id,
   seed,
@@ -141,8 +131,8 @@ function ThemeName({
   )
 }
 
-/** Light or dark, then the theme of the mode the page is in, as the ChatGPT desktop app sets its own: a theme from
-    the list, its three colors one by one, and the theme passed in and out as a line of text. */
+/** Light or dark, then the theme of the mode the page is in: a theme from the list, and its three colors one by
+    one. */
 export function Appearance() {
   const t = useT()
   const { mode, resolved, themes } = useAppearance()
@@ -187,36 +177,32 @@ export function Appearance() {
       </Card>
       <Card>
         <Row label={t.settings.theme}>
-          <div className="flex items-center gap-1">
-            <ImportTheme variant={resolved} choice={choice} />
-            <CopyButton text={shareTheme(resolved, choice)} />
-            <Select
-              value={choice.id}
-              onValueChange={(id) => {
-                const preset = presets.find((each) => each.id === id)
-                if (preset) setTheme(resolved, preset)
-              }}
-            >
-              <SelectTrigger aria-label={t.settings.theme} className="ml-1">
-                <SelectValue>
-                  {(id: string) => (
-                    <ThemeName id={id} seed={choice} mode={resolved} />
-                  )}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                {presets.map((preset) => (
-                  <SelectItem key={preset.id} value={preset.id}>
-                    <ThemeName
-                      id={preset.id}
-                      seed={preset[resolved]!}
-                      mode={resolved}
-                    />
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
+          <Select
+            value={choice.id}
+            onValueChange={(id) => {
+              const preset = presets.find((each) => each.id === id)
+              if (preset) setTheme(resolved, preset)
+            }}
+          >
+            <SelectTrigger aria-label={t.settings.theme}>
+              <SelectValue>
+                {(id: string) => (
+                  <ThemeName id={id} seed={choice} mode={resolved} />
+                )}
+              </SelectValue>
+            </SelectTrigger>
+            <SelectContent>
+              {presets.map((preset) => (
+                <SelectItem key={preset.id} value={preset.id}>
+                  <ThemeName
+                    id={preset.id}
+                    seed={preset[resolved]!}
+                    mode={resolved}
+                  />
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
         </Row>
         {colors.map(({ role, label }) => (
           <Row key={role} label={label}>
@@ -232,7 +218,7 @@ export function Appearance() {
   )
 }
 
-/** A color as a swatch and its hex code, as the ChatGPT desktop app's: the swatch opens the system's color picker, and
+/** A color as a swatch and its hex code: the swatch opens the system's color picker, and
     the code can be typed, taking effect once it is six digits. */
 function ColorField({
   label,
@@ -277,83 +263,5 @@ function ColorField({
         className="h-9 pl-9 text-foreground tabular-nums"
       />
     </div>
-  )
-}
-
-/** Take a theme from a line of text, as the ChatGPT desktop app does: pasted into a field, taken once it reads as one.
-    It goes to the mode it is for, which the notice names. */
-function ImportTheme({
-  variant,
-  choice,
-}: {
-  variant: Variant
-  choice: ThemeChoice
-}) {
-  const t = useT()
-  const [open, setOpen] = useState(false)
-  const [text, setText] = useState("")
-  const field = useRef<HTMLInputElement>(null)
-  const valid = readTheme(text) !== null
-  const take = () => {
-    const shared = importTheme(text)
-    if (!shared) return
-    setOpen(false)
-    setText("")
-    toast.custom(
-      (id) => (
-        <Notice
-          icon={<ImportIcon aria-hidden className="size-5 shrink-0" />}
-          text={t.settings.themeImported(t.settings.modes[shared.variant])}
-          onDismiss={() => toast.dismiss(id)}
-        />
-      ),
-      { className: "w-full" }
-    )
-  }
-  return (
-    <>
-      <Tooltip>
-        <TooltipTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-xs"
-              aria-label={t.settings.importTheme}
-              className="text-muted-foreground"
-              onClick={() => setOpen(true)}
-            />
-          }
-        >
-          <ImportIcon className="size-4" />
-        </TooltipTrigger>
-        <TooltipContent side="bottom">{t.settings.importTheme}</TooltipContent>
-      </Tooltip>
-      <ActionDialog
-        open={open}
-        onOpenChange={(next) => {
-          if (!next) setText("")
-          setOpen(next)
-        }}
-        title={t.settings.importTheme}
-        action={t.settings.importAction}
-        onAction={take}
-        disabled={!valid}
-        initialFocus={field}
-        className="sm:max-w-md"
-      >
-        <Input
-          ref={field}
-          value={text}
-          placeholder={shareTheme(variant, choice)}
-          aria-label={t.settings.themeText}
-          spellCheck={false}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter") take()
-          }}
-          className="h-9.5 font-mono md:text-xs"
-        />
-      </ActionDialog>
-    </>
   )
 }

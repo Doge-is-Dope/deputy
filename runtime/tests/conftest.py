@@ -1,17 +1,17 @@
 import asyncio
-import copy
 import io
 import itertools
 import json
+import os
 import socket
-import time
-from datetime import datetime
+import uuid
 from pathlib import Path
-from functools import cache
+from functools import cache, partial
+from urllib.parse import urlsplit
 
 import pytest
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, messages_from_dict
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.runnables import RunnableLambda
 from PIL import Image, ImageDraw, ImageFont
@@ -23,20 +23,36 @@ import computer_use.agent.title as title
 import computer_use.desktop.control
 import computer_use.desktop.executor
 import computer_use.desktop.screen
+from computer_use.runner import Runner
 from computer_use.agent.background import Background
-from computer_use.agent.tools import desktop_tools
+from computer_use.tools.desktop import desktop_tools
 from computer_use.desktop.actions import CONFIRMABLE
 from computer_use.agent.trajectory import Trajectory
-from computer_use.agent.history import in_call_order, main_messages, restore
+from computer_use.adapters import build_control
+from computer_use.agent.history import in_call_order, with_images
 from computer_use.computers import ComputerError, Frame, Status
-from computer_use.storage import LISTED, LOCAL_USER, MAIN, MAX_HITS, Hit, said, snippet, summarize, supported
-from computer_use.storage.files import FileRunStore
+from computer_use.storage import LOCAL_USER, MAIN, TURN, Runs
+from computer_use.files.local import LocalFileStore
+from computer_use.storage.files import FileRunStore, FileRuns
 from computer_use.sandbox import CodeRunnerError, RunOutput
 from computer_use.config import Settings
 from computer_use.desktop.control import ControlFile
 from computer_use.desktop.executor import Executor
 
+pytest_plugins = ["recording"]  # CU_RECORD_INPUTS: what the scripted models were asked, per test
+
 OBSERVE_CALL = {"type": "tool_call", "name": "screenshot", "args": {}, "id": "call_observe"}
+
+
+async def restore(store: Runs, run: str, record: dict) -> BaseMessage:
+    """A recorded message with its images read back from their files."""
+    return await with_images(store, run, messages_from_dict([record])[0])
+
+
+async def main_messages(store: Runs, run: str) -> list[BaseMessage]:
+    """The main agent's recorded messages in one run, in their original order."""
+    return [await restore(store, run, event["message"]) for event in await store.events(run)
+            if event.get("agent") == MAIN and "message" in event]
 
 
 @cache
@@ -52,8 +68,8 @@ def fixture_png(code: str) -> bytes:
 @pytest.fixture(autouse=True)
 def no_network(request, monkeypatch):
     """Tests run as in CI, which may be a cloud sandbox: opening an IPv4 or IPv6 socket fails, loopback included.
-    Tests marked `model` call a real model API and keep the network."""
-    if request.node.get_closest_marker("model"):
+    Tests marked `model` call a real model API, and those marked `mongo` a database server: they keep the network."""
+    if request.node.get_closest_marker("model") or request.node.get_closest_marker("mongo"):
         return
     real = socket.socket.__init__
 
@@ -67,6 +83,20 @@ def no_network(request, monkeypatch):
 
     monkeypatch.setattr(socket.socket, "__init__", guarded)
     monkeypatch.setattr(socket, "getaddrinfo", offline)
+
+
+@pytest.fixture
+def mongo_url():
+    """A fresh database on CU_TEST_MONGO_URL (a replica set), dropped after the test."""
+    from pymongo import MongoClient
+
+    server = os.environ.get("CU_TEST_MONGO_URL")
+    if not server:
+        pytest.fail("the mongo tests need CU_TEST_MONGO_URL, e.g. mongodb://localhost:27017/?replicaSet=rs0")
+    name = f"test_{uuid.uuid4().hex[:12]}"
+    yield urlsplit(server)._replace(path=f"/{name}").geturl()
+    with MongoClient(server) as client:
+        client.drop_database(name)
 
 
 SCRIPTED_TITLE = "Scripted title"
@@ -85,6 +115,7 @@ def fast_polls(monkeypatch):
     monkeypatch.setattr(computer_use.desktop.control, "POLL_SECONDS", 0.01)
     monkeypatch.setattr(computer_use.desktop.control, "APPROVAL_POLL_SECONDS", 0.01)
     monkeypatch.setattr(computer_use.desktop.executor, "RECONNECT_POLL_SECONDS", 0.01)
+    monkeypatch.setattr(computer_use.desktop.executor, "RECONNECT_SIGN_IN_SECONDS", 0.01)
     monkeypatch.setattr(computer_use.desktop.screen, "SETTLE_POLL_SECONDS", 0.01)
 
 
@@ -93,110 +124,111 @@ LAST_SETTINGS: list = [None]
 
 
 @pytest.fixture(autouse=True)
+def no_settle(monkeypatch):
+    """Input is answered at once: a test of the wait after an action sets the waits it needs."""
+    monkeypatch.setattr(computer_use.desktop.executor, "SETTLE_SECONDS", 0)
+    monkeypatch.setattr(computer_use.desktop.screen, "SETTLE_QUIET_SECONDS", 0)
+    monkeypatch.setattr(computer_use.desktop.screen, "SETTLE_MAX_SECONDS", 0)
+
+
+@pytest.fixture(autouse=True)
 def remember_settings(request):
     if "settings" in request.fixturenames:
         LAST_SETTINGS[0] = request.getfixturevalue("settings")
 
 
+# Each store backend a contract test runs on: files, then each database (marked, so left out of plain test runs).
+DATABASES = ["", pytest.param("mongo", marks=pytest.mark.mongo)]
+
+
+@pytest.fixture(params=DATABASES)
+def store_settings(request, tmp_path) -> Settings:
+    """Settings that pick each store backend in turn, for the `build_*` factories."""
+    url = request.getfixturevalue("mongo_url") if request.param == "mongo" else ""
+    return Settings(_env_file=None, data_dir=tmp_path, database_url=url)
+
+
+def file_runs(data_dir: Path) -> FileRunStore:
+    """The files store under `data_dir`, with its files beside the records, as the runtime makes it."""
+    return FileRunStore(data_dir, LocalFileStore(data_dir))
+
+
+def runs_dir(data_dir: Path) -> Path:
+    """The local user's runs folder in a files store."""
+    return data_dir / "users" / LOCAL_USER / "runs"
+
+
 @pytest.fixture
-def store(settings) -> FileRunStore:
-    return FileRunStore(settings.data_dir)
+def store(settings) -> FileRuns:
+    return file_runs(settings.data_dir).of(LOCAL_USER)
+
+
+def runs_of(data_dir: Path, run: str) -> FileRuns:
+    """The file store as the user whose run this is sees it, whichever user that was."""
+    store = file_runs(data_dir)
+    for folder in (data_dir / "users").glob(f"*/runs/{run}"):
+        return store.of(folder.parent.parent.name)
+    return store.of(LOCAL_USER)
+
+
+async def listed_runs(client, headers=None) -> list[dict]:
+    """Every run the server lists for the asker, newest first: a page of conversations at a time, then each one's
+    runs."""
+    runs, before = [], None
+    while True:
+        params = {"limit": "100", **({"before": before} if before else {})}
+        page = (await client.get("/api/conversations", params=params, headers=headers)).json()
+        for each in page["items"]:
+            runs += (await client.get(f"/api/conversations/{each['id']}/runs", headers=headers)).json()
+        if page["next"] is None:
+            return sorted(runs, key=lambda run: run["started"], reverse=True)
+        before = page["next"]
+
+
+async def listed_sessions(client, headers=None) -> list[dict]:
+    """The runs the server lists for the asker that began a session, each with a user's message, newest first."""
+    return [run for run in await listed_runs(client, headers) if run["id"] == run["session"]]
+
+
+def runner_of(settings: Settings, computer, control) -> Runner:
+    """A runner of the server's kind, on these."""
+    start_turn = partial(main_agent.run_turn, settings, computer=computer, control=control)
+    return Runner(file_runs(settings.data_dir), start_turn, title.Titles(settings))
 
 
 async def run_turn(settings: Settings, message: str, **kwargs) -> main_agent.TurnResult:
-    return await main_agent.run_turn(settings, message, store=FileRunStore(settings.data_dir), **kwargs)
+    """A turn as `user` (the local user unless given), through the store as they see it."""
+    store = file_runs(settings.data_dir).of(kwargs.pop("user", LOCAL_USER))
+    kwargs.setdefault("control", build_control(settings))
+    return await main_agent.run_turn(settings, message, store=store, **kwargs)
 
 
-class MemoryRunStore:
+class MemoryFileStore:
     def __init__(self):
-        self.listed: dict[str, list[dict]] = {}
-        self.deleted: dict[str, list[dict]] = {}
-        self.files: dict[str, dict[str, bytes]] = {}
-        self._revision = 0
-        self._created = 0
+        self.kept: dict[str, bytes] = {}
 
-    async def create(self) -> str:
-        self._created += 1
-        run = f"{datetime.now():%Y%m%d-%H%M%S}-{self._created:03d}"
-        self.listed[run] = []
-        self.files[run] = {}
-        self._revision += 1
-        return run
+    async def put(self, key: str, data: bytes) -> None:
+        self.kept[key] = data
 
-    def _events(self, run: str) -> list[dict]:
-        return self.listed.get(run) if run in self.listed else self.deleted.get(run, [])
-
-    def append(self, run: str, event: dict) -> tuple[int, dict]:
-        events = self._events(run)
-        event = {"time": time.time(), **event}
-        events.append(event)
-        if event["type"] in LISTED:
-            self._revision += 1
-        return len(events) - 1, event
-
-    def put_file(self, run: str, name: str, data: bytes) -> None:
-        self.files.setdefault(run, {})[name] = data
-
-    def has_file(self, run: str, name: str) -> bool:
-        return name in self.files.get(run, {})
-
-    async def events(self, run: str, after: int = -1) -> list[dict]:
-        return copy.deepcopy(self._events(run)[after + 1:])
-
-    def count(self, run: str) -> int:
-        return len(self._events(run))
-
-    async def get_file(self, run: str, name: str) -> bytes:
+    async def get(self, key: str) -> bytes:
         try:
-            return self.files[run][name]
+            return self.kept[key]
         except KeyError:
-            raise FileNotFoundError(name) from None
+            raise FileNotFoundError(key) from None
 
-    async def summaries(self):
-        items = [summarize(run, events) for run, events in self.listed.items() if supported(events)]
-        return sorted(items, key=lambda item: item.started, reverse=True)
+    async def delete_prefix(self, prefix: str) -> None:
+        for key in [each for each in self.kept if each.startswith(prefix)]:
+            del self.kept[key]
 
-    async def conversation(self, thread: str, deleted: bool = False, user: str | None = None) -> list[str]:
-        place = self.deleted if deleted else self.listed
-        return sorted(
-            run for run, events in place.items()
-            if supported(events) and events[0]["thread"] == thread
-            and user in (None, events[0].get("user", LOCAL_USER))
-        )
 
-    async def delete(self, thread: str) -> list[str]:
-        runs = await self.conversation(thread)
-        for run in runs:
-            self.deleted[run] = self.listed.pop(run)
-        self._revision += bool(runs)
-        return runs
-
-    async def restore(self, thread: str) -> list[str]:
-        runs = await self.conversation(thread, deleted=True)
-        for run in runs:
-            self.listed[run] = self.deleted.pop(run)
-        self._revision += bool(runs)
-        return runs
-
-    async def search(self, query: str, user: str, limit: int = MAX_HITS) -> list[Hit]:
-        hits: list[Hit] = []
-        for summary in await self.summaries():
-            if len(hits) < limit and summary.user == user and all(hit.thread != summary.thread for hit in hits):
-                if found := snippet(said(self.listed[summary.id]), query):
-                    hits.append(Hit(summary.thread, found))
-        return hits
-
-    async def revision(self) -> int:
-        return self._revision
+def settings_for(data_dir: Path, database_url: str = "") -> Settings:
+    # Ignore any local .env so tests never depend on the developer's machine; no code runner unless a test gives one.
+    return Settings(_env_file=None, data_dir=data_dir, database_url=database_url, code_runner_url=None)
 
 
 @pytest.fixture
 def settings(tmp_path) -> Settings:
-    # Ignore any local .env so tests never depend on the developer's machine; no code runner unless a test gives one.
-    return Settings(
-        _env_file=None, data_dir=tmp_path, code_runner_url=None, settle_seconds=0, settle_quiet_seconds=0,
-        settle_max_seconds=0,
-    )
+    return settings_for(tmp_path)
 
 
 class FakeComputer:
@@ -205,9 +237,13 @@ class FakeComputer:
     def __init__(self):
         self.calls: list[tuple] = []
         self.releases = 0  # times every key and button was let go of
+        self.closed = False
         self.fail_next: str | None = None
         self.connected = True
         self.screen = lambda: fixture_png(self.CODE)
+
+    async def close(self):
+        self.closed = True
 
     async def status(self):
         return Status(self.connected, f"Test session: {'connected' if self.connected else 'DISCONNECTED'}")
@@ -274,11 +310,11 @@ class ScriptedModel(GenericFakeChatModel):
     calls."""
 
     received: list = []  # the messages of each call
-    bindings: list = []  # bind_tools' keyword arguments, per binding
+    bindings: list = []  # bind_tools' tools and keyword arguments, per binding
     disable_streaming: bool = True
 
     def bind_tools(self, tools, **kwargs):
-        self.bindings.append(kwargs)
+        self.bindings.append({"tools": tools, **kwargs})
         return self
 
     def with_structured_output(self, schema, **kwargs):
@@ -330,7 +366,7 @@ def tool_call(call_id, name, **args):
 
 
 def delegate(task="Do it.", call_id="m1") -> AIMessage:
-    return AIMessage(content="", tool_calls=[tool_call(call_id, "computer_use", title="Task", task=task)])
+    return AIMessage(content="", tool_calls=[tool_call(call_id, "start_task", agent="computer", title="Task", task=task)])
 
 
 def use_script(monkeypatch, replies, main=None) -> tuple[ScriptedModel, ScriptedModel]:
@@ -384,24 +420,90 @@ def read_events(folder: Path) -> list[dict]:
 
 
 def run_dir(settings, run: str) -> Path:
-    return settings.data_dir / "runs" / run
+    return runs_dir(settings.data_dir) / run
 
 
-def new_log(data_dir: Path) -> Trajectory:
-    """A log of a new run in a file store, for tests outside an event loop."""
-    store = FileRunStore(data_dir)
-    return Trajectory(store, asyncio.run(store.create()))
+def session_folders(settings, session: str) -> list[Path]:
+    """The folders of the logs of the session `session` began: its turns' and its tasks'."""
+    folders = []
+    for folder in sorted(runs_dir(settings.data_dir).iterdir()):
+        events = read_events(folder)
+        if events and events[0]["type"] == "start" and events[0].get("session") == session:
+            folders.append(folder)
+    return folders
+
+
+def events_of(settings, run: str) -> list[dict]:
+    """Everything written from the message that began `run` until the conversation was quiet again: the main
+    agent's turns' logs and its tasks', merged in the order written."""
+    logged = [(event["time"], order, n, event) for order, folder in enumerate(session_folders(settings, run))
+              for n, event in enumerate(read_events(folder))]
+    return [event for *_, event in sorted(logged, key=lambda each: each[:3])]
+
+
+def task_states(settings, run: str) -> list[tuple[str, str]]:
+    """Each task of the session `run` began, in time order: (id, "started") as its turn handed it over, then (id, how
+    its own log ended: "ended", "stopped" or "error")."""
+    states = []
+    for folder in session_folders(settings, run):
+        events = read_events(folder)
+        if events[0]["kind"] == "task":
+            states += [(e["time"], events[0]["id"], e["stop_reason"]) for e in events if e["type"] == "end"]
+        else:
+            states += [(e["time"], e["id"], e["state"]) for e in events if e["type"] == "task"]
+    return [(id, state) for _, id, state in sorted(states)]
+
+
+def task_folder(settings, run: str, id: str) -> Path:
+    """The folder of the log of task `id` of the session `run` began."""
+    return next(folder for folder in session_folders(settings, run)
+                if read_events(folder)[0].get("kind") == "task" and read_events(folder)[0]["id"] == id)
+
+
+def run_file(settings, run: str, name: str) -> Path:
+    """A file written from the message that began `run` on, such as a screenshot an event names."""
+    return next((folder / name for folder in session_folders(settings, run) if (folder / name).exists()),
+                run_dir(settings, run) / name)
+
+
+def files_of(settings, run: str) -> set[str]:
+    """The names of the files written from the message that began `run` on."""
+    return {path.name for folder in session_folders(settings, run) for path in folder.iterdir()
+            if path.name != "steps.jsonl"}
+
+
+def first_run(settings) -> str:
+    """The run that began the only conversation there is: its thread."""
+    return min(path.name for path in runs_dir(settings.data_dir).iterdir())
+
+
+def crash_point(settings):
+    """How the records are now; calling what this returns puts them back, as a runtime that died here leaves them:
+    with nothing a stop writes."""
+    kept = {path: path.read_bytes() for path in runs_dir(settings.data_dir).glob("*/steps.jsonl")}
+
+    def died() -> None:
+        for path, data in kept.items():
+            path.write_bytes(data)
+
+    return died
+
+
+async def new_log(data_dir: Path) -> Trajectory:
+    """A log of a new run in a file store."""
+    store = file_runs(data_dir).of(LOCAL_USER)
+    return Trajectory(store, await store.create())
 
 
 def logged(result, kind: str, agent: str | None = None) -> list[dict]:
     """A finished run's logged events of one type, of the computer-use agent (or of the main agent: agent=MAIN)."""
-    events = read_events(run_dir(LAST_SETTINGS[0], result.run))
+    events = events_of(LAST_SETTINGS[0], result.run)
     return [event for event in events if event["type"] == kind and event.get("agent") == agent]
 
 
 def computer_use_result(result) -> dict:
     """What came back to the main agent from its first desktop task, shaped as an action event: the runtime's message
-    that the task ended (its result's text, its screenshot's file and its artifact), or the computer_use call's own
+    that the task ended (its result's text, its screenshot's file and its artifact), or the start_task call's own
     result when the task never started."""
     for event in logged(result, "input", MAIN):
         data = event["message"]["data"]
@@ -417,11 +519,6 @@ def computer_use_result(result) -> dict:
 
 def handed_back(result) -> dict:
     return computer_use_result(result)["message"]["data"]["artifact"]
-
-
-def run_folder(settings):
-    (folder,) = (settings.data_dir / "runs").iterdir()
-    return folder
 
 
 @pytest.fixture
@@ -459,27 +556,24 @@ def the_log_is_the_whole_record(settings, monkeypatch):
     watched(main_agent, MAIN)
     watched(subagent, None)
     yield
-    asyncio.run(whole_record(FileRunStore(settings.data_dir), finished))
+    asyncio.run(whole_record(settings.data_dir, finished))
 
 
-async def whole_record(store, finished) -> None:
-    for index, (agent, run, messages) in enumerate(finished):
+async def whole_record(data_dir: Path, finished) -> None:
+    for agent, run, messages in finished:
+        store = runs_of(data_dir, run)
         events = await store.events(run)
         if agent == MAIN:
-            # A run's main agent takes turns: each ends with the messages so far, and the last of a run that replied with
-            # all of them (one stopped meanwhile logs that its task stopped too).
-            runs = [each for each in await store.conversation(events[0]["thread"]) if each <= run]
-            recorded = in_call_order(
-                [m for each in runs for m in await main_messages(store, each, await store.events(each))]
-            )
-            later = any(each[:2] == (MAIN, run) for each in finished[index + 1:])
+            # Each turn ends with the main agent's messages so far, which its conversation's turns logged up to it; one
+            # stopped ends with those up to where it stopped.
+            turns = [each.id for each in await store.runs(events[0]["thread"]) if each.kind == TURN and each.id <= run]
+            recorded = in_call_order([m for each in turns for m in await main_messages(store, each)])
             replied = any(e["type"] == "end" and e["stop_reason"] == "replied" for e in events)
-            assert (recorded == messages) if replied and not later else (recorded[:len(messages)] == messages)
+            assert (recorded == messages) if replied else (recorded[:len(messages)] == messages)
         else:
-            # Its task's own: tasks at work at once write between each other's lines.
-            own = [e for e in events if "message" in e and e.get("agent") is None]
-            task = next(e.get("task") for e in own if e["message"]["data"]["id"] == messages[0].id)
-            recorded = [await restore(store, run, e["message"]) for e in own if e.get("task") == task]
+            # A task's agent's messages are its log's, in order.
+            recorded = [await restore(store, run, e["message"]) for e in events
+                        if "message" in e and e.get("agent") is None]
             begin = next(n for n, message in enumerate(recorded) if message.id == messages[0].id)
             assert in_call_order(recorded[begin:begin + len(messages)]) == messages
 
@@ -495,8 +589,8 @@ def control(settings) -> ControlFile:
 
 
 @pytest.fixture
-def executor(computer, control, settings) -> Executor:
-    return Executor(computer, control, settings)
+def executor(computer, control) -> Executor:
+    return Executor(computer, control)
 
 
 @pytest.fixture
@@ -509,11 +603,12 @@ async def observe_conversation(executor):
 
 class FakeCodeRunner:
     """Stands in for the code runner: each command's output comes from `answer`, by default "ok" and exit code 0;
-    records every command and file, and whether it was asked to stop one."""
+    records every command and file, and which task's command it was asked to stop."""
 
     def __init__(self):
         self.connected = True
         self.commands: list[tuple[str, str]] = []  # (thread, script)
+        self.tasks: list[str] = []  # whose each command was
         self.files: dict[str, str] = {}
         self.stops: list[str] = []
         self.answer = lambda script: RunOutput(0, "ok", 0)
@@ -522,10 +617,11 @@ class FakeCodeRunner:
     async def status(self):
         return Status(self.connected, f"Code runner: {'connected' if self.connected else 'not reachable'}")
 
-    async def run(self, thread, script, seconds):
+    async def run(self, thread, task, script, seconds):
         if not self.connected:
             raise CodeRunnerError("ConnectError: gone")
         self.commands.append((thread, script))
+        self.tasks.append(task)
         output = self.answer(script)
         return await output if asyncio.iscoroutine(output) else output
 
@@ -535,8 +631,8 @@ class FakeCodeRunner:
         self.files[path] = content
         return f"Wrote {path} ({len(content.encode())} bytes)."
 
-    async def stop(self, thread):
-        self.stops.append(thread)
+    async def stop(self, task):
+        self.stops.append(task)
 
     async def close(self):
         self.closed = True

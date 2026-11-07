@@ -33,15 +33,9 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import {
-  useChatsOpen,
-  useOpenProject,
-  useOpenRun,
-  useRuns,
-  useStatus,
-} from "@/hooks/use-api"
-import { ChatsPage } from "@/components/chats-page"
-import { Notice } from "@/components/notice"
+import { useConversations, useStatus, useThreadRuns } from "@/hooks/use-api"
+import { useOpenProject, useOpenRun } from "@/hooks/use-route"
+import { Notice, notify } from "@/components/notice"
 import { NEW_TASK, setDraft } from "@/hooks/use-drafts"
 import { useConversationActions } from "@/hooks/use-conversation-actions"
 import { useSeen } from "@/hooks/use-seen"
@@ -49,7 +43,7 @@ import { useIsMobile } from "@/hooks/use-mobile"
 import { useStoredWidth } from "@/hooks/use-stored-width"
 import { ResizeHandle } from "@/components/resize-handle"
 import { runningOf, waitingOf } from "@/lib/api"
-import { conversationsOf, nameOf } from "@/lib/conversations"
+import { conversationOf, nameOf } from "@/lib/conversations"
 import { connectionOf, greeting } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { HandIcon, MonitorIcon, PlanIcon, TrashIcon } from "@/components/icons"
@@ -73,6 +67,8 @@ function Greeting() {
 const LIVE_MIN = 384
 const LIVE_MAX = 640
 const MAIN_MIN = 560
+// How long a deleted conversation's notice offers 還原 before the runtime is asked to erase it.
+const UNDO_MS = 5000
 
 export default function App() {
   const say = useT()
@@ -82,34 +78,49 @@ export default function App() {
     refresh: refreshStatus,
     confirmControl,
   } = useStatus()
-  const { runs, projects, failed: runsFailed, refresh: refreshRuns } = useRuns()
+  // Changes whenever a run starts or ends anywhere, or names its conversation, which the list then shows by its name
+  // in a second or two, not once the run ends; a new list from every poll would not do. Null until the runtime first
+  // answers, so the lists load once, and while it can't be reached: once it can again, a list it couldn't give
+  // meanwhile loads.
+  const listsChanged =
+    offline || !status
+      ? null
+      : `${status.titles_revision}:${status.running.map((each) => each.run).join()}`
+  const {
+    conversations,
+    projects,
+    failed: conversationsFailed,
+    refresh: refreshConversations,
+    lists,
+  } = useConversations(listsChanged)
   // The address names a conversation by its first run, or by any of its runs (an older link).
   const [opened, open] = useOpenRun()
   const project = useOpenProject() // whose home is open: a new conversation begins in it
-  const chatsOpen = useChatsOpen() // the page of every conversation
-  const conversations = useMemo(() => runs && conversationsOf(runs), [runs])
-  const conversation = conversations?.find(
-    (each) => each.id === opened || each.runs.some((run) => run.id === opened)
-  )
-  const thread = conversation?.id ?? opened
-  // A conversation just started may not be in the list yet: its first run is all there is.
-  // Kept while the conversation is the same, as is all the conversation is handed below: a new copy on every keystroke
-  // or poll would draw each of its turns again.
-  const turns = useMemo(
-    () => conversation?.runs.map((run) => run.id) ?? (opened ? [opened] : []),
-    [conversation, opened]
-  )
+  // The open conversation's runs come on their own: the lists hold a page of each, which it may be beyond.
+  const {
+    thread: openedThread,
+    runs: threadRuns,
+    turns: threadTurns,
+    logs: threadLogs,
+    listed,
+  } = useThreadRuns(opened, listsChanged)
+  const thread = openedThread ?? opened
+  // From the lists, or from its own runs when it is beyond the pages they hold (one opened from search).
+  const conversation =
+    conversations?.find((each) => each.id === thread) ??
+    conversationOf(threadTurns ?? []) ??
+    undefined
   // A run that carries on the one before it with the same goal (「從這裡繼續」) does not repeat that goal.
   const continued = useMemo(
     () =>
       new Set(
-        conversation?.runs
-          .filter(
+        threadRuns
+          ?.filter(
             (run, index, all) => index > 0 && run.goal === all[index - 1].goal
           )
           .map((run) => run.id)
       ),
-    [conversation]
+    [threadRuns]
   )
   // Each conversation keeps its own draft, which its composer reads and writes.
   const draftKey = thread ?? NEW_TASK
@@ -154,20 +165,20 @@ export default function App() {
     current,
     takesMessages,
     approval,
-    pending,
+    steering,
+    queued,
     handover,
     asking,
+    started,
     start,
     stop,
     withdraw,
     remove,
-    restore,
     rename,
     move,
     createProject,
     renameProject,
     deleteProject,
-    restoreProject,
     setControl,
     takeOver,
     skip,
@@ -185,17 +196,63 @@ export default function App() {
     },
     refreshStatus,
     confirmControl,
-    refreshRuns,
+    refreshConversations,
   })
+  // A conversation just started may not be read yet: its first run is all there is; a run started here comes in at once,
+  // before the list has it. Kept while the conversation is the same, as is all the conversation is handed below: a new
+  // copy on every keystroke or poll would draw each of its turns again.
+  // The session in progress comes in as soon as the status lists it, as one the runtime started with a message queued
+  // for it: before the list has it, and with the message it began with.
+  const session = thread === null ? null : runningOf(status, { thread })
+  const sessionRun = session?.run ?? null
+  const sessionGoal = session?.goal ?? null
+  const turns = useMemo(() => {
+    const runs = threadRuns?.map((run) => run.id) ?? (opened ? [opened] : [])
+    const late = [
+      ...(started?.thread === thread ? [started.run] : []),
+      ...(sessionRun ? [sessionRun] : []),
+    ]
+    const missing = late.filter(
+      (run, index) => !runs.includes(run) && late.indexOf(run) === index
+    )
+    return missing.length ? [...runs, ...missing] : runs
+  }, [threadRuns, opened, started, thread, sessionRun])
+  // What the user sent each run, drawn before its log comes.
+  const goals = useMemo(
+    () =>
+      new Map([
+        ...(sessionRun && sessionGoal
+          ? [[sessionRun, sessionGoal] as const]
+          : []),
+        ...(threadRuns ?? []).map((run) => [run.id, run.goal] as const),
+        ...(started ? [[started.run, started.goal] as const] : []),
+      ]),
+    [threadRuns, started, sessionRun, sessionGoal]
+  )
+  // The sessions the list says are still going, which may come before the status lists them.
+  const going = useMemo(
+    () =>
+      new Set(
+        (threadRuns ?? [])
+          .filter((run) => run.ended === null)
+          .map((run) => run.id)
+      ),
+    [threadRuns]
+  )
+  // The run started here counts as just started until the list has it and it is no longer in progress; opened again
+  // after, it waits for its log.
+  const fresh =
+    started &&
+    (runningOf(status, { run: started.run }) !== null ||
+      !threadRuns?.some((run) => run.id === started.run))
+      ? started.run
+      : null
   const running = current !== null
   const projectName = (id: string) =>
     projects?.find((each) => each.id === id)?.name
   const userHasControl = status?.control.owner === "user"
   const connection = connectionOf(status, offline)
 
-  // Changes whenever a run starts or ends anywhere, or names its conversation, which the list then shows by its name
-  // in a second or two, not once the run ends; a new list from every poll would not do.
-  const runningKey = `${status?.titles_revision ?? 0}:${status?.running.map((each) => each.run).join() ?? ""}`
   // The live view button lights up in the takeover color while the user has the desktop, which they are to hand back.
   // The agent having it is the usual state, so it is the plain icon; and nobody has a desktop that can't be reached.
   const yours = !!connection?.connected && userHasControl
@@ -212,7 +269,7 @@ export default function App() {
 
   // The open conversation is seen as far as its latest run has gone while the page is in view: as it opens, as that
   // run ends, and as the page comes back to the front. The sidebar marks the others' replies and failures till then.
-  const { isNew, markSeen } = useSeen(runs)
+  const { isNew, markSeen } = useSeen(conversations)
   const seenUntil = conversation
     ? (conversation.latest.ended ?? conversation.latest.started)
     : null
@@ -261,34 +318,30 @@ export default function App() {
     announced.current = waitingId
     // A takeover is done on the desktop, so its button opens that too, as the composer's 「接管」 would; a step to
     // approve is asked in the conversation, or over a live view that covers it.
-    toast.custom(
-      (id) => (
-        <Notice
-          icon={
-            <HandIcon
-              role="img"
-              aria-hidden={false}
-              aria-label={waitingFor}
-              className="size-5 shrink-0 text-warning"
-            />
+    notify(
+      {
+        icon: (
+          <HandIcon
+            role="img"
+            aria-hidden={false}
+            aria-label={waitingFor}
+            className="size-5 shrink-0 text-warning"
+          />
+        ),
+        text: nameIn(waitingThread) ?? waitingFor,
+        action: waitingTakeover
+          ? say.liveView.takeOver
+          : say.home.openConversation,
+        onAction: () => {
+          open(waitingThread)
+          if (waitingTakeover) {
+            if (isMobile) setSheetOpen(true)
+            else setPanelOpen(true)
+            setFocusScreen(true)
           }
-          text={nameIn(waitingThread) ?? waitingFor}
-          action={
-            waitingTakeover ? say.liveView.takeOver : say.home.openConversation
-          }
-          onDismiss={() => toast.dismiss(id)}
-          onAction={() => {
-            toast.dismiss(id)
-            open(waitingThread)
-            if (waitingTakeover) {
-              if (isMobile) setSheetOpen(true)
-              else setPanelOpen(true)
-              setFocusScreen(true)
-            }
-          }}
-        />
-      ),
-      { id: WAITING_NOTICE, className: "w-full" }
+        },
+      },
+      { id: WAITING_NOTICE }
     )
   }, [
     waitingId,
@@ -303,88 +356,98 @@ export default function App() {
   ])
 
   // Notify once when another conversation ends; ignore runs completed before page load.
-  const runningPairs =
-    status?.running.map((each) => `${each.run} ${each.thread}`).join("\n") ??
-    null
+  const inProgress = status?.running
   const ran = useRef<Map<string, string> | null>(null)
   useEffect(() => {
-    if (runningPairs === null) return
-    const now = new Map(
-      runningPairs
-        .split("\n")
-        .filter(Boolean)
-        .map((pair) => pair.split(" ") as [string, string])
-    )
+    if (!inProgress) return
+    const now = new Map(inProgress.map((each) => [each.run, each.thread]))
     const before = ran.current
     ran.current = now
     if (!before) return
     for (const [run, ended] of before) {
       if (now.has(run) || ended === thread) continue
-      toast.custom(
-        (id) => (
-          <Notice
-            // The dot the sidebar marks a new reply with.
-            icon={
-              <span className="flex size-5 shrink-0 items-center justify-center">
-                <span
-                  role="img"
-                  aria-label={say.home.replied}
-                  className="size-2 rounded-full bg-unread"
-                />
-              </span>
-            }
-            text={nameIn(ended) ?? say.home.replied}
-            action={say.home.openConversation}
-            onDismiss={() => toast.dismiss(id)}
-            onAction={() => {
-              toast.dismiss(id)
-              open(ended)
-              // On a phone the live view covers the conversation, where the reply is.
-              setSheetOpen(false)
-            }}
-          />
-        ),
-        { id: `replied-${run}`, className: "w-full" }
+      notify(
+        {
+          // The dot the sidebar marks a new reply with.
+          icon: (
+            <span className="flex size-5 shrink-0 items-center justify-center">
+              <span
+                role="img"
+                aria-label={say.home.replied}
+                className="size-2 rounded-full bg-unread"
+              />
+            </span>
+          ),
+          text: nameIn(ended) ?? say.home.replied,
+          action: say.home.openConversation,
+          onAction: () => {
+            open(ended)
+            // On a phone the live view covers the conversation, where the reply is.
+            setSheetOpen(false)
+          },
+        },
+        { id: `replied-${run}` }
       )
     }
-  }, [runningPairs, thread, say, open, nameIn])
+  }, [inProgress, thread, say, open, nameIn])
 
-  // Deleted at once, into the runtime's trash, and said so with 還原 to bring them back, as Gmail's Undo does: one
-  // conversation, or a project's. Brought back, the conversation that was open opens again. True once every one is.
-  const deleteConversations = async (ids: string[], from: string | null) => {
-    const opened = thread !== null && ids.includes(thread) ? thread : null
-    const done = await Promise.all(ids.map((each) => remove(each)))
-    const deleted = ids.filter((_, index) => done[index])
-    if (deleted.length > 0)
+  // Delay permanent deletion until the undo notice closes. Undo reopens the active conversation.
+  // Project deletion includes conversations not yet loaded in the sidebar. Resolves true on success.
+  const deleteConversations = (ids: string[], projectId: string | null) =>
+    new Promise<boolean>((resolve) => {
+      const previouslyOpen =
+        thread !== null &&
+        (ids.includes(thread) ||
+          (projectId !== null && conversation?.project === projectId))
+          ? thread
+          : null
+      if (previouslyOpen !== null) open(null)
+      let undone = false
+      let settled = false
+      const settle = async () => {
+        if (settled) return
+        settled = true
+        if (undone) return resolve(false)
+        if (projectId !== null)
+          return resolve((await deleteProject(projectId)) !== null)
+        const deleted = await Promise.all(ids.map((each) => remove(each)))
+        resolve(deleted.every(Boolean))
+      }
       toast.custom(
         (id) => (
           <Notice
             icon={<TrashIcon aria-hidden className="size-5 shrink-0" />}
             text={
-              from === null
+              projectId === null
                 ? say.sidebar.deleted
-                : say.sidebar.deletedProject(projectName(from) ?? "")
+                : say.sidebar.deletedProject(projectName(projectId) ?? "")
             }
             action={say.sidebar.restore}
-            onDismiss={() => toast.dismiss(id)}
-            onAction={async () => {
+            // The close button settles immediately; Sonner also reports swipes through onDismiss.
+            onDismiss={() => {
               toast.dismiss(id)
-              // The project first, for them to come back under.
-              if (from !== null) await restoreProject(from)
-              if ((await restore(deleted)) && opened) open(opened)
+              settle()
+            }}
+            onAction={() => {
+              undone = true
+              toast.dismiss(id)
+              if (previouslyOpen !== null) open(previouslyOpen)
+              settle()
             }}
           />
         ),
-        { id: `deleted-${deleted[0]}`, className: "w-full" }
+        {
+          id:
+            projectId === null
+              ? `deleted-${ids[0]}`
+              : `deleted-project-${projectId}`,
+          className: "w-full",
+          duration: UNDO_MS,
+          onAutoClose: settle,
+          onDismiss: settle,
+        }
       )
-    return deleted.length === ids.length
-  }
-
-  // A run that starts or ends anywhere (here, or from the command line), or names its conversation, changes the list;
-  // and once the runtime can be reached again, a list it couldn't give meanwhile loads.
-  useEffect(() => {
-    if (!offline) refreshRuns()
-  }, [runningKey, offline, refreshRuns])
+    })
 
   const takeover = asking && {
     text: say.composer.takeover.ask(asking.reason),
@@ -395,9 +458,9 @@ export default function App() {
   const composer = (
     <Composer
       draftKey={draftKey}
-      onSubmit={(goal) => {
+      onSubmit={(goal, queue) => {
         void preloadMarkdown()
-        return start(goal)
+        return start(goal, queue)
       }}
       // Unread messages continue in the next run.
       onStop={stop}
@@ -408,7 +471,7 @@ export default function App() {
       approval={approval}
       onAnswer={answer}
       takeover={takeover}
-      queued={pending}
+      queued={queued}
       onWithdraw={withdraw}
       // A project's home is headed by its name already, and the home by the greeting's question.
       placeholder={
@@ -450,16 +513,18 @@ export default function App() {
     setPlan({ has: false, docked: plan.docked })
     setPlanOpen(false)
   }
+  // Opened over the conversation, it closes once the run being read has none: scrolling back does not open it again.
+  if (planOpen && !plan.has) setPlanOpen(false)
   const planShown = plan.docked ? !planHidden : planOpen
   const closePlan = useCallback(() => setPlanOpen(false), [])
-  const pendingRun = useMemo(
-    () => (current === null ? null : { run: current, messages: pending }),
-    [current, pending]
+  // The status says at once the run is no longer running, which changes the lists (listsChanged). Replaying an ended
+  // run, as opening one does, ends its stream too, and asks the lists for nothing.
+  const onRunEnded = refreshStatus
+  // What was sent to steer the session in progress, which its turn shows where it goes.
+  const steered = useMemo(
+    () => (current === null ? null : { run: current, messages: steering }),
+    [current, steering]
   )
-  const onRunEnded = useCallback(() => {
-    refreshRuns()
-    refreshStatus()
-  }, [refreshRuns, refreshStatus])
   const openLive = useCallback(() => setLiveOpen(true), [setLiveOpen])
   const showPanel = !isMobile && panelOpen
   // The panel slides in from the window's edge and back out, as the sidebar does. Closed, it stays mounted until it
@@ -489,7 +554,8 @@ export default function App() {
         width={sidebarWidth}
         onWidth={setSidebarWidth}
         conversations={conversations}
-        conversationsFailed={runsFailed}
+        conversationsFailed={conversationsFailed}
+        lists={lists}
         status={status}
         offline={offline}
         openConversation={thread}
@@ -620,29 +686,26 @@ export default function App() {
                 key={thread}
                 thread={thread}
                 runs={turns}
+                logs={threadLogs}
+                goals={goals}
+                going={going}
+                started={fresh}
                 continued={continued}
-                listed={runs !== null || runsFailed}
+                listed={listed}
                 status={status}
                 asking={asking?.run ?? null}
-                pending={pendingRun}
+                steering={steered}
                 offline={offline}
                 composer={composer}
                 onEnded={onRunEnded}
-                onTitled={refreshRuns}
                 onOpenLive={openLive}
                 planShown={planShown}
                 onPlan={setPlan}
                 onClosePlan={closePlan}
               />
-            ) : chatsOpen ? (
-              <ChatsPage
-                conversations={conversations ?? []}
-                projects={projects ?? []}
-                isNew={isNew}
-              />
             ) : (
               <div className="flex min-h-0 flex-1 flex-col items-center justify-center overflow-y-auto px-4 pb-[10vh]">
-                {/* A project's home is headed by its name, as ChatGPT's is, with no suggestions: what is begun here
+                {/* A project's home is headed by its name, with no suggestions: what is begun here
                     is the project's own. */}
                 {project ? (
                   <h2 className="mb-7 text-center text-2xl tracking-tight">

@@ -31,7 +31,7 @@ export function Permissions({ status }: { status: Status | null }) {
       >
         <Card>
           {APPROVALS.map((option) => {
-            // Each named, then what it does in a muted line under it, as Claude's permission modes are.
+            // Each named, then what it does in a muted line under it.
             const mode = t.settings.approvalModes[option]
             return (
               <label

@@ -43,7 +43,7 @@ export const en: Messages = {
   sidebar: {
     title: "Sidebar",
     description: "Tasks",
-    new: "New",
+    new: "New chat",
     search: "Search",
     signOut: "Sign out",
     loadFailed: "Couldn't load conversations",
@@ -58,12 +58,12 @@ export const en: Messages = {
     removeFromProject: (project) => `Remove from ${project}`,
     deleted: "Conversation deleted",
     deletedProject: (project) => `Project ${project} deleted`,
+    // The deleted notice's button, and the memory notice's (memory/notices.tsx).
     restore: "Undo",
     projects: "Projects",
     recents: "Recents",
     newProject: "New project",
     newInProject: "New conversation in this project",
-    viewAll: "View all",
     noChats: "No chats",
     showMore: "Show more",
     projectName: "Project name",
@@ -75,21 +75,19 @@ export const en: Messages = {
     projectMemory: "Memory",
     projectMemoryTitle: (project: string) => `Memory in ${project}`,
     deleteProject: "Delete",
-    deleteProjectAsk: (project, count) =>
-      count === 1
-        ? `Delete ${project} and its conversation?`
-        : `Delete ${project} and its ${count} conversations?`,
+    deleteProjectAsk: (project) =>
+      `Delete ${project} and all its conversations?`,
     resize: "Resize the sidebar",
     toggle: "Toggle the sidebar",
     expand: "Expand the sidebar",
   },
 
   chats: {
-    title: "All chats",
-    search: "Search chats",
-    clear: "Clear search",
-    none: "No matching chats",
-    count: (count) => (count === 1 ? "1 chat" : `${count} chats`),
+    search: "Search",
+    none: "No matches",
+    // The search's sections, as ChatGPT's ⌘K lists them.
+    actions: "Quick actions",
+    chats: "Chats",
   },
 
   home: {
@@ -138,9 +136,9 @@ export const en: Messages = {
   composer: {
     goal: "Task goal",
     stop: "Stop",
-    stopTask: "Stop this task",
     start: "Start the task",
     send: "Send",
+    queue: "Queue",
     withdraw: "Delete",
     mention: {
       list: "Mentions",
@@ -298,7 +296,6 @@ export const en: Messages = {
       computerInUse: "Not run: another task is using the computer",
       tooManyTasks: "Not run: six tasks are already running",
     },
-    read: "Read",
     usage: "Usage",
     about: {
       cost: "Cost",
@@ -322,6 +319,7 @@ export const en: Messages = {
     enlarge: (label) => `Enlarge: ${label}`,
     agentAsks: "The agent asks you to take over",
     continued: "Continued from where it stopped",
+    workedFor: (time) => `Worked for ${time}`,
     errors: {
       "E-DESKTOP":
         "Couldn't reach the desktop, so the agent could neither see nor use it.",
@@ -329,7 +327,8 @@ export const en: Messages = {
         "The model service didn't accept the API key. Ask your admin to check it.",
       "E-MODEL-LIMIT":
         "The model service's usage limit was reached. Try again later.",
-      "E-MODEL-DOWN": "Couldn't reach the model service. Try again later.",
+      "E-MODEL-DOWN":
+        "The model service is busy or having problems. Try again later.",
       "E-MODEL-REQUEST": "The model service turned down the request.",
       "E-CALL-LIMIT":
         "The agent called the model too many times without replying, so it was stopped.",
@@ -376,7 +375,7 @@ export const en: Messages = {
     account: "Account",
     accountName: "Name",
     signInMethod: "Sign-in",
-    signInNone: "None, this machine only",
+    signInNone: "This machine only",
     signInToken: "Access token",
     signInProxy: "Sign-in proxy",
     appearance: "Appearance",
@@ -391,10 +390,6 @@ export const en: Messages = {
     accent: "Accent",
     background: "Background",
     foreground: "Foreground",
-    importTheme: "Import theme",
-    importAction: "Import",
-    themeText: "Theme text",
-    themeImported: (mode: string) => `${mode} theme imported`,
     windowsDesktop: "Windows desktop",
     codeRunner: "Code runner",
     connected: "Connected",

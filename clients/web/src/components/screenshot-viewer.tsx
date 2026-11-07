@@ -17,13 +17,13 @@ import { useT } from "@/lib/i18n"
 // How long the pointer rests on a thumbnail before it shows, in milliseconds.
 const PEEK_DELAY = 400
 
-// The round buttons over the dark backdrop, light in both themes, as Claude's image viewer sets its close button.
+// The round buttons over the dark backdrop, light in both themes.
 const ROUND =
   "rounded-full bg-white/10 text-white hover:bg-white/20 hover:text-white dark:hover:bg-white/20 disabled:opacity-30"
 
 /**
- * A screen's thumbnail that shows the screen larger above it while the pointer rests on it, as Claude's attachments
- * do; `children` is the thumbnail's button, which opens the screen full size.
+ * A screen's thumbnail that shows the screen larger above it while the pointer rests on it;
+ * `children` is the thumbnail's button, which opens the screen full size.
  */
 export function ScreenshotPeek({
   run,
@@ -74,7 +74,7 @@ export function ScreenshotPeek({
 }
 
 /**
- * A run's screenshots full screen over the page, one at a time, as Claude shows an image: the arrow keys step through
+ * A run's screenshots full screen over the page, one at a time: the arrow keys step through
  * them, Escape or a click beside the screen closes it.
  */
 export function ScreenshotViewer({

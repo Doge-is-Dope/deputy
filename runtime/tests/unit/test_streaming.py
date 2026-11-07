@@ -1,7 +1,7 @@
 import asyncio
 
-from computer_use.agent.draft import Draft
-from computer_use.streaming import LiveStream
+from computer_use.streaming import Draft
+from computer_use.streaming import Live, LiveStream
 
 
 async def test_queued_text_survives_clear_and_run_completion_for_each_viewer():
@@ -52,3 +52,19 @@ async def test_new_call_starts_a_new_draft_without_discarding_previous_queued_ev
         assert [((item := await reader.get()).kind, item.data["text"]) for _ in range(3)] == [
             ("draft", "First."), ("line", "First."), ("draft", "Second.")
         ]
+
+
+async def test_a_run_is_watched_from_open_to_close_with_the_reply_so_far():
+    live, draft = Live(), Draft()
+    with live.watch("r1") as view:
+        assert view is None
+    live.open("r1", draft)
+    draft.add("call1", "Hello ")
+    with live.watch("r1") as view:
+        assert view.draft == "Hello "
+        live.publish("r1", {"type": "note"})
+        live.publish("r2", {"type": "note"})  # not open: nobody watches it
+        live.close("r1")
+        assert [(await view.updates.get()).kind for _ in range(2)] == ["line", "done"]
+    with live.watch("r1") as view:
+        assert view is None

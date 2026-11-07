@@ -1,44 +1,39 @@
 """Model-facing desktop tools, batches and takeover requests.
 
-Executor validates and runs actions. Input actions return a fresh screenshot;
-batches return one after their last action. agent.confirm holds flagged calls."""
+Input actions return a fresh screenshot; execution.approvals holds the calls flagged for approval."""
 
-import base64
+import json
 from collections.abc import Callable
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool, InjectedToolCallId, ToolException, tool
-from pydantic import BaseModel, Field, ValidationError
+from langchain_core.tools import BaseTool, ToolException, tool
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, WithJsonSchema, create_model
 
-from computer_use.desktop.control import Control
-from computer_use.desktop.actions import BATCHABLE, CLICKS, CONFIRM_FIELDS
+from computer_use.desktop.actions import BATCHABLE, CLICKS
+from computer_use.computers import Computer
+from computer_use.desktop.control import Control, hand_over
 from computer_use.desktop.executor import ActionResult, Executor
-from computer_use.events import ActionReason
-
-CallId = Annotated[str, InjectedToolCallId]
-
-
-def image_block(png: bytes) -> dict:
-    return {"type": "image", "base64": base64.b64encode(png).decode(), "mime_type": "image/png"}
-
+from computer_use.events import CONFIRM_FIELDS
+from computer_use.tools.common import CallId, image_block
 
 def content(result: ActionResult) -> str | list[dict]:
-    """A result as message content: its text, then its screenshot if it has one."""
     if result.frame is None:
         return result.text
     return [{"type": "text", "text": result.text}, image_block(result.frame.png)]
 
 
-def image_blocks(message) -> list[dict]:
-    if not isinstance(message.content, list):
-        return []
-    return [block for block in message.content if isinstance(block, dict) and block.get("type") == "image"]
+def reply(result: ActionResult, call_id: str, name: str) -> ToolMessage:
+    """The result as a tool message; its reason rides in the artifact, outside the text the model reads."""
+    return ToolMessage(
+        content=content(result), tool_call_id=call_id, name=name,
+        status="success" if result.ok else "error", artifact={"reason": result.reason},
+    )
 
 
 # Coordinates are lists so every provider's function calling accepts the schema.
-PointArg = Annotated[list[int], Field(min_length=2, max_length=2, description="[x, y] in full-screen screenshot pixels")]
-RegionArg = Annotated[list[int], Field(min_length=4, max_length=4, description="[x0, y0, x1, y1] in full-screen screenshot pixels")]
+PointArg = Annotated[list[int], Field(min_length=2, max_length=2, description="[x, y] in full-screen screenshot pixels from the top-left")]
+RegionArg = Annotated[list[int], Field(min_length=4, max_length=4, description="[x0, y0, x1, y1] in full-screen screenshot pixels from the top-left")]
 ModifiersArg = Annotated[str | None, Field(description='Keys held during the action, e.g. "shift" or "ctrl+shift"')]
 
 NeedsConfirmationArg = Annotated[bool, Field(description=(
@@ -51,37 +46,33 @@ ConsequenceArg = Annotated[str | None, Field(description=(
 ))]
 
 
-class BatchAction(BaseModel):
-    """One action of a batch: its name and the arguments its own tool takes; arguments it does not take are ignored."""
-
-    action: Literal[BATCHABLE]
-    coordinate: Annotated[
-        list[int] | None, Field(description="Full-screen [x, y]: where a click, mouse_move or scroll lands; where a drag ends")
-    ] = None
-    start_coordinate: Annotated[list[int] | None, Field(description="left_click_drag: full-screen [x, y] where it starts")] = None
-    text: Annotated[
-        str | None, Field(description="type: the text. key, hold_key: the keys. Clicks, drags, scrolls: keys held")
-    ] = None
-    scroll_direction: Literal["up", "down", "left", "right"] | None = None
-    scroll_amount: int | None = None
-    repeat: int | None = None
-    duration: Annotated[float | None, Field(description="hold_key, wait: seconds")] = None
+def batch_steps(schemas: dict[str, type[BaseModel]]) -> dict[str, type[BaseModel]]:
+    """Each batchable action's own arguments, refusing any other: a batch says once whether it needs approval."""
+    return {
+        name: create_model(name, __config__=ConfigDict(extra="forbid"), **{
+            key: (field.annotation, field) for key, field in schemas[name].model_fields.items() if key not in CONFIRM_FIELDS
+        })
+        for name in BATCHABLE
+    }
 
 
-def not_executed(call: dict, reason: str, code: ActionReason) -> ToolMessage:
-    """A call the runtime turned away, as its result: why, in words, and as a code the page reads."""
-    return ToolMessage(
-        content=f"Not executed: {reason}", tool_call_id=call["id"], name=call["name"], status="error",
-        artifact={"reason": code},
-    )
-
-
-def reply(result: ActionResult, call_id: str, name: str) -> ToolMessage:
-    """Keep execution state outside model-facing text, including errors with a fresh screenshot."""
-    return ToolMessage(
-        content=content(result), tool_call_id=call_id, name=name,
-        status="success" if result.ok else "error", artifact={"reason": result.reason},
-    )
+def batch_step_schema(steps: dict[str, type[BaseModel]]) -> dict:
+    """A batch step as one object per kind of action, with only that action's arguments. OpenAI makes tool schemas
+    strict, which has the model write every field an object has: one object shared by all actions filled each step
+    with nulls, a third of the computer agent's output (2026-11-01). Actions taking the same arguments share one."""
+    kinds: dict[str, tuple[list[str], dict]] = {}
+    for name, step in steps.items():
+        schema = step.model_json_schema()
+        schema["properties"] = {
+            key: {k: v for k, v in field.items() if k != "title"} for key, field in schema["properties"].items()
+        }
+        schema.pop("title")
+        kinds.setdefault(json.dumps(schema, sort_keys=True), ([], schema))[0].append(name)
+    return {"anyOf": [
+        {**schema, "properties": {"action": {"type": "string", "enum": names}, **schema["properties"]},
+         "required": ["action", *schema.get("required", [])]}
+        for names, schema in kinds.values()
+    ]}
 
 
 def desktop_tools(executor: Executor) -> list[BaseTool]:
@@ -103,7 +94,7 @@ def desktop_tools(executor: Executor) -> list[BaseTool]:
         """
         return await run("zoom", call_id, region=region)
 
-    # The input tools take needs_confirmation and consequence for `agent.confirm`, after their own arguments; neither
+    # The input tools take needs_confirmation and consequence for `execution.approvals`, after their own arguments; neither
     # reaches the executor.
     def click_tool(name: str, what: str) -> BaseTool:
         async def click(
@@ -234,11 +225,12 @@ def desktop_tools(executor: Executor) -> list[BaseTool]:
         hold_key,
         wait,
     ]
-    schemas = {each.name: each.tool_call_schema for each in tools}
+    steps = batch_steps({each.name: each.tool_call_schema for each in tools})
+    Step = Annotated[dict[str, Any], WithJsonSchema(batch_step_schema(steps))]
 
     @tool
     async def computer_batch(
-        actions: Annotated[list[BatchAction], Field(min_length=1)],
+        actions: Annotated[list[Step], Field(min_length=1)],
         *,
         call_id: CallId,
         needs_confirmation: NeedsConfirmationArg,
@@ -246,29 +238,31 @@ def desktop_tools(executor: Executor) -> list[BaseTool]:
     ) -> ToolMessage:
         """Run actions determined from the current observation, then return the results and final screenshot.
 
-        Prefer this for two or more actions that need no intermediate observation, such as clicking a visible empty
-        document and typing text. Each item uses its action's arguments and full-screen coordinates.
+        Use this when the actions' effects are predictable from the current observation, such as clicking a visible
+        empty document and typing text. Each item uses its action's arguments and full-screen coordinates.
         Actions run in order with settling between inputs, and stop at the first failure or blocked action.
-        If a later action needs new information from an earlier result, end the batch before that later action.
-        A wait allows time to pass but gives you no intermediate screenshot within the batch.
+        If a later action depends on confirming an earlier result, end the batch before that later action.
+        A wait allows time to pass but gives you no intermediate screenshot within the batch. The final screenshot
+        already waits for the screen to settle, so end a batch with a wait only when something slower, such as an app
+        starting, must finish first.
         Include only actions that need no approval and set needs_confirmation to false. Send any action needing
         approval in a separate call. If the batch stops partway, inspect its results and screen before continuing;
         do not repeat actions already completed.
         """
-        steps = []
+        valid = []
         for number, step in enumerate(actions, 1):
-            schema = schemas[step.action]
-            fields = step.model_dump(exclude_none=True)
-            given = {key: value for key, value in fields.items() if key in schema.model_fields}
-            if "needs_confirmation" in schema.model_fields:  # said of the batch as a whole, not of each action
-                given["needs_confirmation"] = False
+            name = step.get("action")
+            if name not in steps:
+                raise ToolException(f"Nothing was sent: action {number} of {len(actions)}: {name!r} cannot be batched")
+            # The arguments a step leaves out come as null under a strict schema.
+            given = {key: value for key, value in step.items() if key != "action" and value is not None}
             try:
-                steps.append((step.action, schema.model_validate(given).model_dump(exclude=set(CONFIRM_FIELDS))))
+                valid.append((name, steps[name].model_validate(given).model_dump()))
             except ValidationError as error:
                 problems = "; ".join(f"{'.'.join(map(str, each['loc']))}: {each['msg']}" for each in error.errors())
-                message = f"Nothing was sent: action {number} of {len(actions)} ({step.action}): {problems}"
+                message = f"Nothing was sent: action {number} of {len(actions)} ({name}): {problems}"
                 raise ToolException(message) from error
-        return reply(await executor.run_batch(steps), call_id, "computer_batch")
+        return reply(await executor.run_batch(valid), call_id, "computer_batch")
 
     tools.append(computer_batch)
     for each in tools:
@@ -276,13 +270,13 @@ def desktop_tools(executor: Executor) -> list[BaseTool]:
     return tools
 
 
-def takeover_tool(control: Control, on_request: Callable[[str], None]) -> BaseTool:
+def takeover_tool(control: Control, computer: Computer, on_request: Callable[[str], None]) -> BaseTool:
     @tool
-    def request_takeover(reason: str) -> str:
+    async def request_takeover(reason: str) -> str:
         """Ask the user to take over the desktop for something only they should do: typing a password or a sign-in
         code, a CAPTCHA, an administrator prompt, payment details, getting past a browser or site safety barrier such
         as a certificate warning. You get the current screen back when they return control."""
-        control.write("user", reason)
+        await hand_over(control, computer, "user", reason)
         on_request(reason)
         return "The user now has control. You will get the current screen when they return it."
 

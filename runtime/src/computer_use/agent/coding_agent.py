@@ -1,73 +1,25 @@
-"""Coding tasks in a conversation-specific folder on the isolated code runner.
-
-Each task starts with fresh model context; files persist for later tasks in the
-conversation. The main agent checks results from commands and their output."""
-
-from typing import Annotated
+"""Coding tasks in the conversation's folder on the isolated code runner; files persist across its tasks."""
 
 from langchain_core.messages import HumanMessage
-from langchain_core.tools import BaseTool, ToolException, tool
-from pydantic import Field
 
 from computer_use.agent.inbox import Inbox
-from computer_use.agent.middleware import SubagentMiddleware
+from computer_use.middleware.skills import SkillsMiddleware
+from computer_use.middleware.subagent import SubagentMiddleware
 from computer_use.agent.models import build_chat_model, chosen
 from computer_use.agent.subagent import Result, Subagent
 from computer_use.agent.trajectory import Trajectory
 from computer_use.sandbox import CodeRunner, CodeRunnerError
+from computer_use.tools.coding import coding_tools
 from computer_use.config import RunChoices, Settings
-from computer_use.prompts.coding import (
-    ABOUT, BRIEF, CODING_PROMPT, DESCRIPTION, runner_unusable, stopped,
-)
-
-# How long one command may run, as Anthropic's computer use demo gives a shell command.
-RUN_SECONDS = 120
-
-
-
-def coding_tools(runner: CodeRunner, thread: str) -> list[BaseTool]:
-    """bash and write_file, in the conversation's folder on the code runner."""
-
-    @tool
-    async def bash(
-        script: Annotated[str, Field(description="The commands, run with bash in your working folder.")],
-    ) -> str:
-        """Run commands with bash in your working folder; returns the exit code and what they printed, stdout and
-        stderr together, cut in the middle when long."""
-        try:
-            output = await runner.run(thread, script, RUN_SECONDS)
-        except ValueError as refused:
-            raise ToolException(f"Not executed: {refused}.")
-        if output.code is None:
-            raise ToolException(f"Stopped: it ran for more than {RUN_SECONDS} seconds. What it printed:\n{output.text}")
-        return f"Exit code {output.code}.\n{output.text}"
-
-    @tool
-    async def write_file(
-        path: Annotated[str, Field(description="A path in your working folder.")],
-        content: Annotated[str, Field(description="The file's whole text.")],
-    ) -> str:
-        """Write a text file in your working folder, replacing any there."""
-        try:
-            return await runner.write(thread, path, content)
-        except ValueError as refused:
-            raise ToolException(f"Not executed: {refused}.")
-
-    tools = [bash, write_file]
-    for each in tools:  # a refused or failed command is the agent's to hear and work around
-        each.handle_tool_error = True
-    return tools
+from computer_use.prompts.coding import ABOUT, CODING_PROMPT, runner_unusable, stopped
 
 
 class CodingAgent(Subagent):
-    """The coding agent of one run: each task starts afresh, in the conversation's folder on the code runner."""
+    """The coding agent of one task, with fresh model context."""
 
-    tool = "write_code"
     agent = "coding"
     name = "coding agent"
-    description = DESCRIPTION
-    brief = BRIEF
-    prompt = ABOUT
+    about = ABOUT
 
     def __init__(
         self,
@@ -75,26 +27,26 @@ class CodingAgent(Subagent):
         runner: CodeRunner,
         log: Trajectory,
         thread: str,
+        session: str,
         request: str,
         max_steps: int,
-        user: Inbox | None = None,
-        choices: RunChoices = RunChoices(),
+        user: Inbox,
+        choices: RunChoices,
+        taught: str,
     ):
-        super().__init__(settings, log, thread, request, max_steps, user, choices)
+        super().__init__(settings, log, thread, session, request, max_steps, user, choices, taught)
         self.runner = runner
 
     async def run(self, task: str, told: Inbox) -> Result:
-        """Carry out a task. A runner that cannot be reached ends it, and the main agent hears why."""
-        self._start = None
         reason = ""
         try:
             start = self._start = HumanMessage(content=await self.opening(task))
-            self.log.input(start, "task")
+            await self.log.input(start, "task")
             choice = chosen(self.settings, self.agent, self.choices.agents)
             self.log.uses(choice.model, name=self.agent)
             reply = await self.invoke(
-                build_chat_model(choice, self.settings), coding_tools(self.runner, self.thread),
-                CODING_PROMPT, SubagentMiddleware(self.log, told), start,
+                build_chat_model(choice, self.settings), coding_tools(self.runner, self.thread, self.log.run),
+                CODING_PROMPT, SubagentMiddleware(self.log, told), start, middleware=[SkillsMiddleware(self.agent)],
             )
         except CodeRunnerError as error:
             self.stop_reason = "error"

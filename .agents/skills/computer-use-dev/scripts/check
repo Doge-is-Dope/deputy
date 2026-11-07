@@ -1,0 +1,70 @@
+#!/bin/sh
+# The CI checks (.github/workflows/tests.yml) for the areas changed since the merge base with main, run in parallel.
+# Prints one line per check and the log tail of each failure; exits 1 if any failed.
+# Usage: check [--all] [--base REF] [AREA ...]
+set -u
+
+# One check per line, tab-separated: area, folder, the changed paths that call for it, command.
+# CI also runs the MongoDB contract tests; they join in when CU_TEST_MONGO_URL names a database.
+CHECKS="runtime	runtime	^(runtime|eval)/	uv run --frozen pytest tests/unit -q${CU_TEST_MONGO_URL:+ -m 'not model'}
+cli	clients/cli	^clients/cli/	uv run --frozen pytest -q
+web	clients/web	^clients/web/	bun run lint
+web	clients/web	^clients/web/	bun run test
+web	clients/web	^clients/web/	bun run build"
+
+usage() {
+	echo "usage: check [--all] [--base REF] [$(echo "$CHECKS" | cut -f1 | uniq | paste -sd'|' -) ...]" >&2
+	exit 2
+}
+
+root=$(git rev-parse --show-toplevel) || exit 2
+base=main all= areas=
+while [ $# -gt 0 ]; do
+	case $1 in
+	--all) all=1 ;;
+	--base) base=${2:?--base needs a ref}; shift ;;
+	-*) usage ;;
+	*) echo "$CHECKS" | cut -f1 | grep -qx "$1" || usage; areas="$areas $1" ;;
+	esac
+	shift
+done
+[ -n "$all$areas" ] || changed=$(cd "$root" &&
+	git diff --name-only "$(git merge-base "$base" HEAD)" && git ls-files --others --exclude-standard)
+
+# wanted AREA PATHS: whether a check runs: all of them, the areas named, or else those whose paths changed
+wanted() {
+	[ -n "$all" ] && return 0
+	[ -n "$areas" ] && { case " $areas " in *" $1 "*) return 0 ;; esac; return 1; }
+	echo "$changed" | grep -qE "$2"
+}
+
+logs=$(mktemp -d)
+trap 'rm -rf "$logs"' EXIT
+count=0
+while IFS='	' read -r area folder paths command; do
+	wanted "$area" "$paths" || continue
+	if [ -f "$root/$folder/bun.lock" ] && [ ! -d "$root/$folder/node_modules" ]; then
+		(cd "$root/$folder" && bun install --frozen-lockfile) || { wait; exit 1; }
+	fi
+	count=$((count + 1))
+	echo "$area: $command" >"$logs/$count.name"
+	(cd "$root/$folder" && t0=$(date +%s) && sh -c "$command" >"$logs/$count.log" 2>&1
+		echo "$? $(($(date +%s) - t0))" >"$logs/$count.rc") &
+done <<EOF
+$CHECKS
+EOF
+wait
+[ $count -gt 0 ] || { echo "nothing to check since $base"; exit 0; }
+
+failed=0
+for i in $(seq $count); do
+	read -r code seconds <"$logs/$i.rc"
+	if [ "$code" = 0 ]; then
+		echo "ok   $(cat "$logs/$i.name") (${seconds}s)"
+	else
+		failed=1
+		echo "FAIL $(cat "$logs/$i.name") (${seconds}s)"
+		tail -n 40 "$logs/$i.log" | sed 's/^/     /'
+	fi
+done
+exit $failed

@@ -5,9 +5,10 @@ from starlette.exceptions import HTTPException
 from starlette.responses import JSONResponse
 
 from computer_use.memory import Memory, Source
-from computer_use.memory.context import recall
+from computer_use.adapters import build_stores
 from computer_use.memory.files import FileMemoryStore
-from computer_use.memory.prompts import handed
+from computer_use.middleware.memory import UserMemory
+from computer_use.prompts.memory import recalled
 from computer_use.memory.routes import memory_routes
 from computer_use.memory.tools import memory_tools
 
@@ -17,38 +18,49 @@ def memory(id: str = "m1", user: str = "local", project: str | None = None, at: 
                   at, at)
 
 
-async def test_a_memory_is_kept_as_written_and_listed_oldest_first(tmp_path):
-    store = FileMemoryStore(tmp_path)
-    await store.save(memory("m2", at=2.0))
-    await store.save(written := memory("m1", project="p1", at=1.0))
-    assert [each.id for each in await store.list("local")] == ["m1", "m2"]
+@pytest.fixture
+async def memories(store_settings):
+    _, _, store = build_stores(store_settings)
+    yield store
+    await store.close()
+
+
+async def test_a_memory_is_kept_as_written_and_listed_oldest_first(memories):
+    await memories.save(memory("m2", at=2.0))
+    await memories.save(written := memory("m1", project="p1", at=1.0))
+    assert [each.id for each in await memories.list("local")] == ["m1", "m2"]
+    assert await memories.get("local", "m1") == written
+
+
+async def test_the_file_store_keeps_a_memory_as_markdown_between_processes(tmp_path):
+    await FileMemoryStore(tmp_path).save(written := memory())
     assert await FileMemoryStore(tmp_path).get("local", "m1") == written
     assert (tmp_path / "users/local/memory/m1.md").read_text().endswith("---\n用內網查報表\n")
 
 
-async def test_editing_forgetting_and_counting_uses(tmp_path):
-    store = FileMemoryStore(tmp_path)
-    await store.save(memory())
-    changed = await store.update("local", "m1", text="改用 VPN", uses="9")
+async def test_editing_forgetting_and_counting_uses(memories):
+    await memories.save(memory())
+    changed = await memories.update("local", "m1", text="改用 VPN", uses="9")
     assert changed.text == "改用 VPN" and changed.uses == 0 and changed.updated > changed.created
-    await store.used("local", ["m1", "gone"])
-    assert (await store.get("local", "m1")).uses == 1
-    assert await store.update("local", "gone", text="x") is None
-    assert await store.delete("local", "m1") and not await store.delete("local", "m1")
-    await store.save(memory("a"))
-    await store.save(memory("b"))
-    assert await store.reset("local") == 2 and await store.list("local") == []
+    await memories.used("local", ["m1", "gone"])
+    assert (await memories.get("local", "m1")).uses == 1
+    assert await memories.update("local", "gone", text="x") is None
+    assert await memories.delete("local", "m1") and not await memories.delete("local", "m1")
+    await memories.save(memory("a"))
+    await memories.save(memory("b"))
+    assert await memories.reset("local") == 2 and await memories.list("local") == []
 
 
-async def test_memories_are_each_users_own_and_names_cannot_leave_their_folder(tmp_path):
-    store = FileMemoryStore(tmp_path)
-    await store.save(memory(user="alice"))
-    assert await store.list("bob") == [] and await store.get("bob", "m1") is None
-    assert await store.get("alice", "../m1") is None and not await store.delete("alice", "../../x")
+async def test_memories_are_each_users_own_and_ids_are_only_ids(memories):
+    await memories.save(memory(user="alice"))
+    assert await memories.list("bob") == [] and await memories.get("bob", "m1") is None
+    assert not await memories.delete("bob", "m1") and await memories.update("bob", "m1", text="x") is None
+    assert await memories.reset("bob") == 0 and (await memories.get("alice", "m1")).text == "用內網查報表"
+    assert await memories.get("alice", "../m1") is None and not await memories.delete("alice", "../../x")
     with pytest.raises(ValueError):
-        await store.list("../alice")
+        await memories.list("../alice")
     with pytest.raises(ValueError):
-        await store.save(memory(id="../x"))
+        await memories.save(memory(id="../x"))
 
 
 async def test_remember_writes_a_rule_and_replaces_one_in_place(tmp_path):
@@ -77,13 +89,16 @@ async def test_a_run_recalls_the_users_own_rules_and_its_projects_only(tmp_path)
     store = FileMemoryStore(tmp_path)
     for each in (memory("own", at=1), memory("mine", project="p1", at=2), memory("other", project="p2", at=3)):
         await store.save(each)
-    recalled = await recall(store, "local", "p1")
-    assert [each.id for each in recalled.memories] == ["own", "mine"]
-    assert "[mine] 用內網查報表" in recalled.prompt() and "[other]" not in recalled.prompt()
-    assert [each.id for each in await recalled.use(["other", "mine"])] == ["mine"]
+    remembering = UserMemory(store, "local", "p1", "thread", learn=False, use=True)
+    assert await remembering.recall()
+    assert [each.id for each in remembering.memories] == ["own", "mine"]
+    told = recalled(remembering.memories)
+    assert "[mine] 用內網查報表" in told and "[other]" not in told
+    assert [rule["id"] for rule in (await remembering.hand(["other", "mine"])).rules] == ["mine"]
     assert (await store.get("local", "mine")).uses == 1 and (await store.get("local", "other")).uses == 0
-    assert "用內網查報表 (why: Google 上的是舊版" in handed(recalled.chosen(["own"]))
-    assert handed(recalled.chosen(["other"])) == "" and (await recall(store, "bob", None)).prompt() == ""
+    assert "用內網查報表 (why: Google 上的是舊版" in (await remembering.hand(["own"])).text
+    assert (await remembering.hand(["other"])).text == ""
+    assert not await UserMemory(store, "bob", None, "thread", learn=False, use=True).recall()
 
 
 @pytest.fixture
@@ -97,7 +112,7 @@ async def client(tmp_path):
 
     app = Starlette(routes=memory_routes(store, lambda request: request.headers.get("x-user", "local")),
                     exception_handlers={HTTPException: error})
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
         yield client
 
 

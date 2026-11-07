@@ -1,5 +1,5 @@
 // The app's icons, drawn in one style: a 24×24 grid, round caps and joins, and soft rounded corners. Strokes are in
-// screen pixels, not scaled with the icon (non-scaling strokes, index.css): 1.33 as drawn here, ChatGPT's line at
+// screen pixels, not scaled with the icon (non-scaling strokes, index.css): 1.33 as drawn here, the line at
 // 20px, which the 20px icons keep, and 1.25 at 16px and under.
 import {
   useId,
@@ -51,6 +51,14 @@ export const SearchIcon = (props: IconProps) => (
   <Icon {...props}>
     <circle cx="10.25" cy="10.25" r="7.25" />
     <path d="M15.4 15.4 20.75 20.75" />
+  </Icon>
+)
+
+// A conversation in the search's list, as SF Symbols' message: a circle of the status marks' size whose lower left
+// curves out into the tail, its bottom edge scooping back into the circle.
+export const ChatIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M8.72 20.11A8.75 8.75 0 1 0 3.38 13.52c.44 2.46.32 5.38-.08 6.88 1.5 0 3.1-1.1 5.42-.29z" />
   </Icon>
 )
 
@@ -141,12 +149,6 @@ export const ChevronDownIcon = (props: IconProps) => (
   </Icon>
 )
 
-export const ChevronUpIcon = (props: IconProps) => (
-  <Icon {...props}>
-    <path d="M6.5 14.5 12 9l5.5 5.5" />
-  </Icon>
-)
-
 export const ChevronLeftIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M14.5 6.5 9 12l5.5 5.5" />
@@ -231,13 +233,6 @@ export const CopyIcon = (props: IconProps) => (
 )
 
 /** Import: an arrow down into a tray, as SF Symbols' tray.and.arrow.down; a theme taken from a line of text. */
-export const ImportIcon = (props: IconProps) => (
-  <Icon {...props}>
-    <path d="M12 3.5v11M7.5 10l4.5 4.5 4.5-4.5" />
-    <path d="M3.5 14v3a3 3 0 0 0 3 3h11a3 3 0 0 0 3-3v-3" />
-  </Icon>
-)
-
 export const ArrowUpIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M12 19V5M6 11l6-6 6 6" />
@@ -250,15 +245,6 @@ export const ArrowDownIcon = (props: IconProps) => (
   </Icon>
 )
 
-/** Go again: resuming a run. */
-export const RefreshIcon = (props: IconProps) => (
-  <Icon {...props}>
-    {/* The arc runs into the arrowhead's corner at (20, 8.5). */}
-    <path d="M20 12a8 8 0 1 1-2.34-5.66L20 8.5" />
-    <path d="M20 4v4.5h-4.5" />
-  </Icon>
-)
-
 /** Turning, unless `still`. The box around the glyph turns, not the svg: Chrome lays out the page's layers again every
  * frame an svg turns, and not for a box. Its classes size the glyph (and so its line weight); the rest go on the box. */
 export const SpinnerIcon = ({
@@ -268,6 +254,7 @@ export const SpinnerIcon = ({
 }: ComponentProps<"span"> & { still?: boolean }) => (
   <span
     aria-hidden
+    data-icon=""
     className={
       still ? "inline-flex shrink-0" : "inline-flex shrink-0 animate-spin"
     }
@@ -466,14 +453,7 @@ export const CursorPositionIcon = (props: IconProps) => (
   </Icon>
 )
 
-export const FlagIcon = (props: IconProps) => (
-  <Icon {...props}>
-    <path d="M5 20.5V4.5" />
-    <path d="M5 5h11.2a1 1 0 0 1 .8 1.6L15 9.5l2 2.9a1 1 0 0 1-.8 1.6H5" />
-  </Icon>
-)
-
-/** What the agent remembers from the user's steering: a brain, as SF Symbols' brain and ChatGPT's memory mark. Two
+/** What the agent remembers from the user's steering: a brain, as SF Symbols' brain. Two
     halves of three lobes each, split down the middle, with one fold running in from where the side and bottom lobes
     meet. */
 export const MemoryIcon = (props: IconProps) => (
@@ -488,14 +468,6 @@ export const TerminalIcon = (props: IconProps) => (
   <Icon {...props}>
     <rect x="3" y="4.5" width="18" height="15" rx="3" />
     <path d="m7.5 9.5 3 2.5-3 2.5M12.5 15h4" />
-  </Icon>
-)
-
-/** A run of reads: an open book. */
-export const BookIcon = (props: IconProps) => (
-  <Icon {...props}>
-    <path d="M3.5 4.5h4.5a4 4 0 0 1 4 4 4 4 0 0 1 4-4h4.5a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H16a4 4 0 0 0-4 3 4 4 0 0 0-4-3H3.5a1 1 0 0 1-1-1v-11a1 1 0 0 1 1-1z" />
-    <path d="M12 8.5v12" />
   </Icon>
 )
 
@@ -584,7 +556,7 @@ export const CircleDashedIcon = (props: IconProps) => (
   </Icon>
 )
 
-/** The plan: two lines, each after a hollow dot, as ChatGPT's button for its task card. The dots are 1.4 of their own
+/** The plan: two lines, each after a hollow dot. The dots are 1.4 of their own
     width apart, and a line runs 1.3 times a dot, level with its middle. */
 export const PlanIcon = (props: IconProps) => (
   <Icon {...props}>

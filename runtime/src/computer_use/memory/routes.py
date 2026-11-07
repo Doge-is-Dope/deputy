@@ -1,4 +1,4 @@
-"""The page's routes for memory: list the user's, change one, forget one and put it back, or forget all."""
+"""The page's routes for memory."""
 
 from collections.abc import Callable
 from dataclasses import asdict, replace
@@ -9,20 +9,10 @@ from starlette.responses import JSONResponse
 from starlette.routing import Route
 
 from computer_use.memory import EDITABLE, KINDS, MAX_TEXT, Memory, MemoryStore, Source
-
-
-async def body(request: Request) -> dict:
-    try:
-        data = await request.json()
-    except ValueError:
-        data = None
-    if not isinstance(data, dict):
-        raise HTTPException(400, "expected a JSON object")
-    return data
+from computer_use.routes import body
 
 
 def edits(data: dict) -> dict[str, str]:
-    """The EDITABLE fields `data` changes, each a nonempty text; the rule cut as remember cuts it."""
     changes = {name: data[name] for name in EDITABLE if name in data}
     if any(not isinstance(value, str) or not value.strip() for value in changes.values()):
         raise HTTPException(400, f"{', '.join(EDITABLE)} are nonempty texts")
@@ -30,7 +20,7 @@ def edits(data: dict) -> dict[str, str]:
 
 
 def memory_routes(store: MemoryStore, me: Callable[[Request], str]) -> list[Route]:
-    """Each of them for the user `me` says is asking: another user's memory is as missing as one never written."""
+    """Another user's memory is as missing as one never written."""
 
     async def listed(request: Request) -> JSONResponse:
         return JSONResponse([asdict(memory) for memory in await store.list(me(request))])
@@ -45,7 +35,7 @@ def memory_routes(store: MemoryStore, me: Callable[[Request], str]) -> list[Rout
         return JSONResponse(asdict(changed))
 
     async def put_back(request: Request) -> JSONResponse:
-        """A memory forgotten a moment ago, as the page had it, back under its id: the page's 復原."""
+        """Puts a memory forgotten a moment ago back under its id (the page's undo)."""
         data = await body(request)
         try:
             source = Source(**data["source"])

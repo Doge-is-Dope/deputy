@@ -31,7 +31,7 @@ def line(event: dict) -> str | None:
         case "title":
             return f"      title: {event['text']}"
         case "task":
-            return f"      {event['tool']} {event['state']}: {event['brief']}"
+            return f"      {event['agent']} {event['state']}: {event['brief']}"
         case "model" if event.get("text", "").strip():
             return f"      {'main' if main else 'model'}: {event['text'].strip()}"
         case "action":

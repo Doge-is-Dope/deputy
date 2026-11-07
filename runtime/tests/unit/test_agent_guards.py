@@ -1,18 +1,20 @@
 import asyncio
 import json
 import os
+import time
 
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
-from computer_use.agent.history import in_call_order, load_conversation, main_messages
-from computer_use.agent.middleware import KEEP_SCREENSHOTS, PRUNE_EVERY, prune_screenshots
-from computer_use.agent.tools import image_blocks
+from computer_use.agent.history import in_call_order, load_conversation
+from computer_use.middleware.common import KEEP_SCREENSHOTS, PRUNE_EVERY, prune_screenshots
+from computer_use.tools.common import image_blocks
 from computer_use.agent.trajectory import Trajectory
+from computer_use.agent.usage import usage_of
 from computer_use.storage import MAIN
-from computer_use.storage.files import FileRunStore
-from conftest import new_log, read_events
+from conftest import file_runs, main_messages, new_log, read_events, runs_dir
 from computer_use.computers import ComputerError
+from computer_use.desktop import executor as executor_module
 from computer_use.desktop.control import (
     Approval,
     ApprovalFile,
@@ -112,21 +114,21 @@ async def test_a_continued_conversation_reads_only_the_screenshots_its_next_call
     """Loaded for a next turn, a conversation's pruned screenshots are replaced without reading their files, across
     runs and with tool results logged out of call order; its next model call then sends what it would have sent had
     every screenshot been read, now and after the turn adds its own screenshots."""
-    store = FileRunStore(tmp_path)
+    store = file_runs(tmp_path).of("local")
     log = Trajectory(store, first := await store.create())
     log.start("Open Notepad", None, "openai:gpt-6-luna", "openai:gpt-6-luna")
-    log.input(HumanMessage("Open Notepad"), "message", MAIN)
-    calls = [{"id": f"call_{n}", "name": "computer_use", "args": {"task": str(n)}, "type": "tool_call"} for n in (1, 2)]
-    log.input(AIMessage(content="Two tasks.", tool_calls=calls), "model", MAIN)
+    await log.input(HumanMessage("Open Notepad"), "message", MAIN)
+    calls = [{"id": f"call_{n}", "name": "start_task", "args": {"agent": "computer", "task": str(n)}, "type": "tool_call"} for n in (1, 2)]
+    await log.input(AIMessage(content="Two tasks.", tool_calls=calls), "model", MAIN)
     for n in (2, 1):  # the second finishes first
         done = ToolMessage(content=[{"type": "text", "text": f"Task {n} done."}, IMAGE], tool_call_id=f"call_{n}")
-        log.input(done, "result", MAIN)
+        await log.input(done, "result", MAIN)
     log = Trajectory(store, second := await store.create())
     log.start("Save it", first, "openai:gpt-6-luna", "openai:gpt-6-luna")
     for n in range(26):
-        log.input(HumanMessage(content=[{"type": "text", "text": f"Screen {n}."}, IMAGE]), "screen", MAIN)
+        await log.input(HumanMessage(content=[{"type": "text", "text": f"Screen {n}."}, IMAGE]), "screen", MAIN)
     everything = in_call_order(
-        [m for run in (first, second) for m in await main_messages(store, run, await store.events(run))]
+        [m for run in (first, second) for m in await main_messages(store, run)]
     )
     assert [m.tool_call_id for m in everything if isinstance(m, ToolMessage)] == ["call_1", "call_2"]
     read, get_file = [], store.get_file
@@ -218,13 +220,13 @@ async def test_a_takeover_waits_for_the_action_in_flight_then_lets_go_of_what_is
 
 async def test_input_is_held_back_when_the_user_takes_over_during_the_screen_check(executor, control, computer):
     await executor.observe("Current screen.")
-    screenshot = computer.screenshot
+    image = computer.image
 
-    async def taken_over_meanwhile():  # the screenshot the action is checked against, before it is sent
+    async def taken_over_meanwhile():  # the screen the action is checked against, before it is sent
         control.write("user", "taken over by user")
-        return await screenshot()
+        return await image()
 
-    computer.screenshot = taken_over_meanwhile
+    computer.image = taken_over_meanwhile
     result = await executor.run("key", {"text": "ctrl+s"})
 
     assert not result.ok and "user has control" in result.text and computer.calls == []
@@ -283,28 +285,44 @@ async def test_waiting_for_the_connection_returns_how_long_it_was_down(executor,
     assert await executor.wait_for_connection() >= 0.2
 
 
+async def test_waiting_for_the_connection_ends_only_once_the_session_has_drawn(executor, computer, fast_polls, monkeypatch):
+    """The window that says the desktop is back appears before the session has signed in and drawn its desktop."""
+    monkeypatch.setattr(executor_module, "RECONNECT_SIGN_IN_SECONDS", 0.2)
+    computer.connected = False
+
+    async def reconnect():
+        await asyncio.sleep(0.05)
+        computer.connected = True
+
+    asyncio.create_task(reconnect())
+    started = time.monotonic()
+    down = await executor.wait_for_connection()
+    assert time.monotonic() - started >= 0.25  # waited for the session to draw
+    assert down < 0.2  # and did not count it as time the desktop was gone
+
+
 async def test_the_screen_seen_is_the_last_full_screenshot_not_a_zoomed_crop(executor):
     observed = await executor.run("screenshot", {})
     zoomed = await executor.run("zoom", {"region": [0, 0, 320, 100]})
     assert executor.shown == observed.frame != zoomed.frame
 
 
-def test_the_end_event_carries_the_tokens_and_cost_by_kind_in_all_and_by_agent(tmp_path):
+async def test_the_end_event_carries_the_tokens_and_cost_by_kind_in_all_and_by_agent(tmp_path):
     ends = []
     for computer_model in ("openai:gpt-6.1-sol", "openai:unpriced"):
-        log = new_log(tmp_path)
+        log = await new_log(tmp_path)
         log.uses("openai:gpt-6-luna", MAIN)
         log.uses(computer_model, name="computer")
-        log.model(AIMessage(content="saved", usage_metadata={  # the computer agent's
+        await log.model(AIMessage(content="saved", usage_metadata={  # the computer agent's
             "input_tokens": 1_000_000, "output_tokens": 50_000, "total_tokens": 1_050_000,
             "input_token_details": {"cache_read": 200_000, "cache_creation": 100_000},
             "output_token_details": {"reasoning": 40_000},
         }))
-        log.model(AIMessage(content="It is saved.", usage_metadata={  # the main agent's
+        await log.model(AIMessage(content="It is saved.", usage_metadata={  # the main agent's
             "input_tokens": 100_000, "output_tokens": 10_000, "total_tokens": 110_000,
         }), MAIN)
         log.end("replied", "It is saved.", "replied")
-        ends += [event for event in read_events(tmp_path / "runs" / log.run) if event["type"] in ("end", "model")]
+        ends += [event for event in read_events(runs_dir(tmp_path) / log.run) if event["type"] in ("end", "model")]
 
     priced, unpriced = [event for event in ends if event["type"] == "end"]
     assert [event.get("model") for event in ends if event["type"] == "model"][:2] == [
@@ -325,3 +343,13 @@ def test_the_end_event_carries_the_tokens_and_cost_by_kind_in_all_and_by_agent(t
                                             "reasoning": 0}
     assert priced["agents"][0]["cost"] == pytest.approx({"input": 1.4, "cached": 0.02, "cache_write": 0.25, "output": 0.5})
     assert [each["cost"] is None for each in unpriced["agents"]] == [True, False]
+
+
+def test_cache_writes_split_by_lifetime_count_as_cache_writes():
+    # A reply as langchain-anthropic gives one that did not stream: the writes by lifetime, the generic count zeroed.
+    reply = AIMessage(content="", usage_metadata={
+        "input_tokens": 13_126, "output_tokens": 87, "total_tokens": 13_213,
+        "input_token_details": {"cache_read": 10_092, "cache_creation": 0,
+                                "ephemeral_5m_input_tokens": 3_032, "ephemeral_1h_input_tokens": 0},
+    })
+    assert usage_of(reply)["cache_write"] == 3_032

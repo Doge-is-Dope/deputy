@@ -22,7 +22,8 @@ import { setDraft, useDraft } from "@/hooks/use-drafts"
 import { NUDGE_MS } from "@/hooks/use-flash"
 import { type Approval, type Decision, type Pending } from "@/lib/api"
 import { useT } from "@/lib/i18n"
-import { isComposing } from "@/lib/keys"
+import { isComposing, shortcutLabel } from "@/lib/keys"
+import { Kbd } from "@/components/ui/kbd"
 import { MentionList } from "@/components/composer/mention-list"
 import { MentionLogos, TEXT } from "@/components/composer/mention-logos"
 import { useMentionText } from "@/components/composer/mention-text"
@@ -50,13 +51,14 @@ export type Takeover = {
 }
 
 // What comes into the composer's corner fades in, and what it takes the place of goes at once: the answers, as the
-// question's row opens, and the stop and send buttons, which also grow a little into place. Those two are 32px, as
-// ChatGPT's, with 4px round them, so their middle stays where a 40px one's was, in line with the text and the corner.
+// question's row opens, and the stop and send buttons, which also grow a little into place. Those two are 32px,
+// with 4px round them, so their middle stays where a 40px one's was, in line with the text and the corner. They are
+// filled with the theme's accent, the icon in the surface's color as on the default black.
 const ANSWERS =
   "transition-opacity duration-300 ease-(--ease-drawer) motion-reduce:transition-none starting:opacity-0"
 
 const CORNER_BUTTON =
-  "m-1 rounded-full duration-200 ease-(--ease-out) motion-reduce:transition-none starting:scale-90 starting:opacity-0"
+  "m-1 rounded-full bg-(--theme-accent) text-background duration-200 ease-(--ease-out) hover:bg-(--theme-accent)/80 motion-reduce:transition-none starting:scale-90 starting:opacity-0"
 
 /** Compose goals and steering messages, or answer approval and takeover requests.
  * Typed text during approval becomes the rejection reason. Takeover replaces the input.
@@ -81,7 +83,7 @@ export function Composer({
   className,
 }: {
   draftKey: string // whose draft it shows (use-drafts)
-  onSubmit: (goal: string) => Promise<boolean> // true once the run started, which clears the draft
+  onSubmit: (goal: string, queue: boolean) => Promise<boolean> // true once the run started, which clears the draft
   onStop?: () => void
   running: boolean
   takesMessages?: boolean // the run in progress takes what is sent meanwhile
@@ -236,19 +238,17 @@ export function Composer({
     hintTimer.current = window.setTimeout(() => setHint(false), NUDGE_MS)
   }
 
-  async function submit(event?: FormEvent) {
+  // `queue`: while the run works, the message waits for it to end rather than steering it.
+  async function submit(event?: FormEvent, queue = false) {
     event?.preventDefault()
     if (!canSend) return
     setSending(true)
-    try {
-      const sent =
-        approval && onAnswer
-          ? await answer("reject", goal.trim())
-          : await onSubmit(goal.trim())
-      if (sent) onGoalChange("")
-    } finally {
-      setSending(false)
-    }
+    const sent =
+      approval && onAnswer
+        ? await answer("reject", goal.trim())
+        : await onSubmit(goal.trim(), queue)
+    if (sent) onGoalChange("")
+    setSending(false)
   }
 
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
@@ -256,7 +256,8 @@ export function Composer({
     if (handover) return
     if (isComposing(event.nativeEvent)) return
     if (mentionKeys(event)) return
-    // Enter sends, Shift+Enter adds a line. With nothing written, a step waiting for approval takes it, to approve.
+    // Enter sends, Shift+Enter adds a line, ⌘/Ctrl+Enter queues the message for when the run in progress ends. With
+    // nothing written, a step waiting for approval takes it, to approve.
     // While a run that takes no message works, nothing goes yet: what is written stays, and the stop button says
     // when it can.
     const key = event.shiftKey ? "" : event.key
@@ -264,7 +265,7 @@ export function Composer({
     event.preventDefault()
     const held = running && !takesMessages && !approval
     if (goal.trim() && (blocked || held)) showHint()
-    else if (!held) submit()
+    else if (!held) submit(undefined, event.metaKey || event.ctrlKey)
   }
 
   const stop = (
@@ -290,7 +291,7 @@ export function Composer({
         <StopIcon className="size-5" />
       </TooltipTrigger>
       <TooltipContent>
-        {hint ? t.composer.afterTask : t.composer.stopTask}
+        {hint ? t.composer.afterTask : t.composer.stop}
       </TooltipContent>
     </Tooltip>
   )
@@ -313,7 +314,7 @@ export function Composer({
       {/* Opaque, in dark mode too: the muted tint is mixed in, not see-through. */}
       <form
         onSubmit={submit}
-        className="relative rounded-[1.75rem] border bg-background shadow-[0_2px_8px_rgb(0_0_0/0.04)] transition-shadow focus-within:shadow-[0_4px_16px_rgb(0_0_0/0.08)] dark:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
+        className="relative rounded-[1.75rem] border bg-background shadow-[0_2px_8px_rgb(0_0_0/0.04)] dark:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
       >
         <QuestionRow
           question={question}
@@ -391,11 +392,11 @@ export function Composer({
               stop
             ) : (
               // A disabled button gets no pointer events, so the tooltip hangs on a wrapper around it.
+              // It says it sends; while the run works, what Enter and ⌘/Ctrl+Enter do; when the message cannot go, why
+              // not.
               <Tooltip
                 key="send"
-                disabled={!blocked}
-                open={!!blocked && hint}
-                onOpenChange={setHint}
+                {...(blocked && { open: hint, onOpenChange: setHint })}
               >
                 <TooltipTrigger render={<span className="flex rounded-full" />}>
                   <Button
@@ -408,7 +409,20 @@ export function Composer({
                     <ArrowUpIcon className="size-6" />
                   </Button>
                 </TooltipTrigger>
-                <TooltipContent>{blocked}</TooltipContent>
+                <TooltipContent>
+                  {blocked || (
+                    <>
+                      {t.composer.send}
+                      <Kbd>⏎</Kbd>
+                      {running && takesMessages && (
+                        <>
+                          <span className="ml-1.5">{t.composer.queue}</span>
+                          <Kbd>{shortcutLabel({ key: "⏎" })}</Kbd>
+                        </>
+                      )}
+                    </>
+                  )}
+                </TooltipContent>
               </Tooltip>
             )}
           </div>

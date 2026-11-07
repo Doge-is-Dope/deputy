@@ -7,7 +7,7 @@ import { MARK } from "@/components/composer/mention-text"
 // The text's box and type, which the layer that draws the logos over it has to share line for line. Both keep room
 // for a scrollbar, which takes room on some systems, so that their lines break alike when the text scrolls.
 export const TEXT =
-  "block max-h-52 min-h-10 px-1 py-2 font-composer text-base leading-6 whitespace-pre-wrap [scrollbar-gutter:stable] md:text-sm"
+  "block max-h-52 min-h-10 px-1 py-2 font-composer text-sm leading-6 whitespace-pre-wrap [scrollbar-gutter:stable]"
 
 /** The layer over the text that draws each mention's logo over its MARK: the same text, unseen, scrolled with the
  * text box (useMentionText). */

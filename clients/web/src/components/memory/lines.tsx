@@ -1,8 +1,6 @@
 import { useEffect } from "react"
-import { toast } from "sonner"
 
-import { MemoryIcon, TrashIcon, WarningIcon } from "@/components/icons"
-import { Notice } from "@/components/notice"
+import { MemoryIcon } from "@/components/icons"
 import {
   Tooltip,
   TooltipContent,
@@ -14,46 +12,11 @@ import { useT } from "@/lib/i18n"
 import {
   loadMemories,
   openMemory,
-  restoreMemory,
   useMemories,
   type Remembered,
 } from "@/lib/memory"
-import type { Messages } from "@/locales/zh-Hant"
 
-/** Says a change to memory did not go through, at the top of the window as the page's other notices are. */
-export function memoryFailed(t: Messages) {
-  toast.custom(
-    (id) => (
-      <Notice
-        icon={<WarningIcon aria-hidden className="size-5 shrink-0" />}
-        text={t.run.memory.failed}
-        onDismiss={() => toast.dismiss(id)}
-      />
-    ),
-    { className: "w-full" }
-  )
-}
-
-/** Says a rule was deleted, with 還原 to put it back, as deleting a conversation is said (App). */
-export function memoryDeleted(t: Messages, id: string) {
-  toast.custom(
-    (toastId) => (
-      <Notice
-        icon={<TrashIcon aria-hidden className="size-5 shrink-0" />}
-        text={t.settings.memoryDeleted}
-        action={t.sidebar.restore}
-        onDismiss={() => toast.dismiss(toastId)}
-        onAction={() => {
-          toast.dismiss(toastId)
-          restoreMemory(id).catch(() => memoryFailed(t))
-        }}
-      />
-    ),
-    { id: `memory-deleted-${id}`, className: "w-full" }
-  )
-}
-
-/** Where the main agent remembered, before what it said next, a chip as Claude marks a memory written: saved without
+/** Where the main agent remembered, before what it said next, a chip: saved without
  * asking, so it is in view, but small, as the reply says the same in its words. Hovered, it shows the rules as they
  * are now; it opens the first where it is kept (openMemory), to change or delete. */
 export function RememberedChip({

@@ -2,9 +2,9 @@
 // steered its work, and the page's routes to list, edit, forget and put them back (memory/routes.py). The page keeps
 // one list of them, which the conversation's lines and the settings page both show and change.
 
-import { useEffect, useSyncExternalStore } from "react"
-
 import { request } from "@/lib/api"
+import { store } from "@/lib/store"
+import { openSettings } from "@/lib/settings"
 
 /** What taught it: a message sent while work ran, a declined step's reason, a takeover, or anything else said. */
 export type MemoryKind = "steer" | "decline" | "takeover" | "said"
@@ -31,13 +31,8 @@ export type Remembered = { id: string; text: string }
 const path = (id: string) => `/api/memory/${encodeURIComponent(id)}`
 
 export const memoryApi = {
-  // The user's own and every project's, oldest first; with a project, only those its conversations are told.
-  list: (project?: string) =>
-    request<Memory[]>(
-      project
-        ? `/api/memory?project=${encodeURIComponent(project)}`
-        : "/api/memory"
-    ),
+  // The user's own and every project's, oldest first. Views filter by project after loading this shared list.
+  list: () => request<Memory[]>("/api/memory"),
   edit: (id: string, edit: MemoryEdit) =>
     request<Memory>(path(id), { method: "PATCH", body: JSON.stringify(edit) }),
   forget: (id: string) =>
@@ -55,26 +50,6 @@ type Store = {
   failed: boolean // the last load failed
   loading: boolean
   forgotten: ReadonlyMap<string, Memory> // forgotten on this page, by id, as they were: 復原 puts them back
-}
-
-/** Small external stores, read with useSyncExternalStore. */
-function store<T>(initial: T) {
-  let value = initial
-  const listeners = new Set<() => void>()
-  const subscribe = (listener: () => void) => {
-    listeners.add(listener)
-    return () => {
-      listeners.delete(listener)
-    }
-  }
-  return {
-    get: () => value,
-    set: (next: T) => {
-      value = next
-      for (const listener of listeners) listener()
-    },
-    use: () => useSyncExternalStore(subscribe, () => value),
-  }
 }
 
 const memories = store<Store>({
@@ -105,18 +80,6 @@ export function loadMemories(): Promise<void> {
 }
 
 export const useMemories = memories.use
-
-/** One memory as the list has it: undefined until it is loaded with it in, null once it is not (forgotten). A line
- * for one the list does not have yet, as one just remembered, loads it again. */
-export function useMemory(id: string): Memory | null | undefined {
-  const { list, loading } = useMemories()
-  const memory = list?.find((each) => each.id === id)
-  const missing = list === null || memory === undefined
-  useEffect(() => {
-    if (missing) void loadMemories()
-  }, [id, missing])
-  return memory ?? (list === null || loading ? undefined : null)
-}
 
 export async function editMemory(id: string, edit: MemoryEdit) {
   const changed = await memoryApi.edit(id, edit)
@@ -172,34 +135,6 @@ export async function forgetPersonalMemories() {
   }
 }
 
-// Where the settings open, when a line in the conversation opens them: a page, the item on it to show, and whether
-// to edit it. The settings dialog lives in the sidebar, the lines in the conversation: this store is between them.
-export type OpenedSettings = {
-  open: boolean
-  page: string | null
-  item: string | null
-  editing: boolean
-}
-const settings = store<OpenedSettings>({
-  open: false,
-  page: null,
-  item: null,
-  editing: false,
-})
-
-/** Opens the settings at a page, and at an item of it, from anywhere on the page. */
-export function openSettings(
-  page: string,
-  item: string | null = null,
-  editing = false
-) {
-  settings.set({ open: true, page, item, editing })
-}
-
-export function closeSettings() {
-  settings.set({ ...settings.get(), open: false })
-}
-
 // A project's rules, opened from its menu or from a line in the conversation: which project (null: shut), the rule to
 // show, and whether to edit it. The dialog lives beside the settings, outside the sidebar's sheet on a phone.
 export type OpenedProjectMemory = {
@@ -229,5 +164,3 @@ export function openMemory(id: string) {
   if (project) openProjectMemory(project, id)
   else openSettings("memory", id)
 }
-
-export const useOpenedSettings = settings.use

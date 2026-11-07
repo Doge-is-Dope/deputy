@@ -1,8 +1,7 @@
-"""One shared token, as Jupyter's and code-server's defaults: whoever has it is the local user.
+"""One shared token: whoever has it is the local user.
 
-The command line sends it as a bearer token. The page cannot send a header with every request (an EventSource or an
-<img> sends none), so signing in puts the token itself in a cookie, which the browser sends instead; the runtime
-keeps no session for it, and changing the token signs everyone out."""
+The page cannot send a header with every request (an EventSource or an <img> sends none), so signing in puts the
+token itself in a cookie; the runtime keeps no session, and changing the token signs everyone out."""
 
 import hashlib
 import hmac
@@ -37,7 +36,6 @@ class TokenAuthenticator:
         return LOCAL if token and self.valid(token) else None
 
     async def sign_in(self, request: Request) -> Response:
-        """Checks the token, {"token": …}, and puts it in the cookie the browser sends from then on."""
         try:
             token = (await request.json()).get("token")
         except (ValueError, AttributeError):

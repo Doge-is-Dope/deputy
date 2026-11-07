@@ -1,7 +1,9 @@
 """Desktop backend contract: lossless screenshots and mouse/keyboard input.
 
 Executor applies agent input rules; desktop.webrtc handles human input. Backends map
-the normalized names in desktop.keys to their own key codes."""
+the normalized names in desktop.keys to their own key codes. They reconnect their
+transport without replaying input or changing desktop ownership. Constructors do
+not open connections; resources are acquired lazily and owned by one server."""
 
 import io
 from collections.abc import Sequence
@@ -10,7 +12,6 @@ from typing import Literal, Protocol
 
 from PIL import Image
 
-from computer_use.config import Settings
 
 Point = tuple[int, int]
 Button = Literal["left", "middle", "right"]
@@ -20,6 +21,8 @@ Combo = Sequence[str]  # keys pressed together, e.g. ["ctrl", "s"]
 
 class ComputerError(RuntimeError):
     """Input or a screenshot could not be delivered."""
+
+    failure_code = "E-DESKTOP"  # agent.failures
 
 
 @dataclass(frozen=True)
@@ -35,6 +38,12 @@ class Frame:
         with Image.open(io.BytesIO(png)) as image:
             return cls(png, image.width, image.height)
 
+    @classmethod
+    def encode(cls, image: Image.Image) -> "Frame":
+        buffer = io.BytesIO()
+        image.save(buffer, format="PNG")
+        return cls(buffer.getvalue(), image.width, image.height)
+
 
 @dataclass(frozen=True)
 class Status:
@@ -43,6 +52,9 @@ class Status:
 
 
 class Computer(Protocol):
+    # After callers have stopped, close this server's connections, leaving any shared desktop session running.
+    # Safe after partial initialization and repeated calls. Closing sends no input.
+    async def close(self) -> None: ...
     # A point of None means "where the pointer already is"; modifiers are held during the action.
     async def status(self) -> Status: ...
     async def screenshot(self) -> Frame: ...
@@ -63,10 +75,3 @@ class Computer(Protocol):
     # pass; returns the number to pass next time. Lets the live view capture right after a change.
     async def next_change(self, seen: int, timeout: float) -> int: ...
     async def cursor_position(self) -> Point: ...
-
-
-def build_computer(settings: Settings) -> Computer:
-    # RDP only so far; other backends plug in here behind a setting.
-    from computer_use.computers.rdp import RdpComputer
-
-    return RdpComputer(settings.display, settings.keyboard_pipe)

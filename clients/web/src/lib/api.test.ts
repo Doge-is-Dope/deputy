@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { approvalFor, runningOf, userSince, type Status } from "@/lib/api"
+import { approvalFor, runningOf, userSince, waitingOf, type Status } from "@/lib/api"
 
 // The API's requests carry the browser's choices and language, which these selectors don't touch.
 vi.mock("@/lib/choices", () => ({ currentChoices: () => ({}) }))
@@ -37,11 +37,27 @@ describe("status selectors", () => {
     expect(userSince(null)).toBeNull()
   })
 
-  it("gives the step a run waits to have approved", () => {
-    const approval = { id: "a", run: "r1" } as Status["approval"]
+  it("gives the step one of a session's logs waits to have approved", () => {
+    const approval = { id: "a", run: "task-1" } as Status["approval"]
     const waiting = status({ approval })
-    expect(approvalFor(waiting, "r1")).toBe(approval)
-    expect(approvalFor(waiting, "r2")).toBeNull()
-    expect(approvalFor(waiting, null)).toBeNull()
+    expect(approvalFor(waiting, ["turn-1", "task-1"])).toBe(approval)
+    expect(approvalFor(waiting, ["turn-2"])).toBeNull()
+    expect(approvalFor(waiting, [])).toBeNull()
+  })
+})
+
+describe("waitingOf", () => {
+  const taken = (reason: string) =>
+    waitingOf(
+      status({
+        active: "r1",
+        control: { owner: "user", since: 100, reason, ready: true },
+      } as Partial<Status>)
+    )
+
+  it("waits for the user only when the agent asked them to take over", () => {
+    expect(taken("Please sign in.")).toMatchObject({ for: "takeover", reason: "Please sign in." })
+    expect(taken("taken over from web")).toBeNull()
+    expect(taken("taken over from cli")).toBeNull()
   })
 })

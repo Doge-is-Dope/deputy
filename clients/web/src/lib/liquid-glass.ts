@@ -1,6 +1,6 @@
 /**
- * The glass of the scroll-to-latest button (index.css's glass, run-view.tsx) as a lens, measured off ChatGPT's iOS
- * button: a thick dome of glass. The middle is flat and shows the page right under it; towards the rim the dome bends
+ * The glass of the scroll-to-latest button (index.css's glass, run-view.tsx) as a lens:
+ * a thick dome of glass. The middle is flat and shows the page right under it; towards the rim the dome bends
  * light more and more steeply, so the rim shows the page from further in, stretched out to the edge, and over the
  * last few pixels from further in again, as a real dome's rim does: under a black bar, what is white below it floats
  * in the glass as an oval with the bar's grey round it. The edge catches the light as cut glass does: a fine dark line

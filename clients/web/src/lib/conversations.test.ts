@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
-import type { RunSummary } from "@/lib/api"
-import { conversationsOf, nameOf, sectionsOf } from "@/lib/conversations"
+import type { Conversation, RunSummary } from "@/lib/api"
+import { conversationOf, merged, nameOf, sectionsOf } from "@/lib/conversations"
 
 vi.mock("@/lib/i18n", async () => {
   const { en } = await import("@/locales/en")
@@ -11,6 +11,9 @@ vi.mock("@/lib/i18n", async () => {
 const run = (over: Partial<RunSummary>): RunSummary => ({
   id: "r1",
   thread: "r1",
+  kind: "turn",
+  session: "r1",
+  parent: null,
   goal: "Open Notepad and type hello",
   title: null,
   started: 1,
@@ -18,21 +21,27 @@ const run = (over: Partial<RunSummary>): RunSummary => ({
   ended: 2,
   failed: false,
   project: null,
-  user: "local",
+  ...over,
+})
+
+const conversation = (over: Partial<Conversation>): Conversation => ({
+  id: "r1",
+  project: null,
+  title: null,
+  goal: "Open Notepad and type hello",
+  last: 1,
+  latest: run({}),
   ...over,
 })
 
 describe("the sidebar's sections", () => {
-  it("lists each project's conversations under it, by its first run, and the rest as recents", () => {
-    const { projects, recents } = sectionsOf(
-      conversationsOf([
-        run({ id: "r1", thread: "r1", started: 1, project: "eval" }),
-        run({ id: "r2", thread: "r2", started: 2 }),
-        run({ id: "r3", thread: "r3", started: 3, project: "eval" }),
-        run({ id: "r4", thread: "r1", started: 4 }), // continued from the page: still the eval's
-        run({ id: "r5", thread: "r5", started: 5, project: "probe" }),
-      ])
-    )
+  it("lists each project's conversations under it, and the rest as recents, in the order given", () => {
+    const { projects, recents } = sectionsOf([
+      conversation({ id: "r5", last: 5, project: "probe" }),
+      conversation({ id: "r1", last: 4, project: "eval" }),
+      conversation({ id: "r3", last: 3, project: "eval" }),
+      conversation({ id: "r2", last: 2 }),
+    ])
     expect(
       projects.map(([name, items]) => [name, items.map((c) => c.id)])
     ).toEqual([
@@ -44,25 +53,54 @@ describe("the sidebar's sections", () => {
 })
 
 describe("a conversation's name", () => {
-  it("is its first message until a run of it carries a title, whichever run that is", () => {
-    const [unnamed] = conversationsOf([run({})])
-    expect(unnamed.title).toBeNull()
+  it("is its first message until it has a title", () => {
+    const unnamed = conversation({})
     expect(nameOf(unnamed)).toBe("Open Notepad and type hello")
-
-    const [named] = conversationsOf([
-      run({ id: "r2", started: 3, title: "Typing in Notepad", goal: "again" }),
-      run({}),
-    ])
-    expect(named.title).toBe("Typing in Notepad")
-    expect(nameOf(named)).toBe("Typing in Notepad")
+    expect(nameOf(conversation({ title: "Typing in Notepad" }))).toBe(
+      "Typing in Notepad"
+    )
+    expect(nameOf(conversation({ goal: "" }))).toBe("r1")
   })
+})
 
-  it("is the latest run's title, where the user renamed it after the runtime named it", () => {
-    const [renamed] = conversationsOf([
-      run({ title: "Typing in Notepad" }),
-      run({ id: "r2", started: 3, title: "Notepad notes", goal: "again" }),
-      run({ id: "r3", started: 4, goal: "and again" }),
+describe("the lists in one", () => {
+  it("has each conversation once, as the list loaded last has it, most recently active first", () => {
+    const all = merged([
+      [
+        conversation({ id: "r1", last: 1 }),
+        conversation({ id: "r2", last: 2 }),
+      ],
+      [
+        conversation({ id: "r2", last: 2, project: "eval" }),
+        conversation({ id: "r3", last: 3 }),
+      ],
     ])
-    expect(renamed.title).toBe("Notepad notes")
+    expect(all.map((c) => [c.id, c.project])).toEqual([
+      ["r3", null],
+      ["r2", "eval"],
+      ["r1", null],
+    ])
+  })
+})
+
+describe("a conversation from its runs", () => {
+  it("is what the list shows for it: the first run's message and project, the latest title and run", () => {
+    const first = run({ id: "r1", project: "eval", title: "Notepad" })
+    const second = run({
+      id: "r2",
+      goal: "and save it",
+      started: 3,
+      ended: null,
+      title: null,
+    })
+    expect(conversationOf([first, second])).toEqual({
+      id: "r1",
+      project: "eval",
+      title: "Notepad",
+      goal: "Open Notepad and type hello",
+      last: 3,
+      latest: second,
+    })
+    expect(conversationOf([])).toBeNull()
   })
 })

@@ -16,13 +16,24 @@ from pathlib import Path
 from PIL import Image
 
 
-def read_events(run: Path) -> list[dict]:
-    """A copied run folder's complete events, off its steps.jsonl (as `computer-use export` writes it)."""
+def lines_of_log(log: Path) -> list[dict]:
     try:
-        text = (run / "steps.jsonl").read_text(encoding="utf-8")
+        text = (log / "steps.jsonl").read_text(encoding="utf-8")
     except FileNotFoundError:
         return []
     return [json.loads(line) for line in text.split("\n")[:-1] if line]
+
+
+def read_events(run: Path) -> list[dict]:
+    """A copied run's complete events, as `computer-use export` writes them: of every log of its session (a folder
+    each, its turns' and its tasks'), in the order written, each with the id of its log ("log"); or, for a version
+    exported before turns and tasks had logs of their own, its one steps.jsonl."""
+    if (run / "steps.jsonl").exists() or not run.is_dir():
+        return lines_of_log(run)
+    logged = [(event["time"], n, i, event | {"log": log.name})
+              for n, log in enumerate(sorted(path for path in run.iterdir() if path.is_dir()))
+              for i, event in enumerate(lines_of_log(log))]
+    return [event for *_, event in sorted(logged, key=lambda each: each[:3])]
 
 THUMB_WIDTH = 480
 MODEL = "model"
@@ -117,17 +128,18 @@ def said(events: list[dict]) -> list[str]:
     ]
 
 
-def screen(path: Path, report_dir: Path) -> dict | None:
-    if not path.is_file():
+def screen(path: Path | None, report_dir: Path) -> dict | None:
+    if path is None or not path.is_file():
         return None
     href = path.relative_to(report_dir) if path.is_relative_to(report_dir) else path
     return {"src": thumb(path), "href": str(href)}
 
 
-def end_screen(run: Path, logged: str | None) -> Path:
-    """The last full screen of a run: the one taken after its last desktop task ended, not a zoomed-in crop."""
-    screens = sorted(path for path in run.glob("*.png") if "zoom" not in path.stem)
-    return screens[-1] if screens else run / (logged or "-")
+def end_screen(run: Path, logged: str | None) -> Path | None:
+    """Where the export put the run's last screen, named by its logs: in the folder of the last log with that name
+    (each log numbers its own screens, and logs sort in the order they began)."""
+    found = sorted(run.rglob(logged)) if logged else []
+    return found[-1] if found else None
 
 
 def run_data(row: dict, report_dir: Path) -> dict:

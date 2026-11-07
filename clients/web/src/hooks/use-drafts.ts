@@ -1,5 +1,7 @@
 import { useSyncExternalStore } from "react"
 
+import { store } from "@/lib/store"
+
 const KEY = "drafts"
 /** Whose draft a new task's is, before it has a conversation. */
 export const NEW_TASK = "new"
@@ -9,34 +11,32 @@ export const NEW_TASK = "new"
  * for this tab, so switching conversations or reloading the page leaves each where it was. Storage that fails (private
  * mode) keeps them for the visit. Held outside React, so a keystroke draws only the composer again, not the page.
  */
-let drafts: Record<string, string> = (() => {
-  try {
-    const stored = JSON.parse(sessionStorage.getItem(KEY) ?? "{}")
-    return stored && typeof stored === "object" ? stored : {}
-  } catch {
-    return {}
-  }
-})()
-const listeners = new Set<() => void>()
-
-function subscribe(listener: () => void) {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
-}
+const drafts = store<Record<string, string>>(
+  (() => {
+    try {
+      const stored = JSON.parse(sessionStorage.getItem(KEY) ?? "{}")
+      return stored && typeof stored === "object" ? stored : {}
+    } catch {
+      return {}
+    }
+  })()
+)
 
 export function setDraft(conversation: string, text: string) {
-  const next = { ...drafts }
+  const next = { ...drafts.get() }
   if (text) next[conversation] = text
   else delete next[conversation]
-  drafts = next
   try {
-    sessionStorage.setItem(KEY, JSON.stringify(drafts))
+    sessionStorage.setItem(KEY, JSON.stringify(next))
   } catch {
     // Not stored; the drafts still hold until the page reloads.
   }
-  for (const listener of listeners) listener()
+  drafts.set(next)
 }
 
 export function useDraft(conversation: string) {
-  return useSyncExternalStore(subscribe, () => drafts[conversation] ?? "")
+  return useSyncExternalStore(
+    drafts.subscribe,
+    () => drafts.get()[conversation] ?? ""
+  )
 }

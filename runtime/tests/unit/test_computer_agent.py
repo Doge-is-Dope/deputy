@@ -1,4 +1,4 @@
-"""The whole loop with scripted models: main agent -> computer_use -> computer-use agent -> guards -> tool -> executor
+"""The whole loop with scripted models: main agent -> start_task -> computer-use agent -> guards -> tool -> executor
 -> computer -> screenshot -> computer-use agent -> ... -> the main agent's reply."""
 
 import asyncio
@@ -8,13 +8,12 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import computer_use.agent.main_agent as main_agent
-from computer_use.prompts import notes
-from computer_use.prompts.computer import SYSTEM_PROMPT, system_prompt
+from computer_use.prompts.computer import DESKTOP_BUSY, SYSTEM_PROMPT, system_prompt
 import computer_use.desktop.executor
 from computer_use.agent.inbox import Inbox
 from computer_use.agent.history import tasks
-from conftest import run_turn
-from conftest import read_events, run_dir
+from conftest import run_turn, runs_dir
+from conftest import events_of, first_run, run_file, task_folder
 from computer_use.computers import ComputerError
 from computer_use.desktop.control import ControlFile, DesktopBusy, RunLock
 from conftest import (
@@ -24,7 +23,6 @@ from conftest import (
     fixture_png,
     handed_back,
     logged,
-    run_folder,
     telling,
     tool_call,
     use_script,
@@ -34,8 +32,9 @@ pytestmark = pytest.mark.usefixtures("the_log_is_the_whole_record")
 
 
 def notes_so_far(settings) -> list[str]:
-    logs = list((settings.data_dir / "runs").glob("*/steps.jsonl"))
-    return [event["text"] for event in read_events(logs[0].parent) if event["type"] == "note"] if logs else []
+    if not runs_dir(settings.data_dir).exists():
+        return []
+    return [event["text"] for event in events_of(settings, first_run(settings)) if event["type"] == "note"]
 
 
 async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, computer, monkeypatch):
@@ -67,7 +66,7 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
     assert "outside" in actions["c5"]["result"]
     for event in actions.values():
         if event["status"] == "success":
-            assert (run_dir(settings, result.run) / event["screenshot"]).exists()
+            assert run_file(settings, result.run, event["screenshot"]).exists()
     assert '1. Open Start. -> key {"text": "win"} -> success' in computer_use_result(result)["result"]
 
 
@@ -90,7 +89,7 @@ async def test_loop_runs_a_batch_as_one_tool_call(settings, computer, monkeypatc
     ]
     (batch,) = logged(result, "action")
     assert (batch["tool"], batch["status"]) == ("computer_batch", "success")
-    assert "\n4. Typed 8 characters." in batch["result"] and (run_dir(settings, result.run) / batch["screenshot"]).exists()
+    assert "\n4. Typed 8 characters." in batch["result"] and run_file(settings, result.run, batch["screenshot"]).exists()
     handback = computer_use_result(result)["result"]
     assert "4. Typed 8 characters." in handback
     assert "Earlier screen before action 1" in handback
@@ -109,7 +108,7 @@ async def test_handoff_images_use_task_action_numbers_after_an_earlier_delegatio
 
     result = await run_turn(settings, "type Draft, then replace it with Final", max_steps=10, computer=computer)
 
-    assert [event["n"] for event in logged(result, "action")] == [1, 2, 3]
+    assert [event["n"] for event in logged(result, "action")] == [1, 1, 2]  # each task numbers its own
     handoffs = [
         event["message"]["data"] for event in logged(result, "input", "main")
         if event["message"]["data"].get("additional_kwargs", {}).get("runtime", {}).get("event") == "task_ended"
@@ -136,7 +135,8 @@ async def test_loop_ends_at_the_step_limit_instead_of_crashing(settings, compute
     assert len(computer.calls) == 20
     assert len(logged(result, "action")) == 20
     assert result.computer == "step_limit"
-    assert [(event["stop_reason"], event["computer"]) for event in logged(result, "end")] == [("replied", "step_limit")]
+    ends = [(event["stop_reason"], event["computer"]) for event in logged(result, "end")]
+    assert ends == [("replied", None), ("ended", "step_limit"), ("replied", "step_limit")]  # turn, task, last turn
     handback = computer_use_result(result)["result"]
     assert "the runtime stopped it after 20 model calls" in handback
     # The model call limit closes the transcript with its own message, which is not the agent's reply.
@@ -226,10 +226,9 @@ async def test_the_log_records_tokens_per_model_call_and_in_total(settings, comp
         {"input": 1200, "cached": 0, "cache_write": 0, "output": 20, "reasoning": 0},
     ]
     # gpt-6-luna list prices: 1,600 plain input x $0.10 + 600 cached x $0.01 + 70 output x $0.50 per million.
-    summary = logged(result, "note")[-1]["text"]
-    for number in ["4 model calls", "2 by the main agent", "2,200 input", "600 cached", "70 output", "30 reasoning",
-                   "$0.0002"]:
-        assert number in summary
+    (task,) = [end for end in logged(result, "end") if end["stop_reason"] == "ended"]
+    assert task["usage"] == {"input": 2200, "cached": 600, "cache_write": 0, "output": 70, "reasoning": 30}
+    assert round(sum(task["cost"].values()), 4) == 0.0002
 
 
 async def test_loop_waits_while_the_user_has_control(settings, computer, monkeypatch, fast_polls):
@@ -243,7 +242,7 @@ async def test_loop_waits_while_the_user_has_control(settings, computer, monkeyp
     async def user_returns_control():
         # Once the agent waits for it: returned sooner, the agent's next step is refused as decided from an older screen.
         while "The user has control." not in "".join(
-            path.read_text() for path in (settings.data_dir / "runs").glob("*/steps.jsonl")
+            path.read_text() for path in runs_dir(settings.data_dir).glob("*/steps.jsonl")
         ):
             await asyncio.sleep(0.05)
         assert computer.calls == []
@@ -337,7 +336,7 @@ async def test_a_message_for_the_desktop_does_not_start_while_another_run_has_it
             )
 
     assert busy.value.run == "20261007-120000"
-    assert not (settings.data_dir / "runs").exists() and computer.calls == []
+    assert not runs_dir(settings.data_dir).exists() and computer.calls == []
     assert control.read().owner == "user"  # not handed to the agent: the other run would have carried on
 
 
@@ -356,10 +355,10 @@ async def test_other_messages_go_on_while_another_run_has_the_desktop(settings, 
     assert refused.computer is None and computer_model.received == []
     assert computer.calls == [] and computer.releases == 0
     handed = computer_use_result(refused)
-    assert handed["status"] == "error" and handed["result"] == notes.DESKTOP_BUSY
-    assert tasks(read_events(run_dir(settings, refused.run))) == []
-    end = logged(refused, "end")[0]
-    assert (end["stop_reason"], end["computer"]) == ("replied", None)
+    assert handed["status"] == "error" and handed["result"] == "Not executed: " + DESKTOP_BUSY
+    assert tasks(events_of(settings, refused.run)) == []
+    ends = logged(refused, "end")
+    assert [(end["stop_reason"], end["computer"]) for end in ends] == [("replied", None)]
 
 
 async def test_a_run_takes_the_desktop_when_it_first_uses_it_and_lets_go_at_the_end(settings, computer, monkeypatch):
@@ -374,7 +373,7 @@ async def test_a_run_takes_the_desktop_when_it_first_uses_it_and_lets_go_at_the_
 
     result = await run_turn(settings, "open start", max_steps=10, computer=computer)
 
-    assert [holder["run"] for holder in holders] == [result.run]
+    assert [holder["run"] for holder in holders] == [task_folder(settings, result.run, "t1").name]  # the task's log
     assert lock.holder() is None
     started = asyncio.Event()
 
@@ -420,16 +419,16 @@ async def test_a_stopped_run_still_ends_its_log_and_frees_the_desktop(settings, 
     with pytest.raises(asyncio.CancelledError):
         await run
 
-    folder = run_folder(settings)
-    ends = [event for event in read_events(folder) if event["type"] == "end"]
-    assert [(end["stop_reason"], end["summary"], end["computer"]) for end in ends] == [("cancelled", "", None)]
-    assert "error" not in ends[0] and "usage" in ends[0]
+    ends = [event for event in events_of(settings, first_run(settings)) if event["type"] == "end"]
+    # The turn that handed it over had ended; the task ends stopped.
+    assert [(end["stop_reason"], end["summary"], end["computer"]) for end in ends] == [("replied", "", None), ("stopped", "", None)]
+    assert "error" not in ends[1] and "usage" in ends[1]
     assert RunLock(settings.run_lock_path).holder() is None
 
 
 async def test_a_desktop_that_cannot_be_used_is_told_to_the_main_agent_which_replies(settings, computer, monkeypatch):
     computer_model, _ = use_script(monkeypatch, [AIMessage(content="never asked")], main=[
-        AIMessage(content="", tool_calls=[tool_call("m1", "computer_use", title="Task", task="Open Start.")]),
+        AIMessage(content="", tool_calls=[tool_call("m1", "start_task", agent="computer", title="Task", task="Open Start.")]),
         AIMessage("The desktop can't be reached right now."),
     ])
 
@@ -445,8 +444,10 @@ async def test_a_desktop_that_cannot_be_used_is_told_to_the_main_agent_which_rep
     assert handback["status"] == "success" and "the desktop could not be seen or used" in handback["result"]
     assert "No screenshot: the display is gone" in handback["result"]
     assert "Stopped: the desktop could not be used: the display is gone" in [n["text"] for n in logged(result, "note")]
-    end = logged(result, "end")[0]
-    assert (end["stop_reason"], end["computer"]) == ("replied", "error") and "error" not in end
+    ends = logged(result, "end")
+    (task,), last = [end for end in ends if end["stop_reason"] == "ended"], ends[-1]
+    assert (task["stop_reason"], task["computer"], last["stop_reason"], last["computer"]) == ("ended", "error", "replied", "error")
+    assert "error" not in task and "error" not in last
 
 
 async def test_a_run_whose_main_agent_fails_ends_its_log_with_the_error(settings, computer, monkeypatch):
@@ -459,8 +460,7 @@ async def test_a_run_whose_main_agent_fails_ends_its_log_with_the_error(settings
     with pytest.raises(RuntimeError):
         await run_turn(settings, "open start", max_steps=10, computer=computer)
 
-    folder = run_folder(settings)
-    end = read_events(folder)[-1]
+    end = events_of(settings, first_run(settings))[-1]
     assert (end["type"], end["stop_reason"], end["error"]) == ("end", "error", "RuntimeError: the model API is down")
     assert end["error_code"] == "E-UNKNOWN"
     assert RunLock(settings.run_lock_path).holder() is None
@@ -575,9 +575,11 @@ def test_the_prompt_names_the_language_the_user_reads(locale, language):
     )
 
 
-def test_the_prompt_asks_for_updates_only_as_a_task_starts_and_its_phases_change():
-    """OpenAI's wording for updates in long tool-heavy tasks (Prompting guidance for GPT-5.6 Sol); without it the agent
-    said nothing in 60 of 60 steps (2026-10-19)."""
-    assert "send a one- or two-sentence user-visible update that states the first step" in SYSTEM_PROMPT
+def test_the_prompt_asks_for_updates_only_as_its_phases_change():
+    """OpenAI's wording for updates in long tool-heavy tasks (Prompting guidance for GPT-5.6 Sol), less the update at the
+    start, which the main agent gives as it hands the task over; without it the agent said nothing in 60 of 60 steps
+    (2026-10-19)."""
+    assert "user-visible update only when a major phase begins" in SYSTEM_PROMPT
+    assert "states the first step" not in SYSTEM_PROMPT
     assert "routine steps need no narration" not in SYSTEM_PROMPT
     assert system_prompt(None) == SYSTEM_PROMPT

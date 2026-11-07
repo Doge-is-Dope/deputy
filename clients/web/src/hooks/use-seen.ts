@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react"
 
-import type { RunSummary } from "@/lib/api"
+import type { Conversation } from "@/lib/api"
 
 const KEY = "seen"
 
@@ -35,11 +35,14 @@ function load(): Seen | null | undefined {
  * the browser's, so the two clocks need not agree. The first time, everything that has already ended counts as seen,
  * so older conversations are not all marked at once. A browser that keeps nothing marks nothing.
  */
-export function useSeen(runs: RunSummary[] | null) {
+export function useSeen(conversations: Conversation[] | null) {
   const [seen, setSeen] = useState(load)
-  if (seen === undefined && runs)
+  if (seen === undefined && conversations)
     setSeen({
-      since: Math.max(0, ...runs.map((run) => run.ended ?? run.started)),
+      since: Math.max(
+        0,
+        ...conversations.map(({ latest }) => latest.ended ?? latest.started)
+      ),
       at: {},
     })
 

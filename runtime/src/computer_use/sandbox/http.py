@@ -5,8 +5,7 @@ import time
 
 import httpx
 
-from computer_use.computers import Status
-from computer_use.sandbox import CodeRunnerError, RunOutput
+from computer_use.sandbox import CodeRunnerError, RunOutput, Status
 
 # How long a status read stands, so the settings page, which asks every second or two, does not ask the runner as often.
 STATUS_SECONDS = 30.0
@@ -35,14 +34,16 @@ class HttpCodeRunner:
         self._status = (time.monotonic(), status)
         return status
 
-    async def run(self, thread: str, script: str, seconds: float) -> RunOutput:
-        """Run a script with bash in the conversation's folder. A task stopped meanwhile stops the command too."""
+    async def run(self, thread: str, task: str, script: str, seconds: float) -> RunOutput:
+        """Run a script for a task with bash in the conversation's folder. A task stopped meanwhile stops its command
+        too, and only its own."""
         try:
             body = await self._request(
-                "POST", "/run", {"thread": thread, "script": script, "seconds": seconds}, timeout=seconds + REQUEST_SECONDS
+                "POST", "/run", {"thread": thread, "task": task, "script": script, "seconds": seconds},
+                timeout=seconds + REQUEST_SECONDS,
             )
         except asyncio.CancelledError:
-            await asyncio.shield(self.stop(thread))
+            await asyncio.shield(self.stop(task))
             raise
         return RunOutput(body["code"], body["output"], body["cut"])
 
@@ -50,11 +51,24 @@ class HttpCodeRunner:
         body = await self._request("POST", "/write", {"thread": thread, "path": path, "content": content})
         return f"Wrote {body['path']} ({body['bytes']} bytes)."
 
-    async def stop(self, thread: str) -> None:
+    async def stop(self, task: str) -> None:
         try:
-            await self._request("POST", "/stop", {"thread": thread})
+            await self._request("POST", "/stop", {"task": task})
         except CodeRunnerError:  # nothing more to do: it stops itself once the command's time is up
             pass
+
+    async def read(self, thread: str, path: str) -> bytes:
+        try:
+            response = await self._client.get("/files", params={"thread": thread, "path": path})
+        except httpx.HTTPError as error:
+            raise CodeRunnerError(f"{type(error).__name__}: {error}") from error
+        if response.status_code == 404:
+            raise FileNotFoundError(path)
+        if response.status_code == 400:
+            raise ValueError(response.json().get("error", "refused"))
+        if response.status_code != 200:
+            raise CodeRunnerError(f"HTTP {response.status_code}: {response.text[:200]}")
+        return response.content
 
     async def close(self) -> None:
         await self._client.aclose()

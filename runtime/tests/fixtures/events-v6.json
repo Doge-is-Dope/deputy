@@ -1,0 +1,175 @@
+{
+  "records": [
+    [
+      {
+        "type": "start",
+        "v": 6,
+        "run": "turn-1",
+        "thread": "turn-1",
+        "goal": "Open the report",
+        "computer": true,
+        "time": 100,
+        "kind": "turn",
+        "session": "turn-1"
+      },
+      {
+        "type": "note",
+        "code": "goal",
+        "text": "Goal: Open the report",
+        "time": 100
+      },
+      {
+        "type": "model",
+        "agent": "main",
+        "text": "I will open it.",
+        "tool_calls": [
+          {
+            "name": "start_task",
+            "args": {
+              "agent": "computer",
+              "task": "Open the report"
+            }
+          }
+        ],
+        "time": 101
+      },
+      {
+        "type": "task",
+        "state": "started",
+        "id": "t1",
+        "agent": "computer",
+        "brief": "Open the report",
+        "title": "Open the report",
+        "time": 102,
+        "record": "task-1"
+      },
+      {
+        "type": "action",
+        "agent": "main",
+        "n": 1,
+        "id": "handoff",
+        "tool": "start_task",
+        "args": {
+          "agent": "computer",
+          "task": "Open the report"
+        },
+        "status": "success",
+        "result": "Task started.",
+        "reason": null,
+        "screenshot": null,
+        "time": 102
+      },
+      {
+        "type": "end",
+        "stop_reason": "replied",
+        "computer": null,
+        "summary": "I will open it.",
+        "time": 102
+      }
+    ],
+    [
+      {
+        "type": "start",
+        "v": 6,
+        "kind": "task",
+        "run": "task-1",
+        "thread": "turn-1",
+        "session": "turn-1",
+        "parent": "turn-1",
+        "id": "t1",
+        "agent": "computer",
+        "goal": "Open the report",
+        "title": "Open the report",
+        "time": 102
+      },
+      {
+        "type": "model",
+        "text": "Open the report window.",
+        "tool_calls": [
+          {
+            "name": "left_click",
+            "args": {
+              "coordinate": [
+                50,
+                60
+              ]
+            }
+          }
+        ],
+        "time": 103
+      },
+      {
+        "type": "action",
+        "n": 1,
+        "id": "click-1",
+        "tool": "left_click",
+        "args": {
+          "coordinate": [
+            50,
+            60
+          ]
+        },
+        "status": "error",
+        "result": "The screen moved; decide again.",
+        "reason": "screenChanged",
+        "screenshot": "001-left_click.png",
+        "time": 104
+      },
+      {
+        "type": "note",
+        "code": "userControl",
+        "text": "Desktop paused.",
+        "time": 105
+      },
+      {
+        "type": "note",
+        "code": "controlReturned",
+        "data": {
+          "seconds": 4
+        },
+        "text": "Desktop resumed.",
+        "time": 109
+      },
+      {
+        "type": "model",
+        "text": "The report is open.",
+        "tool_calls": [],
+        "time": 110
+      },
+      {
+        "type": "end",
+        "stop_reason": "ended",
+        "computer": "replied",
+        "summary": "The report is open.",
+        "time": 110
+      }
+    ],
+    [
+      {
+        "type": "start",
+        "v": 6,
+        "kind": "turn",
+        "run": "turn-2",
+        "thread": "turn-1",
+        "session": "turn-1",
+        "goal": "",
+        "computer": false,
+        "time": 110
+      },
+      {
+        "type": "model",
+        "agent": "main",
+        "text": "The report is open.",
+        "tool_calls": [],
+        "time": 111
+      },
+      {
+        "type": "end",
+        "stop_reason": "replied",
+        "summary": "The report is open.",
+        "time": 111,
+        "computer": "replied"
+      }
+    ]
+  ]
+}

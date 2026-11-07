@@ -84,8 +84,9 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   )
 }
 
-/** Asks one thing: a title, what it needs under it, then Cancel and the one action at the right. Cancel closes it;
- * the action leaves closing to the caller, which may keep it open (a name still empty). */
+/** Asks one thing: a title, what it needs under it, then Cancel and the one action at the right. It opens on the action
+ * unless the caller focuses something else (a name to give). Cancel closes it; the action leaves closing to the caller,
+ * which may keep it open (a name still empty). */
 function ActionDialog({
   open,
   onOpenChange,
@@ -93,7 +94,6 @@ function ActionDialog({
   action,
   onAction,
   destructive = false,
-  disabled = false,
   initialFocus,
   finalFocus,
   className,
@@ -105,18 +105,18 @@ function ActionDialog({
   action: string
   onAction: () => void
   destructive?: boolean
-  disabled?: boolean // the action, until what it needs is given
   initialFocus?: DialogPrimitive.Popup.Props["initialFocus"]
   finalFocus?: DialogPrimitive.Popup.Props["finalFocus"]
   className?: string
   children?: React.ReactNode
 }) {
   const t = useT()
+  const actionButton = React.useRef<HTMLButtonElement>(null)
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        initialFocus={initialFocus}
+        initialFocus={initialFocus ?? actionButton}
         finalFocus={finalFocus}
         className={className}
       >
@@ -127,8 +127,8 @@ function ActionDialog({
             {t.common.cancel}
           </DialogPrimitive.Close>
           <Button
+            ref={actionButton}
             variant={destructive ? "destructive" : "default"}
-            disabled={disabled}
             onClick={onAction}
           >
             {action}

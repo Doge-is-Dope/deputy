@@ -16,18 +16,13 @@ printed, and fix the script until it does the task.
 """
 
 
-# Its hand-over tool's description, and what that tool's task argument should say.
-DESCRIPTION = (
-    "Delegate a task to write and run code. On completion, the runtime reports how it stopped, its final message "
-    "and its steps with their printed output."
+# Its line in start_task's description.
+ABOUT = (
+    "writes and runs bash and Python in a separate Linux environment, for calculations and data processing. It has "
+    "no internet and no access to the Windows desktop or its files: write out in the brief all the data it needs, "
+    "and what to report. When it ends, the runtime reports how it stopped, its final message and its steps with their "
+    "printed output: verify its results from these."
 )
-BRIEF = "The goal; the data it needs, written out in full; what to report."
-# Its part of the main agent's system prompt.
-ABOUT = """\
-- write_code handles calculations and data processing with bash and Python in a separate Linux environment, \
-without internet or access to the Windows desktop or its files. Provide all needed data in the task. Verify results \
-from its steps and printed output.
-"""
 
 
 def stopped(reason: str, max_steps: int) -> str:

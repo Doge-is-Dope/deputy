@@ -18,25 +18,60 @@ from pyee.asyncio import AsyncIOEventEmitter
 
 import computer_use.agent.main_agent as main_agent
 import computer_use.agent.title as title
-from computer_use.prompts import notes
+import computer_use.server as server
+from computer_use.prompts.computer import DESKTOP_ASKED, DESKTOP_BUSY
 from computer_use.desktop import webrtc
-from computer_use.desktop.control import RunLock
+from computer_use.desktop.control import ControlFile, RunLock
 from computer_use.desktop.webrtc import ScreenShare, ScreenTrack
-from computer_use.runner import Runner
 from computer_use.agent.history import has_title
-from computer_use.storage.files import FileRunStore
+from computer_use.storage.files import FileRuns
+from computer_use.storage.mongo import MongoRuns
 from computer_use.server import create_app
 from computer_use.computers import ComputerError
-from computer_use.storage import summarize
+from computer_use.config import Settings
+from computer_use.adapters import build_stores
+from computer_use.runner import Runner
+from computer_use.storage import FORMAT, LOCAL_USER, summarize
 from computer_use.streaming import LiveStream
-from conftest import SCRIPTED_TITLE, read_events, run_dir, ScriptedModel, StreamingModel, delegate, tool_call, use_script
+from conftest import (
+    runner_of,
+    DATABASES, SCRIPTED_TITLE, ScriptedModel, StreamingModel, delegate, listed_runs, listed_sessions, settings_for, tool_call,
+    use_script,
+)
+
+
+@pytest.fixture(params=DATABASES)
+def settings(request, tmp_path) -> Settings:
+    """The server on each store: files, then each database."""
+    return settings_for(tmp_path, request.getfixturevalue("mongo_url") if request.param == "mongo" else "")
 
 
 @pytest.fixture
 async def client(settings, computer):
     app = create_app(settings, max_steps=10, computer=computer)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost",
+    ) as client:
         yield client
+
+
+@pytest.fixture
+async def runs(settings):
+    """The local user's runs in the server's store, as another process sees them."""
+    store, _, _ = build_stores(settings)
+    yield store.of(LOCAL_USER)
+    await store.close()
+
+
+async def logged(client, run: str) -> list[dict]:
+    """The run's events, as the server reads them back."""
+    return [data for kind, data in sse((await client.get(f"/api/runs/{run}/events?full=1")).text) if kind != "done"]
+
+
+async def png(runs, run: str, name: str, size: tuple[int, int], color: str = "black") -> None:
+    data = io.BytesIO()
+    Image.new("RGB", size, color).save(data, format="PNG")
+    await runs.put_file(run, name, data.getvalue())
 
 
 async def until_idle(client) -> dict:
@@ -46,6 +81,54 @@ async def until_idle(client) -> dict:
             return status
         await asyncio.sleep(0.01)
     raise AssertionError("the run did not end")
+
+
+async def test_the_agent_uses_the_control_supplied_by_the_server(settings, computer, monkeypatch):
+    control = ControlFile(settings.data_dir / "injected-control.json")
+    control.write("user", "manual work")
+    monkeypatch.setattr(server, "build_control", lambda _: control)
+    monkeypatch.setattr(server, "build_code_runner", lambda _: None)
+    use_script(monkeypatch, [AIMessage("Checked the screen.")])
+    app = create_app(settings, max_steps=10, computer=computer)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost",
+    ) as api:
+        response = await api.post("/api/runs", json={"goal": "check the screen", "computer": True, "take_control": True})
+        assert response.status_code == 201
+        status = await until_idle(api)
+        assert status["error"] is None
+        assert control.read().allows_input("agent")
+        assert not settings.control_path.exists()
+
+
+async def test_generated_files_download_as_attachments(settings, computer, code_runner, monkeypatch):
+    from unittest.mock import AsyncMock
+    from computer_use.sandbox import CodeRunnerError
+
+    data = "方案,金額\nA,90720\n".encode()
+    code_runner.read = AsyncMock(return_value=data)
+    monkeypatch.setattr("computer_use.server.build_code_runner", lambda _: code_runner)
+    use_script(monkeypatch, [], main=[AIMessage("Done.")])
+    app = create_app(settings, max_steps=10, computer=computer)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost",
+    ) as api:
+        thread = (await api.post("/api/runs", json={"goal": "make a budget"})).json()["thread"]
+        await until_idle(api)
+        url = f"/api/conversations/{thread}/files/報表/年度 預算.csv"
+        response = await api.get(url)
+        assert response.status_code == 200 and response.content == data
+        assert response.headers["content-type"] == "application/octet-stream"
+        assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''%E5%B9%B4%E5%BA%A6%20%E9%A0%90%E7%AE%97.csv"
+        assert response.headers["cache-control"] == "private, no-store"
+        code_runner.read.assert_awaited_once_with(thread, "報表/年度 預算.csv")
+        for error, status in [(FileNotFoundError(), 404), (ValueError("refused"), 400), (CodeRunnerError(), 503)]:
+            code_runner.read.side_effect = error
+            assert (await api.get(url)).status_code == status
+        await api.delete(f"/api/conversations/{thread}")
+        code_runner.read.reset_mock()
+        assert (await api.get(url)).status_code == 404
+        code_runner.read.assert_not_called()
 
 
 def sse(text: str) -> list[tuple[str, dict]]:
@@ -69,32 +152,44 @@ async def test_a_run_streams_its_events_and_shows_in_the_list(client, monkeypatc
     await until_idle(client)
 
     assert created.status_code == 201
+    # The first turn's stream: the message, the hand-over, and its end once it handed the task over.
     events = sse((await client.get(f"/api/runs/{run}/events")).text)
     assert events[0][1] | {"time": 0} == {
-        "type": "start", "v": 4, "run": run, "thread": run, "goal": "open start", "time": 0,
-        "model": "openai:gpt-6.1-terra", "main_model": "openai:gpt-6.1-terra", "computer": False, "approvals": "ask", "project": None,
-        "user": "local",
+        "type": "start", "v": FORMAT, "kind": "turn", "run": run, "thread": run, "session": run, "goal": "open start",
+        "time": 0, "model": "openai:gpt-6.1-terra", "main_model": "openai:gpt-6.1-terra", "computer": False,
+        "approvals": "ask", "project": None, "user": "local",
     }
-    assert events[-2][1] | {"time": 0, "usage": {}, "cost": {}, "agents": []} == {
-        "type": "end", "stop_reason": "replied", "computer": "replied", "summary": "Done.", "time": 0, "usage": {},
+    end = next(data for _, data in events if data.get("type") == "end")  # the title may come after it
+    assert end | {"time": 0, "usage": {}, "cost": {}, "agents": []} == {
+        "type": "end", "stop_reason": "replied", "computer": None, "summary": "", "time": 0, "usage": {},
         "cost": {}, "agents": [],
     }
     assert events[-1][0] == "done"
-    action = next(data for _, data in events if data.get("type") == "action" and data.get("agent") != "main")
-    image = await client.get(f"/api/runs/{run}/files/{action['screenshot']}")
-    assert (image.status_code, image.headers["content-type"]) == (200, "image/png")
     assert not any("message" in data for _, data in events)
     full = sse((await client.get(f"/api/runs/{run}/events?full=1")).text)
     assert any("message" in data for _, data in full) and len(full) == len(events)
     resumed = sse((await client.get(f"/api/runs/{run}/events", headers={"Last-Event-ID": "2"})).text)
     assert len(resumed) == len(events) - 3
-    listed = (await client.get("/api/runs")).json()
-    # Its actions on the desktop: the key, not the main agent's handing the task over.
-    assert listed[0]["ended"] >= listed[0]["started"]
-    assert listed[0] | {"started": 0, "ended": 0} == {
-        "id": run, "thread": run, "goal": "open start", "title": SCRIPTED_TITLE, "started": 0, "actions": 1,
-        "ended": 0, "failed": False, "project": None, "user": "local",
+    # The task's own stream, which the turn names: its action on the desktop, with its screen.
+    (task,) = [data["record"] for _, data in events if data.get("type") == "task"]
+    worked = sse((await client.get(f"/api/runs/{task}/events")).text)
+    assert worked[0][1]["kind"] == "task" and worked[0][1]["parent"] == run
+    action = next(data for _, data in worked if data.get("type") == "action")
+    image = await client.get(f"/api/runs/{task}/files/{action['screenshot']}")
+    assert (image.status_code, image.headers["content-type"]) == (200, "image/png")
+    listed = await listed_runs(client)
+    # The conversation's logs, newest first: the turn the task's end woke, the task with its action, the first turn.
+    assert [(each["kind"], each["actions"]) for each in listed] == [("turn", 0), ("task", 1), ("turn", 0)]
+    first = listed[-1]
+    assert first["ended"] >= first["started"]
+    assert first | {"started": 0, "ended": 0} == {
+        "id": run, "thread": run, "kind": "turn", "session": run, "parent": None, "goal": "open start",
+        "title": SCRIPTED_TITLE, "started": 0,
+        "actions": 0, "ended": 0, "failed": False, "project": None,
     }
+    last = [data for _, data in sse((await client.get(f"/api/runs/{listed[0]['id']}/events")).text)]
+    (ended,) = [data for data in last if data.get("type") == "end"]
+    assert ended["summary"] == "Done." and ended["computer"] == "replied"
 
 
 async def test_the_reply_being_written_follows_the_log_unnumbered_until_it_is_logged(client, monkeypatch):
@@ -153,52 +248,49 @@ async def test_fast_reply_reaches_an_active_viewer_before_completion_without_sho
     assert frames[-1][0] == "done"
 
 
-async def test_a_screenshot_comes_as_a_small_webp_for_a_thumbnail(client, settings):
-    folder = settings.data_dir / "runs" / "r1"
-    folder.mkdir(parents=True)
-    (folder / "steps.jsonl").write_text(json.dumps({"type": "start", "v": 4, "thread": "r1", "goal": "go", "time": 0}) + "\n")
-    Image.new("RGB", (1280, 800), "navy").save(folder / "001-key.png")
+async def test_a_screenshot_comes_as_a_small_webp_for_a_thumbnail(client, runs):
+    run = await runs.create()
+    runs.append(run, {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": run, "goal": "go"})
+    await runs.flush(run)
+    await png(runs, run, "001-key.png", (1280, 800), "navy")
 
-    small = await client.get("/api/runs/r1/files/001-key.png?w=160")
-    full = await client.get("/api/runs/r1/files/001-key.png")
+    small = await client.get(f"/api/runs/{run}/files/001-key.png?w=160")
+    full = await client.get(f"/api/runs/{run}/files/001-key.png")
 
     assert (small.status_code, small.headers["content-type"]) == (200, "image/webp")
     assert "immutable" in small.headers["cache-control"]
     with Image.open(io.BytesIO(small.content)) as image:
         assert image.size == (160, 100)
     assert len(small.content) < len(full.content)
-    assert (await client.get("/api/runs/r1/files/001-key.png?w=10")).status_code == 400
-    assert (await client.get("/api/runs/r1/files/001-key.png?w=big")).status_code == 400
+    assert (await client.get(f"/api/runs/{run}/files/001-key.png?w=10")).status_code == 400
+    assert (await client.get(f"/api/runs/{run}/files/001-key.png?w=big")).status_code == 400
 
 
-async def test_unsupported_logs_are_hidden_and_direct_access_is_rejected_without_changing_them(client, settings):
+async def test_unsupported_logs_are_hidden_and_direct_access_is_rejected_without_changing_them(client, runs):
     logs = {}
-    for name, first in (
-        ("legacy", {"type": "note", "text": "Goal: old goal"}),
-        ("v1", {"type": "start", "v": 1, "goal": "old goal"}),
-        ("v2", {"type": "start", "v": 2, "goal": "old goal"}),
-        ("v3", {"type": "start", "v": 3, "goal": "old goal"}),
-        ("future", {"type": "start", "v": 5, "goal": "future goal"}),
+    for first in (
+        {"type": "note", "text": "Goal: old goal"},
+        {"type": "start", "v": 1, "goal": "old goal"},
+        {"type": "start", "v": 2, "goal": "old goal"},
+        {"type": "start", "v": 3, "goal": "old goal"},
+        {"type": "start", "v": FORMAT + 1, "goal": "future goal"},
     ):
-        folder = settings.data_dir / "runs" / name
-        folder.mkdir(parents=True)
-        log = folder / "steps.jsonl"
-        logs[log] = json.dumps(first) + "\n"
-        log.write_text(logs[log])
-        Image.new("RGB", (20, 20)).save(folder / "001-key.png")
+        run = await runs.create()
+        logs[run] = [runs.append(run, first)]
+        await runs.flush(run)
+        await png(runs, run, "001-key.png", (20, 20))
 
-    assert (await client.get("/api/runs")).json() == []
-    for path, original in logs.items():
-        run = path.parent.name
+    assert await listed_sessions(client) == []
+    for run, original in logs.items():
         assert (await client.get(f"/api/runs/{run}/events")).status_code == 404
         assert (await client.get(f"/api/runs/{run}/files/001-key.png")).status_code == 404
         assert (await client.post(f"/api/runs/{run}/stop")).status_code == 404
         assert (await client.post("/api/runs", json={"goal": "continue", "thread": run})).status_code == 404
-        assert path.read_text() == original
+        assert await runs.events(run) == original
 
 
 def test_the_list_names_a_run_by_its_title_once_it_has_one(tmp_path):
-    start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10}
+    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10}
     named = {"type": "title", "text": "Opening Start", "usage": {}, "seconds": 1.2, "time": 12}
     assert asdict(summarize("r1", [start]))["title"] is None
     assert asdict(summarize("r1", [start, named]))["title"] == "Opening Start"
@@ -216,7 +308,7 @@ async def test_a_conversation_begun_in_a_project_on_the_page_is_listed_under_it(
     thread = created.json()["thread"]
     assert (await client.post("/api/runs", json={"goal": "more", "thread": thread, "project": "x"})).status_code == 201
     await until_idle(client)
-    listed = sorted((await client.get("/api/runs")).json(), key=lambda item: item["started"])
+    listed = sorted(await listed_sessions(client), key=lambda item: item["started"])
     assert [item["project"] for item in listed] == [project["id"], None]
     assert (await client.post("/api/runs", json={"goal": "reply", "project": "nope"})).status_code == 404
 
@@ -228,7 +320,22 @@ async def test_the_command_line_names_a_project_which_is_made_once(client, monke
         await until_idle(client)
     (project,) = (await client.get("/api/projects")).json()
     assert project["name"] == "eval"
-    assert [item["project"] for item in (await client.get("/api/runs")).json()] == [project["id"]] * 2
+    assert [item["project"] for item in await listed_sessions(client)] == [project["id"]] * 2
+
+
+async def test_deleting_a_project_erases_every_conversation_in_it(client, monkeypatch):
+    for goal in ("one", "two", "three"):
+        use_script(monkeypatch, [AIMessage(content="Done.")])
+        assert (await client.post("/api/runs", json={"goal": goal, "project_name": "eval"})).status_code == 201
+        await until_idle(client)
+    use_script(monkeypatch, [AIMessage(content="Done.")])
+    assert (await client.post("/api/runs", json={"goal": "kept"})).status_code == 201
+    await until_idle(client)
+    (project,) = (await client.get("/api/projects")).json()
+    deleted = await client.delete(f"/api/projects/{project['id']}")
+    assert deleted.status_code == 200 and len(deleted.json()["conversations"]) == 3
+    assert [item["goal"] for item in await listed_sessions(client)] == ["kept"]
+    assert (await client.get("/api/projects")).json() == []
 
 
 async def test_a_project_keeps_its_id_when_renamed_and_names_are_one_each(client):
@@ -243,18 +350,16 @@ async def test_a_project_keeps_its_id_when_renamed_and_names_are_one_each(client
     assert (await client.delete(f"/api/projects/{other['id']}")).status_code == 200
     assert (await client.delete(f"/api/projects/{other['id']}")).status_code == 404
     assert [each["name"] for each in (await client.get("/api/projects")).json()] == ["大客戶"]
-    assert (await client.post(f"/api/projects/{other['id']}/restore")).json()["id"] == other["id"]
-    assert (await client.post(f"/api/projects/{other['id']}/restore")).status_code == 404
 
 
 def test_the_list_says_which_project_a_run_was_started_in(tmp_path):
-    start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10}
+    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10}
     assert asdict(summarize("r1", [start]))["project"] is None
     assert asdict(summarize("r1", [start | {"project": "p1"}]))["project"] == "p1"
 
 
 def test_the_list_says_when_a_run_ended_and_whether_it_failed(tmp_path):
-    start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10}
+    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10}
 
     def ended(reason: str) -> dict:
         return {"type": "end", "stop_reason": reason, "time": 25}
@@ -278,6 +383,28 @@ def blocking_press(computer) -> tuple[asyncio.Event, asyncio.Event, list]:
     return held, pressing, presses
 
 
+async def test_a_task_is_stopped_by_its_log_and_the_conversation_goes_on(client, computer, monkeypatch):
+    held, pressing, _ = blocking_press(computer)
+    use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")])], main=[
+        delegate(), AIMessage("You stopped it."),
+    ])
+    run = (await client.post("/api/runs", json={"goal": "open start"})).json()["id"]
+    await pressing.wait()
+    (task,) = (await client.get("/api/status")).json()["running"][0]["tasks"]
+
+    ended_turn = await client.post(f"/api/runs/{run}/stop")  # its first turn ended once it handed the task over
+    stopped = await client.post(f"/api/runs/{task}/stop")
+    await until_idle(client)
+    held.set()
+
+    assert (ended_turn.status_code, stopped.status_code) == (409, 200)
+    worked = [data for _, data in sse((await client.get(f"/api/runs/{task}/events")).text)]
+    assert [data["stop_reason"] for data in worked if data.get("type") == "end"] == ["stopped"]
+    # The session ends without the main agent woken for it: it hears of the stop the next time it is asked.
+    assert [each["kind"] for each in await listed_runs(client)] == ["task", "turn"]
+    assert (await client.post(f"/api/conversations/{run}/stop")).status_code == 409
+
+
 async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conversation(client, computer, monkeypatch):
     held, pressing, presses = blocking_press(computer)
     use_script(monkeypatch, [
@@ -290,19 +417,26 @@ async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conve
     )
     run = (first if first.status_code == 201 else second).json()["id"]
 
-    busy = await client.post("/api/runs", json={"goal": "@Computer something else"})
     await pressing.wait()
+    busy = await client.post("/api/runs", json={"goal": "@Computer something else"})
     status = (await client.get("/api/status")).json()
-    stopped = await client.post(f"/api/runs/{run}/stop")
+    stopped = await client.post(f"/api/conversations/{run}/stop")
     events = sse((await client.get(f"/api/runs/{run}/events")).text)
 
     assert sorted([first.status_code, second.status_code]) == [201, 409]
-    assert busy.status_code == 409 and busy.json() | {"error": ""} == {"error": "", "reason": "desktop", "run": run}
-    assert (status["active"], status["running"]) == (run, [{"run": run, "thread": run, "pending": []}])
-    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]
+    # The desktop is held by the task at work on it, by its log.
+    (task,) = status["running"][0]["tasks"]
+    assert busy.status_code == 409 and busy.json() | {"error": ""} == {"error": "", "reason": "desktop", "run": task}
+    assert (status["active"], status["running"]) == (
+        task, [{"run": run, "thread": run, "goal": "@Computer open start", "turn": None, "tasks": [task], "pending": [], "queued": [], "read": []}]
+    )
+    assert [item["id"] for item in await listed_sessions(client)] == [run]
     assert stopped.status_code == 200 and (await until_idle(client))["error"] is None
+    # The turn that handed the task over had ended; stopping the run stops the task.
     ends = [data for _, data in events if data.get("type") == "end"]
-    assert [end["stop_reason"] for end in ends] == ["cancelled"] and events[-1][0] == "done"
+    assert [end["stop_reason"] for end in ends] == ["replied"] and events[-1][0] == "done"
+    worked = [data for _, data in sse((await client.get(f"/api/runs/{task}/events")).text)]
+    assert [data["stop_reason"] for data in worked if data.get("type") == "end"] == ["stopped"]
     held.set()
     use_script(monkeypatch, [AIMessage(content="Done.")], main=[
         delegate(call_id="m2"), AIMessage("Done."),
@@ -312,11 +446,11 @@ async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conve
     events = [data for _, data in sse((await client.get(f"/api/runs/{again}/events")).text)]
     assert (events[0]["thread"], events[0]["goal"]) == (run, "open start")
     stopped_with_it = [
-        event for _, event in sse((await client.get(f"/api/runs/{run}/events?full=1")).text)
+        event for _, event in sse((await client.get(f"/api/runs/{again}/events?full=1")).text)
         if event.get("message", {}).get("data", {}).get("additional_kwargs", {}).get("runtime", {}).get("event")
         == "task_stopped"
     ]
-    assert len(stopped_with_it) == 1  # the next run hears that its task stopped with it
+    assert len(stopped_with_it) == 1  # the next session hears, as it opens, that its task stopped with it
     assert len(presses) == 1
 
 
@@ -338,7 +472,7 @@ async def test_other_conversations_go_on_while_one_uses_the_desktop(client, sett
     refused = await client.post("/api/runs", json={"goal": "open notepad", "thread": question["thread"]})
     for _ in range(200):
         running = (await client.get("/api/status")).json()["running"]
-        if running == [{"run": desktop, "thread": desktop, "pending": []}]:
+        if running == [{"run": desktop, "thread": desktop, "pending": [], "queued": [], "read": []}]:
             break
         await asyncio.sleep(0.01)
     again = await client.post("/api/runs", json={"goal": "next", "thread": desktop})
@@ -349,14 +483,14 @@ async def test_other_conversations_go_on_while_one_uses_the_desktop(client, sett
     assert next(data for _, data in answered if data.get("type") == "end")["summary"] == "Paris."
     events = [data for _, data in sse((await client.get(f"/api/runs/{refused.json()['id']}/events")).text)]
     handed = next(event for event in events if event.get("type") == "action")
-    assert (handed["status"], handed["result"]) == ("error", notes.DESKTOP_BUSY)
+    assert (handed["status"], handed["result"]) == ("error", "Not executed: " + DESKTOP_BUSY)
     end = next(event for event in events if event.get("type") == "end")
     assert (end["stop_reason"], end["computer"]) == ("replied", None)
     assert again.status_code == 202 and again.json()["id"] == desktop  # it goes to that run, stopped below
     assert forced.status_code == 409 and forced.json()["reason"] == "desktop"
     assert computer.calls == []  # only the first task's key press, which never finished
     held.set()
-    await client.post(f"/api/runs/{desktop}/stop")
+    await client.post(f"/api/conversations/{desktop}/stop")
     await until_idle(client)
 
 
@@ -377,8 +511,7 @@ async def test_a_conversation_takes_one_message_at_a_time(client, computer, monk
     refused = first if first.status_code == 409 else second
     assert refused.json()["reason"] == "conversation"
     assert (await client.delete(f"/api/conversations/{thread}")).json()["reason"] == "conversation"
-    run = (first if first.status_code == 201 else second).json()["id"]
-    await client.post(f"/api/runs/{run}/stop")
+    await client.post(f"/api/conversations/{thread}/stop")
     held.set()
     await until_idle(client)
 
@@ -412,13 +545,14 @@ async def test_a_message_sent_while_the_conversation_works_goes_to_its_run(
     await until_idle(client)
 
     assert sent.status_code == 202 and sent.json() | {"message": ""} == {"id": run, "thread": run, "message": ""}
-    assert waiting == [{"run": run, "thread": run, "pending": [{"id": message, "text": "and close it"}]}]
-    assert read == [{"run": run, "thread": run, "pending": []}]
-    events = [data for _, data in sse((await client.get(f"/api/runs/{run}/events")).text)]
+    tasks = waiting[0]["tasks"]
+    assert waiting == [{"run": run, "thread": run, "goal": "@Computer open start", "turn": None, "tasks": tasks, "pending": [{"id": message, "text": "and close it"}], "queued": [], "read": []}]
+    assert read == [{"run": run, "thread": run, "goal": "@Computer open start", "turn": None, "tasks": tasks, "pending": [], "queued": [], "read": [message]}]
+    events = await session_events(client, run)
     assert [(event["id"], event["text"]) for event in events if event.get("type") == "message"] == [
         (message, "and close it")
     ]
-    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]  # the main agent read it in time
+    assert [item["id"] for item in await listed_sessions(client)] == [run]  # the main agent read it in time
 
 
 async def test_a_message_the_run_has_not_read_can_be_taken_back(client, monkeypatch):
@@ -434,10 +568,32 @@ async def test_a_message_the_run_has_not_read_can_be_taken_back(client, monkeypa
     (only,) = await until_runs(client, 1)  # nothing was left over to start the next run with
 
     assert withdrawn.status_code == 200 and again.status_code == 409
-    assert waiting == [{"run": run, "thread": run, "pending": []}]
+    assert waiting == [{"run": run, "thread": run, "goal": "capital of France?", "turn": run, "tasks": [], "pending": [], "queued": [], "read": []}]
     events = [data for _, data in sse((await client.get(f"/api/runs/{run}/events")).text)]
     assert only["id"] == run and not [event for event in events if event.get("type") == "message"]
     assert (await client.delete(f"/api/runs/20991231-235959/messages/{message}")).status_code == 404
+
+
+async def test_a_queued_message_waits_for_the_session_to_end_then_starts_the_next(client, monkeypatch):
+    main = gated_main_agent(monkeypatch, "Paris.", "Rome.")
+    run = (await client.post("/api/runs", json={"goal": "capital of France?"})).json()["id"]
+    await main.asked.wait()
+    first = (await client.post("/api/runs", json={"goal": "and Italy?", "thread": run, "queue": True})).json()
+    second = (await client.post("/api/runs", json={"goal": "and Spain?", "thread": run, "queue": True})).json()
+    waiting = (await client.get("/api/status")).json()["running"]
+    withdrawn = await client.delete(f"/api/runs/{run}/messages/{second['message']}")
+    main.gate.set()
+    sessions = await until_runs(client, 2)
+
+    # Read by no agent while the session worked, it starts the next one once that ends.
+    assert waiting == [{"run": run, "thread": run, "goal": "capital of France?", "turn": run, "tasks": [], "pending": [],
+                        "queued": [{"id": first["message"], "text": "and Italy?"},
+                                   {"id": second["message"], "text": "and Spain?"}], "read": []}]
+    assert withdrawn.status_code == 200
+    assert not [event for event in await session_events(client, run) if event.get("type") == "message"]
+    nxt = next(each for each in sessions if each["id"] != run)
+    assert nxt["goal"] == "and Italy?" and len(main.received) == 2
+    assert (await client.post("/api/runs", json={"goal": "x", "thread": run, "queue": "yes"})).status_code == 400
 
 
 class GatedModel(ScriptedModel):
@@ -461,9 +617,15 @@ def gated_main_agent(monkeypatch, *replies: str) -> GatedModel:
     return model
 
 
+async def session_events(client, run: str) -> list[dict]:
+    """Every event of the session `run` began, each of its logs in turn: its turns' and its tasks'."""
+    logs = sorted(each["id"] for each in await listed_runs(client) if each["session"] == run)
+    return [data for each in logs for _, data in sse((await client.get(f"/api/runs/{each}/events")).text)]
+
+
 async def until_runs(client, count: int) -> list[dict]:
     for _ in range(200):
-        runs = (await client.get("/api/runs")).json()
+        runs = await listed_sessions(client)
         status = (await client.get("/api/status")).json()
         if len(runs) == count and not status["running"]:
             return runs
@@ -487,7 +649,7 @@ async def test_the_status_says_once_a_run_in_progress_has_named_its_conversation
         if named["titles_revision"] != unnamed["titles_revision"]:
             break
         await asyncio.sleep(0.01)
-    listed = [item["title"] for item in (await client.get("/api/runs")).json()]
+    listed = [item["title"] for item in await listed_sessions(client)]
     main.gate.set()
     await until_runs(client, 1)
 
@@ -508,7 +670,7 @@ async def test_a_title_made_after_its_run_ended_reaches_the_list_but_not_the_run
     try:
         before = await until_idle(client)
         stream = await asyncio.wait_for(client.get(f"/api/runs/{run}/events"), 2)  # done with its run
-        untitled = (await client.get("/api/runs")).json()[0]["title"]
+        untitled = (await listed_sessions(client))[0]["title"]
     finally:
         namer.gate.set()
     for _ in range(200):
@@ -518,7 +680,7 @@ async def test_a_title_made_after_its_run_ended_reaches_the_list_but_not_the_run
     else:
         pytest.fail("the title was not made")
 
-    assert untitled is None and (await client.get("/api/runs")).json()[0]["title"] == "Capital of France"
+    assert untitled is None and (await listed_sessions(client))[0]["title"] == "Capital of France"
     assert '"type": "title"' not in stream.text and stream.text.endswith("event: done\ndata: {}\n\n")
 
 
@@ -552,12 +714,12 @@ async def test_a_late_title_respects_conversation_changes(client, settings, monk
     await asyncio.wait_for(done.wait(), 2)
 
     assert changed.status_code == 200
-    runs = (await client.get("/api/runs")).json()
+    runs = await listed_sessions(client)
     if action == "rename":  # nothing named over it
         assert runs[0]["title"] == "My title"
-        assert [e["text"] for e in read_events(run_dir(settings, run)) if e["type"] == "title"] == ["My title"]
+        assert [e["text"] for e in await logged(client, run) if e["type"] == "title"] == ["My title"]
     else:
-        assert runs == [] and not (settings.data_dir / "runs" / run).exists()
+        assert runs == [] and (await client.get(f"/api/runs/{run}/events")).status_code == 404
 
 
 async def test_a_message_the_run_had_not_read_as_its_main_agent_replied_is_answered_in_the_same_run(
@@ -573,9 +735,10 @@ async def test_a_message_the_run_had_not_read_as_its_main_agent_replied_is_answe
 
     assert sent.status_code == 202 and only["id"] == run
     assert [m.text for m in main.received[1] if isinstance(m, HumanMessage)] == ["capital of France?", "and Italy?"]
-    events = [data for _, data in sse((await client.get(f"/api/runs/{run}/events")).text)]
+    # It woke for the message it had not read, in a turn of the same session.
+    events = await session_events(client, run)
     assert [e["text"] for e in events if e.get("type") == "model"] == ["Paris.", "Rome."]
-    assert next(e for e in events if e.get("type") == "end")["summary"] == "Rome."
+    assert [e["summary"] for e in events if e.get("type") == "end"] == ["Paris.", "Rome."]
 
 
 async def test_what_a_stopped_run_did_not_read_is_the_conversations_next_message_too(client, monkeypatch):
@@ -584,7 +747,7 @@ async def test_what_a_stopped_run_did_not_read_is_the_conversations_next_message
     await main.asked.wait()
 
     sent = await client.post("/api/runs", json={"goal": "and Italy?", "thread": run})
-    stopped = await client.post(f"/api/runs/{run}/stop")
+    stopped = await client.post(f"/api/conversations/{run}/stop")
     main.gate.set()
     runs = await until_runs(client, 2)
 
@@ -610,9 +773,9 @@ async def test_how_steps_are_approved_changes_for_a_run_in_progress_and_only_for
     assert (wrong.status_code, ended.status_code, unknown.status_code) == (400, 409, 404)
 
 
-async def test_what_runs_did_not_read_goes_nowhere_as_the_server_shuts_down(settings, computer, monkeypatch):
+async def test_what_runs_did_not_read_goes_nowhere_as_the_server_shuts_down(settings, computer, control, monkeypatch):
     main = gated_main_agent(monkeypatch, "Paris.")
-    runner = Runner(settings, computer, FileRunStore(settings.data_dir))
+    runner = runner_of(settings, computer, control)
     run = await runner.start("capital of France?", 10)
     await main.asked.wait()
 
@@ -623,11 +786,11 @@ async def test_what_runs_did_not_read_goes_nowhere_as_the_server_shuts_down(sett
     assert runner.running() == {} and not runner.following
 
 
-async def test_stopping_with_no_runs_or_two(settings, computer, monkeypatch):
-    await Runner(settings, computer, FileRunStore(settings.data_dir)).stop()
+async def test_stopping_with_no_runs_or_two(settings, computer, control, monkeypatch):
+    await runner_of(settings, computer, control).stop()
     held, pressing, _ = blocking_press(computer)
     use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")])])
-    runner = Runner(settings, computer, FileRunStore(settings.data_dir))
+    runner = runner_of(settings, computer, control)
     desktop = await runner.start("@Computer open start", 10, force_computer=True)
     await pressing.wait()
     blocked, answering = asyncio.Event(), asyncio.Event()
@@ -648,11 +811,12 @@ async def test_stopping_with_no_runs_or_two(settings, computer, monkeypatch):
     held.set()
 
 
-async def test_a_run_of_another_server_sharing_the_desktop_holds_it_and_shows_what_it_has_logged(client, settings):
-    run = "20261007-120000"
-    (settings.data_dir / "runs" / run).mkdir(parents=True)
-    start = {"type": "start", "v": 4, "run": run, "thread": run, "goal": "save", "history": [], "time": 0}
-    (settings.data_dir / "runs" / run / "steps.jsonl").write_text(json.dumps(start) + "\n")
+async def test_a_run_of_another_server_sharing_the_desktop_holds_it_and_shows_what_it_has_logged(
+    client, settings, runs,
+):
+    run = await runs.create()
+    start = runs.append(run, {"type": "start", "v": FORMAT, "kind": "turn", "session": run, "run": run, "thread": run, "goal": "save", "history": []})
+    await runs.flush(run)
 
     with RunLock(settings.run_lock_path) as lock:  # as the eval's server holds it for its run
         lock.name(run)
@@ -665,7 +829,7 @@ async def test_a_run_of_another_server_sharing_the_desktop_holds_it_and_shows_wh
     assert (busy.status_code, busy.json()["reason"], busy.json()["run"]) == (409, "desktop", run)
     assert events == [("message", start), ("done", {})]
     assert stopped.status_code == 409  # its own server stops it
-    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [run]
+    assert [item["id"] for item in await listed_sessions(client)] == [run]
 
 
 async def test_a_follow_up_continues_the_conversation(client, monkeypatch):
@@ -680,11 +844,11 @@ async def test_a_follow_up_continues_the_conversation(client, monkeypatch):
 
     start = sse((await client.get(f"/api/runs/{second}/events")).text)[0][1]
     assert (created["thread"], start["thread"], start["goal"]) == (first, first, "now save it")
-    assert {item["id"]: item["thread"] for item in (await client.get("/api/runs")).json()} == {first: first, second: first}
+    assert {item["id"]: item["thread"] for item in await listed_sessions(client)} == {first: first, second: first}
     assert (await client.post("/api/runs", json={"goal": "x", "thread": "nope"})).status_code == 404
 
 
-async def test_deleting_a_conversation_moves_its_runs_to_the_trash_and_restoring_moves_them_back(
+async def test_deleting_a_conversation_erases_its_runs_and_nothing_brings_them_back(
     client, settings, computer, monkeypatch
 ):
     done = AIMessage(content="Done.")
@@ -706,19 +870,17 @@ async def test_deleting_a_conversation_moves_its_runs_to_the_trash_and_restoring
     running = (await client.post("/api/runs", json={"goal": "open start"})).json()["id"]
     await pressing.wait()
 
+    logs = [each["id"] for each in (await client.get(f"/api/conversations/{first}/runs")).json()]
     deleted = await client.delete(f"/api/conversations/{first}")
-    assert deleted.status_code == 200 and deleted.json() == {"deleted": [first, second]}
-    assert [item["id"] for item in (await client.get("/api/runs")).json()] == [running]
-    assert sorted(path.name for path in (settings.data_dir / "trash").iterdir()) == [first, second]
+    assert deleted.status_code == 200 and sorted(deleted.json()["deleted"]) == sorted(logs)  # its turns' and tasks'
+    assert {first, second} <= set(logs)
+    assert [item["id"] for item in await listed_sessions(client)] == [running]
+    assert [(await client.get(f"/api/runs/{each}/events")).status_code for each in (first, second)] == [404, 404]
     assert (await client.delete(f"/api/conversations/{running}")).status_code == 409
     assert (await client.delete(f"/api/conversations/{first}")).status_code == 404
-
-    restored = await client.post(f"/api/conversations/{first}/restore")
-    assert restored.status_code == 200 and restored.json() == {"restored": [first, second]}
-    assert sorted(item["id"] for item in (await client.get("/api/runs")).json()) == sorted([first, second, running])
-    assert not any((settings.data_dir / "trash").iterdir())
-    assert (await client.post(f"/api/conversations/{first}/restore")).status_code == 404
-    await client.post(f"/api/runs/{running}/stop")
+    assert (await client.get(f"/api/runs/{first}/events")).status_code == 404
+    assert (await client.post("/api/runs", json={"goal": "again", "thread": first})).status_code == 404
+    await client.post(f"/api/conversations/{running}/stop")
     held.set()
     await until_idle(client)
 
@@ -729,14 +891,16 @@ async def test_a_message_cannot_start_a_run_while_its_conversation_is_being_dele
     await until_idle(client)
     main = gated_main_agent(monkeypatch, "Done.")
     entered, resume = asyncio.Event(), asyncio.Event()
-    delete = FileRunStore.delete
+    def paused(delete):
+        async def paused_delete(store, thread):
+            entered.set()
+            await resume.wait()
+            return await delete(store, thread)
 
-    async def paused_delete(store, thread):
-        entered.set()
-        await resume.wait()
-        return await delete(store, thread)
+        return paused_delete
 
-    monkeypatch.setattr(FileRunStore, "delete", paused_delete)
+    for kind in (FileRuns, MongoRuns):
+        monkeypatch.setattr(kind, "delete", paused(kind.delete))
     deleting = asyncio.create_task(client.delete(f"/api/conversations/{thread}"))
     try:
         await asyncio.wait_for(entered.wait(), 5)
@@ -744,50 +908,46 @@ async def test_a_message_cannot_start_a_run_while_its_conversation_is_being_dele
     finally:
         resume.set()
         deleted = await deleting
-        restored = await client.post(f"/api/conversations/{thread}/restore")
         main.gate.set()
         await until_idle(client)
 
-    assert (started.status_code, deleted.status_code, restored.status_code) == (409, 200, 200)
+    assert (started.status_code, deleted.status_code) == (409, 200)
     assert started.json()["reason"] == "conversation"
-    assert (await client.post("/api/runs", json={"goal": "continue", "thread": thread})).status_code == 201
-    await until_idle(client)
+    assert (await client.post("/api/runs", json={"goal": "continue", "thread": thread})).status_code == 404
 
 
-async def test_renaming_a_conversation_lists_it_by_the_users_title_over_the_runtimes(client, settings, monkeypatch):
+async def test_renaming_a_conversation_lists_it_by_the_users_title_over_the_runtimes(client, runs, monkeypatch):
     use_script(monkeypatch, [AIMessage(content="Done.")])
     first = (await client.post("/api/runs", json={"goal": "open notepad"})).json()["id"]
     await until_idle(client)
-    log = settings.data_dir / "runs" / first / "steps.jsonl"
-    with log.open("a", encoding="utf-8") as file:  # as agent.title names it
-        file.write(json.dumps({"time": 1, "type": "title", "text": "Opening Notepad", "usage": {}, "seconds": 1}) + "\n")
-    assert (await client.get("/api/runs")).json()[0]["title"] == "Opening Notepad"
+    runs.append(first, {"time": 1, "type": "title", "text": "Opening Notepad", "usage": {}, "seconds": 1})  # as agent.title
+    await runs.flush(first)
+    assert (await client.get("/api/conversations")).json()["items"][0]["title"] == "Opening Notepad"
 
     renamed = await client.patch(f"/api/conversations/{first}", json={"title": "  Notepad   notes \n"})
     assert renamed.status_code == 200 and renamed.json() == {"thread": first, "title": "Notepad notes"}
-    assert (await client.get("/api/runs")).json()[0]["title"] == "Notepad notes"
-    last = json.loads(log.read_text(encoding="utf-8").splitlines()[-1])
+    assert (await client.get("/api/conversations")).json()["items"][0]["title"] == "Notepad notes"
+    turns = [each["id"] for each in (await client.get(f"/api/conversations/{first}/runs")).json() if each["kind"] == "turn"]
+    last = (await logged(client, turns[-1]))[-1]  # in its latest turn
     assert (last["type"], last["text"], last["by"]) == ("title", "Notepad notes", "user")
-    assert await has_title(FileRunStore(settings.data_dir), first)
+    assert await has_title(runs, first)
     assert (await client.patch(f"/api/conversations/{first}", json={"title": " "})).status_code == 400
     assert (await client.patch("/api/conversations/nope", json={"title": "x"})).status_code == 404
 
 
-async def test_a_deleted_runs_events_and_screenshots_are_not_served_until_it_is_restored(client, settings, monkeypatch):
+async def test_a_deleted_runs_events_and_screenshots_are_gone(client, monkeypatch):
     use_script(monkeypatch, [AIMessage(content="Done.")])
     run = (await client.post("/api/runs", json={"goal": "open notepad"})).json()["id"]
     await until_idle(client)
-    shot = next(name for name in (await client.get(f"/api/runs/{run}/events?full=1")).text.split('"') if name.endswith(".png"))
-    assert (await client.get(f"/api/runs/{run}/files/{shot}")).status_code == 200
+    (task,) = [each["id"] for each in await listed_runs(client) if each["kind"] == "task"]
+    shot = next(name for name in (await client.get(f"/api/runs/{task}/events?full=1")).text.split('"') if name.endswith(".png"))
+    assert (await client.get(f"/api/runs/{task}/files/{shot}")).status_code == 200
     assert (await client.delete(f"/api/conversations/{run}")).status_code == 200
     assert (await client.get(f"/api/runs/{run}/events")).status_code == 404
     assert (await client.get(f"/api/runs/{run}/files/{shot}")).status_code == 404
-    assert (await client.post(f"/api/conversations/{run}/restore")).status_code == 200
-    assert (await client.get(f"/api/runs/{run}/events")).status_code == 200
-    assert (await client.get(f"/api/runs/{run}/files/{shot}")).status_code == 200
 
 
-async def test_moving_a_conversation_lists_it_under_another_project_or_none(client, settings, monkeypatch):
+async def test_moving_a_conversation_lists_it_under_another_project_or_none(client, monkeypatch):
     use_script(monkeypatch, [AIMessage(content="Done.")])
     client_project = (await client.post("/api/projects", json={"name": "客戶"})).json()["id"]
     quote = (await client.post("/api/projects", json={"name": "報價 單"})).json()["id"]
@@ -800,27 +960,27 @@ async def test_moving_a_conversation_lists_it_under_another_project_or_none(clie
     moved = await client.patch(f"/api/conversations/{first}", json={"project": quote})
     assert moved.status_code == 200 and moved.json() == {"thread": first, "project": quote}
     # Its first run carries the move, which the page lists the conversation by.
-    listed = sorted((await client.get("/api/runs")).json(), key=lambda item: item["started"])
+    listed = sorted(await listed_sessions(client), key=lambda item: item["started"])
     assert listed[0]["project"] == quote
-    last = json.loads((settings.data_dir / "runs" / first / "steps.jsonl").read_text().splitlines()[-1])
+    last = (await logged(client, first))[-1]
     assert (last["type"], last["project"], last["by"]) == ("project", quote, "user")
 
     out = await client.patch(f"/api/conversations/{first}", json={"project": None})
     assert out.json() == {"thread": first, "project": None}
-    assert sorted((await client.get("/api/runs")).json(), key=lambda item: item["started"])[0]["project"] is None
+    assert sorted(await listed_sessions(client), key=lambda item: item["started"])[0]["project"] is None
     assert (await client.patch(f"/api/conversations/{first}", json={"project": 3})).status_code == 404
     assert (await client.patch(f"/api/conversations/{first}", json={})).status_code == 400
 
 
 def test_a_runs_project_is_the_last_it_was_moved_to(tmp_path):
-    start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10, "project": "p1"}
+    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10, "project": "p1"}
     moved = {"type": "project", "project": "p2", "by": "user", "time": 11}
     assert asdict(summarize("r1", [start, moved]))["project"] == "p2"
     assert asdict(summarize("r1", [start, moved, {**moved, "project": None}]))["project"] is None
 
 
 def test_the_users_title_stands_over_the_runtimes_whichever_came_last(tmp_path):
-    start = {"type": "start", "v": 4, "thread": "t1", "goal": "open start", "time": 10}
+    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10}
     made = {"type": "title", "text": "Opening Start", "usage": {}, "seconds": 1.2, "time": 12}
     given = {"type": "title", "text": "Start menu", "by": "user", "time": 11}
     assert asdict(summarize("r1", [start, given, made]))["title"] == "Start menu"
@@ -834,7 +994,7 @@ async def test_a_message_for_the_desktop_is_recorded_as_one(client, monkeypatch)
 
     first = sse((await client.get(f"/api/runs/{run}/events")).text)[0][1]
     assert (first["goal"], first["computer"]) == ("@Computer open start", True)
-    assert notes.DESKTOP_ASKED in main_model.received[0][-1].text
+    assert DESKTOP_ASKED in main_model.received[0][-1].text
 
 
 async def test_a_message_sent_for_the_desktop_goes_to_it_without_mentioning_it(client, monkeypatch):
@@ -845,7 +1005,7 @@ async def test_a_message_sent_for_the_desktop_goes_to_it_without_mentioning_it(c
 
     first = sse((await client.get(f"/api/runs/{run}/events")).text)[0][1]
     assert (first["goal"], first["computer"]) == ("open start", True)
-    assert notes.DESKTOP_ASKED in main_model.received[0][-1].text
+    assert DESKTOP_ASKED in main_model.received[0][-1].text
 
 
 async def test_the_screen_now_comes_as_a_png_or_says_why_it_cannot(client, computer):
@@ -859,6 +1019,52 @@ async def test_the_screen_now_comes_as_a_png_or_says_why_it_cannot(client, compu
     computer.screen = gone
     failed = await client.get("/api/screen")
     assert failed.status_code == 503 and "no display" in failed.json()["error"]
+
+
+async def test_a_failed_return_of_control_refuses_the_run_as_the_control_route_does(client, computer):
+    await client.post("/api/control", json={"owner": "user"})
+    computer.connected = False
+
+    refused = await client.post("/api/runs", json={"goal": "open start", "computer": True, "take_control": True})
+
+    assert refused.status_code == 503 and "Reconnect" in refused.json()["error"]
+    assert (await client.get("/api/status")).json()["control"]["owner"] == "user"
+
+
+async def test_a_run_that_fails_to_start_says_why(client, monkeypatch):
+    async def fail(*_, **__):
+        raise RuntimeError("no model")
+
+    monkeypatch.setattr(Runner, "start", fail)
+
+    failed = await client.post("/api/runs", json={"goal": "hello"})
+
+    assert failed.status_code == 500 and failed.json()["error"] == "RuntimeError: no model"
+
+
+async def test_a_message_for_a_conversation_deleted_as_it_starts_finds_nothing(client, runs, monkeypatch):
+    use_script(monkeypatch, [], main=[AIMessage("Done.")])
+    thread = (await client.post("/api/runs", json={"goal": "hello"})).json()["thread"]
+    await until_idle(client)
+
+    async def deleted_meanwhile(*_, **__):
+        await runs.delete(thread)
+        raise RuntimeError("its log is gone")
+
+    monkeypatch.setattr(Runner, "start", deleted_meanwhile)
+
+    gone = await client.post("/api/runs", json={"goal": "and now", "thread": thread})
+
+    assert gone.status_code == 404
+
+
+async def test_control_says_where_it_was_taken_and_returned(client):
+    for body, reason in (
+        ({"owner": "user"}, "taken over from web"), ({"owner": "agent"}, "returned from web"),
+        ({"owner": "user", "by": "cli"}, "taken over from cli"), ({"owner": "agent", "by": "cli"}, "returned from cli"),
+    ):
+        await client.post("/api/control", json=body)
+        assert (await client.get("/api/status")).json()["control"]["reason"] == reason
 
 
 async def test_control_and_bad_requests(client, computer):
@@ -882,13 +1088,14 @@ async def test_a_step_awaiting_approval_shows_in_the_status_and_is_answered_from
         ]),
         AIMessage(content="Submitted."),
     ])
-    run = (await client.post("/api/runs", json={"goal": "@Computer submit the form"})).json()["id"]
+    await client.post("/api/runs", json={"goal": "@Computer submit the form"})
     for _ in range(500):
         if approval := (await client.get("/api/status")).json()["approval"]:
             break
         await asyncio.sleep(0.01)
 
-    assert (approval["id"], approval["run"], approval["tool"], approval["consequence"]) == ("c1", run, "key", "送出表單")
+    (task,) = (await client.get("/api/status")).json()["running"][0]["tasks"]  # it asks from the task's log
+    assert (approval["id"], approval["run"], approval["tool"], approval["consequence"]) == ("c1", task, "key", "送出表單")
     assert approval["decision"] is None and approval["screenshot"].endswith("-confirm.png")
     bad = await client.post("/api/approval", json={"id": "c1", "decision": "maybe"})
     other = await client.post("/api/approval", json={"id": "c9", "decision": "approve"})
@@ -900,7 +1107,7 @@ async def test_a_step_awaiting_approval_shows_in_the_status_and_is_answered_from
     assert (answered.status_code, again.status_code) == (200, 409)
 
     assert (await until_idle(client))["approval"] is None
-    events = [data for _, data in sse((await client.get(f"/api/runs/{run}/events")).text)]
+    events = [data for _, data in sse((await client.get(f"/api/runs/{task}/events")).text)]
     decision = next(event for event in events if event.get("type") == "decision")
     assert (decision["outcome"], decision["by"]) == ("approved", "cli")
 
@@ -937,7 +1144,7 @@ async def test_a_run_works_with_the_choices_sent_with_its_message_and_the_runtim
     assert (chose["main_model"], chose["model"], chose["approvals"]) == ("openai:gpt-6-luna", "openai:gpt-6.1-sol", "auto")
     plain = await started(thread=chose["thread"])
     assert (plain["main_model"], plain["model"], plain["approvals"]) == ("openai:gpt-6.1-terra", "openai:gpt-6.1-terra", "ask")
-    assert [path for path in settings.data_dir.iterdir() if path.is_file()] == [settings.data_dir / "revision"]
+    assert [path for path in settings.data_dir.iterdir() if path.is_file()] == []
 
     for bad in ({"approvals": "always"}, {"agents": ["main"]}, {"agents": {"main": {"temperature": "1"}}},
                 {"agents": {"main": {"model": 4}}}, {"locale": 4}, {"locale": "zh Hant"}):
@@ -956,13 +1163,13 @@ async def test_the_computer_agent_writes_to_the_user_in_the_language_of_the_page
         await until_idle(client)
         return computer_model.received[-1][0].text
 
-    assert prompt_ends(await prompt(locale="zh-Hant"), "Traditional Chinese")
+    assert tells_language(await prompt(locale="zh-Hant"), "Traditional Chinese")
     # Without it, as from a page that does not send it, the agent goes by the user's message.
     assert "The user reads" not in await prompt()
 
 
-def prompt_ends(prompt: str, language: str) -> bool:
-    return prompt.endswith(f"\n\nThe user reads {language}: write anything you say to them in {language}.")
+def tells_language(prompt: str, language: str) -> bool:
+    return f"\n\nThe user reads {language}: write anything you say to them in {language}.\n" in f"{prompt}\n"
 
 
 @pytest.fixture
@@ -1117,7 +1324,7 @@ async def test_live_text_waits_for_the_end_of_a_continuous_burst(computer, contr
 async def test_status_hands_the_page_the_turn_server_with_its_password(settings, computer):
     settings = settings.model_copy(update={"turn_url": "turn:localhost:3478?transport=tcp", "turn_password": SecretStr("pw")})
     app = create_app(settings, max_steps=10, computer=computer)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://test") as client:
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
         status = (await client.get("/api/status")).json()
 
     assert status["ice_servers"] == [{"urls": "turn:localhost:3478?transport=tcp", "username": "live", "credential": "pw"}]
@@ -1196,9 +1403,8 @@ async def test_a_search_finds_a_conversation_by_what_was_said_in_it(client, monk
     created = await client.post("/api/runs", json={"goal": "寫一份會議紀錄"})
     await until_idle(client)
     thread = created.json()["thread"]
-    assert (await client.get("/api/search", params={"q": " 會議 "})).json() == [
-        {"thread": thread, "snippet": "寫一份會議紀錄"},
-    ]
+    hits = (await client.get("/api/search", params={"q": " 會議 "})).json()
+    assert [(hit["conversation"]["id"], hit["snippet"]) for hit in hits] == [(thread, "寫一份會議紀錄")]
     assert (await client.get("/api/search", params={"q": "記事本"})).json() == []
     assert (await client.get("/api/search", params={"q": "  "})).json() == []
 

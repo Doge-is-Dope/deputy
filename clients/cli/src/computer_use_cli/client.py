@@ -6,6 +6,7 @@ library is enough, so any Python can run it."""
 import http.client
 import json
 import os
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -17,6 +18,8 @@ from typing import BinaryIO
 DEFAULT_URL = "http://127.0.0.1:8000"
 # A stream sends a keepalive every 15 s, so a read that waits this long means the server is gone.
 READ_SECONDS = 60
+# How often a session in progress is looked at for its next log, while none of its logs streams.
+POLL_SECONDS = 0.5
 
 
 class ApiError(RuntimeError):
@@ -132,9 +135,9 @@ class Client:
     def status(self) -> dict:
         return self._json("GET", "/api/status")
 
-    def runs(self) -> list[dict]:
-        """Every run in the list, newest first."""
-        return self._json("GET", "/api/runs")
+    def conversations(self, limit: int) -> list[dict]:
+        """The most recently active conversations, `limit` at most, each with its latest run ("latest")."""
+        return self._json("GET", f"/api/conversations?limit={limit}")["items"]
 
     def start(
         self, goal: str, *, thread: str | None = None, project: str | None = None, max_steps: int | None = None,
@@ -177,12 +180,22 @@ class Client:
         finally:
             events.close()
 
-    def stop(self, run: str) -> None:
+    def runs(self, thread: str) -> list[dict]:
+        """A conversation's logs, oldest first: its turns' and its tasks', each with its session."""
+        return self._json("GET", f"/api/conversations/{_quoted(thread)}/runs")
+
+    def stop(self, thread: str) -> None:
+        """Stop the conversation's session in progress: the main agent's turn and every task."""
+        self._json("POST", f"/api/conversations/{_quoted(thread)}/stop", {})
+
+    def stop_run(self, run: str) -> None:
+        """Stop one log in progress: an agent's task (the others and the main agent go on), or the main agent's turn
+        (its reply; the tasks go on). ApiError 409 when it is not in progress."""
         self._json("POST", f"/api/runs/{_quoted(run)}/stop", {})
 
     def control(self, owner: str) -> dict:
         """Give the desktop to "user" or "agent"."""
-        return self._json("POST", "/api/control", {"owner": owner})
+        return self._json("POST", "/api/control", {"owner": owner, "by": "cli"})
 
     def answer(self, id: str, decision: str, note: str = "", by: str = "cli") -> dict:
         """Answer the step awaiting approval: "approve", or "reject" with an optional note."""
@@ -212,6 +225,64 @@ class Client:
                 continue
             written.append(name)
         return events, written
+
+    def export_session(self, run: str, folder: Path) -> tuple[list[dict], list[str]]:
+        """Write every log of the session `run` began to `folder`, each in a folder of its own named by its id: the
+        events of all of them and the names of the files written."""
+        thread = self.start_of(run)["thread"]
+        events, written = [], []
+        for log in [each["id"] for each in self.runs(thread) if each.get("session") == run]:
+            logged, files = self.export(log, folder / log)
+            events += logged
+            written += [f"{log}/{name}" for name in files]
+        return events, written
+
+
+class Follow:
+    """What a session logs until it is quiet: the main agent's turns and the tasks they hand over, given by the id of
+    its first turn (`run`). Each log is followed to its end, then the next, in the order they began, so a turn's lines
+    come together; a stream cut off goes on from its last line, and so does `lines` called again after an
+    interrupt."""
+
+    def __init__(self, client: Client, run: str, sleep: Callable[[float], None] = time.sleep):
+        self.client, self.run, self.sleep = client, run, sleep
+        self.thread: str | None = None  # its conversation, once its first line says it
+        self.logs = [run]  # in the order they began
+        self.seen: dict[str, int] = {}  # each log's last line so far
+        self.ended: set[str] = set()
+
+    def lines(self) -> Iterator[tuple[str, dict]]:
+        """Each line as it comes, with the id of its log."""
+        while True:
+            log = next((each for each in self.logs if each not in self.ended), None)
+            if log is None:
+                if not self.more():
+                    return
+                continue
+            for event in self.client.events(log, self.seen.get(log, -1)):
+                if event.kind == "line":
+                    self.seen[log] = event.index if event.index is not None else self.seen.get(log, -1) + 1
+                    if event.data.get("type") == "start" and self.thread is None:
+                        self.thread = event.data["thread"]
+                    yield log, event.data
+                elif event.kind == "done":
+                    self.ended.add(log)
+
+    def more(self) -> bool:
+        """Whether the session began a log not followed yet; while it is in progress without one, it is looked at
+        again."""
+        while True:
+            going = any(each.get("run") == self.run for each in self.client.status().get("running", []))
+            found = sorted(
+                each["id"] for each in (self.client.runs(self.thread) if self.thread else [])
+                if each.get("session") == self.run and each["id"] not in self.logs
+            )
+            if found:
+                self.logs += found
+                return True
+            if not going:
+                return False
+            self.sleep(POLL_SECONDS)
 
 
 def _quoted(part: str) -> str:

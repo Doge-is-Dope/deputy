@@ -45,7 +45,7 @@ export const zhHant = {
   sidebar: {
     title: "側欄",
     description: "任務清單",
-    new: "新增",
+    new: "新對話",
     search: "搜尋",
     signOut: "登出",
     loadFailed: "無法載入對話紀錄",
@@ -59,17 +59,16 @@ export const zhHant = {
     deleteConversation: "刪除",
     project: "Project",
     removeFromProject: (project: string) => `從 ${project} 移除`,
-    // The notice once deleted (into the runtime's trash), whose button brings it back.
+    // The notice once deleted, whose button calls it off while the notice shows; after that nothing brings it back.
     deleted: "已刪除對話",
     deletedProject: (project: string) => `Project ${project} 已刪除`,
+    // Its button, and the memory notice's (memory/notices.tsx).
     restore: "還原",
     // The sidebar's sections.
     projects: "Projects",
     recents: "Recents",
     newProject: "新增 Project",
     newInProject: "在這個 Project 新增對話",
-    // Under the recents, to the page of every conversation; muted and to the left, as a project's Show more.
-    viewAll: "查看全部",
     noChats: "尚無對話",
     // Under a project's first five conversations, for five more, as ChatGPT's projects list theirs.
     showMore: "顯示更多",
@@ -82,20 +81,19 @@ export const zhHant = {
     projectMemory: "記憶",
     projectMemoryTitle: (project: string) => `${project} 的記憶`,
     deleteProject: "刪除",
-    deleteProjectAsk: (project: string, count: number) =>
-      `刪除 ${project} 與 ${count} 段對話？`,
+    deleteProjectAsk: (project: string) => `刪除 ${project} 與其中所有對話？`,
     resize: "調整側欄寬度",
     toggle: "切換側欄",
     expand: "展開側欄",
   },
 
-  // The page of every conversation (chats-page.tsx).
+  // The ⌘K search (search-dialog.tsx).
   chats: {
-    title: "所有對話",
-    search: "搜尋對話",
-    clear: "清除搜尋",
-    none: "沒有符合的對話",
-    count: (count: number) => `${count} 段對話`,
+    search: "搜尋",
+    none: "沒有符合的結果",
+    // The search's sections, as ChatGPT's ⌘K lists them.
+    actions: "快速動作",
+    chats: "對話",
   },
 
   home: {
@@ -148,10 +146,11 @@ export const zhHant = {
   composer: {
     goal: "任務目標",
     stop: "停止",
-    stopTask: "停止這個任務",
     start: "開始任務",
     // Sends what is written to the run in progress.
     send: "送出",
+    // On the send button while the run works, with ⌘/Ctrl+Enter: the message waits for the run to end.
+    queue: "排隊",
     // Takes back a message waiting above the composer, before the agent reads it.
     withdraw: "刪除",
     // The list typing @ opens: what a message can be sent to. Their names stay in English in every language, as the
@@ -325,8 +324,6 @@ export const zhHant = {
       // A task handed over while the most tasks at once already ran (agent/background.py).
       tooManyTasks: "沒有執行：已經有六件工作在進行",
     },
-    // Under a message sent while the run worked, for a moment once an agent reads it.
-    read: "已讀",
     // The details menu under a run's last reply: how long the run took and what it cost; an item opens a dialog of each
     // agent's model, and its tokens and cost of each kind.
     usage: "用量",
@@ -352,13 +349,15 @@ export const zhHant = {
     enlarge: (label: string) => `放大：${label}`,
     agentAsks: "Agent 請你接管",
     continued: "從中斷處繼續",
+    // Over the work a session did before its final reply, folded once that reply came.
+    workedFor: (time: string) => `已工作 ${time}`,
     // Why a run failed (ErrorCode), said to whoever used it: what went wrong and what they can do. The code and the
     // technical detail go only into what they copy.
     errors: {
       "E-DESKTOP": "連不到桌面，Agent 看不到畫面，也無法操作。",
       "E-MODEL-KEY": "模型服務不接受目前的 API 金鑰，請管理員檢查。",
       "E-MODEL-LIMIT": "模型服務的用量已達上限，請稍後再試。",
-      "E-MODEL-DOWN": "模型服務暫時連不上，請稍後再試。",
+      "E-MODEL-DOWN": "模型服務目前忙碌或發生錯誤，請稍後再試。",
       "E-MODEL-REQUEST": "模型服務拒絕了這次的請求。",
       "E-CALL-LIMIT": "Agent 呼叫模型太多次還沒有回覆，已停止。",
       "E-UNKNOWN": "發生了預期外的錯誤。",
@@ -410,9 +409,9 @@ export const zhHant = {
     account: "帳號",
     accountName: "名稱",
     signInMethod: "登入方式",
-    signInNone: "不需登入，僅限本機",
-    signInToken: "存取權杖",
-    signInProxy: "登入服務",
+    signInNone: "This machine only",
+    signInToken: "Access token",
+    signInProxy: "Sign-in proxy",
     appearance: "外觀",
     desktop: "桌面",
     model: "模型",
@@ -426,10 +425,6 @@ export const zhHant = {
     accent: "強調色",
     background: "背景",
     foreground: "前景",
-    importTheme: "匯入主題",
-    importAction: "匯入",
-    themeText: "主題文字",
-    themeImported: (mode: string) => `已匯入${mode}主題`,
     windowsDesktop: "Windows 桌面",
     codeRunner: "程式執行環境",
     connected: "已連線",

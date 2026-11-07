@@ -1,8 +1,5 @@
-"""Keep optional LangSmith traces small without changing the run log.
-
-Model calls retain full text context. Graph nodes retain only the newest message;
-screenshots, encrypted reasoning and repeated tool schemas are omitted.
-Enable with LANGSMITH_TRACING and LANGSMITH_API_KEY."""
+"""Keeps optional LangSmith traces small: model calls keep full text context, graph nodes only the newest message;
+screenshots, encrypted reasoning and repeated tool schemas are omitted."""
 
 from dataclasses import fields, is_dataclass, replace
 from functools import cache
@@ -30,11 +27,11 @@ def is_image(value) -> bool:
 
 
 def for_trace(value):
-    """What LangSmith gets of a run's inputs or outputs: a copy, so the traced objects themselves are left alone."""
+    """A copy of a run's inputs or outputs for LangSmith, leaving the traced objects alone."""
     if isinstance(value, BaseMessage):
         update = {"content": for_trace(value.content), "additional_kwargs": for_trace(value.additional_kwargs)}
         return value.model_copy(update=update)
-    if isinstance(value, BaseTool):  # its definition, ~1 KB, is the same on every call: see `tools.py`
+    if isinstance(value, BaseTool):  # its ~1 KB definition is the same on every call
         return value.name
     if is_image(value):
         return SCREENSHOT_NOT_TRACED

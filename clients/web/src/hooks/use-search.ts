@@ -1,13 +1,13 @@
 import { useEffect, useState } from "react"
 
 import { api, type SearchHit } from "@/lib/api"
+import { nameOf } from "@/lib/conversations"
 
 // Asked once typing pauses this long.
 const PAUSE = 150
 
-/** The conversations whose words hold the query, from the runtime; none for no query or when it cannot answer. Until
- * its answer for this query comes, the last answer's hits whose snippets hold this query too, so the list narrows as
- * the user types on rather than emptying at each key and filling again; null when none do. */
+/** Searches all of the user's conversations by title and content. While waiting, keeps previous hits
+ * that still match to avoid flicker; returns null if none remain. Empty queries and failures return []. */
 export function useSearch(query: string): SearchHit[] | null {
   const words = query.trim()
   const [answer, setAnswer] = useState<{ words: string; hits: SearchHit[] }>({
@@ -33,8 +33,10 @@ export function useSearch(query: string): SearchHit[] | null {
   if (!words) return []
   if (answer.words === words) return answer.hits
   const lower = words.toLocaleLowerCase()
-  const kept = answer.hits.filter((hit) =>
-    hit.snippet.toLocaleLowerCase().includes(lower)
+  const kept = answer.hits.filter(
+    (hit) =>
+      hit.snippet?.toLocaleLowerCase().includes(lower) ||
+      nameOf(hit.conversation).toLocaleLowerCase().includes(lower)
   )
   return kept.length > 0 ? kept : null
 }

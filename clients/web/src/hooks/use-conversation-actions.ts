@@ -49,7 +49,7 @@ export function useConversationActions({
   showLive: (focus?: boolean) => void
   refreshStatus: () => void
   confirmControl: (control: Status["control"]) => void
-  refreshConversations: () => void
+  refreshConversations: () => Promise<void>
 }) {
   const say = useT()
   const input = useRef<HTMLTextAreaElement>(null)
@@ -247,8 +247,10 @@ export function useConversationActions({
   }
 
   // A project's id once made (or the viewer's by that name already), renamed, or deleted; null if not.
-  function createProject(name: string) {
-    return act(() => api.createProject(name), { conversations: true })
+  async function createProject(name: string) {
+    const project = await act(() => api.createProject(name))
+    await refreshConversations() // listed before a conversation goes into it
+    return project
   }
 
   function renameProject(project: string, name: string) {

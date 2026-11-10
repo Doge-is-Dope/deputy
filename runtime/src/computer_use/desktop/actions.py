@@ -21,6 +21,7 @@ BATCHABLE = (
 # These tools must say whether this particular call needs the user's approval.
 CONFIRMABLE = (
     *CLICKS, "left_click_drag", "left_mouse_down", "left_mouse_up", "type", "key", "hold_key", "computer_batch",
+    "press_while",
 )
 
 # Explicitly classify the remaining tools too, so a new tool cannot silently miss confirmation handling.

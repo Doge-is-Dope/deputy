@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage, BaseMessage, ToolMessage, message
 
 from computer_use.agent.failures import error_code
 from computer_use.agent.usage import PRICES, cost_breakdown, no_tokens, usage_of
-from computer_use.events import NoteCode, NoteData, NoteEvent
+from computer_use.events import NoteCode, NoteData, NoteEvent, PlanSnapshot
 from computer_use.storage import FORMAT, MAIN, TASK, TURN, RunId, Runs
 from computer_use.tools.common import is_image
 
@@ -60,16 +60,17 @@ class Trajectory:
 
     def start(
         self, goal: str, thread: str | None, model: str, main_model: str, computer: bool = False,
-        approvals: str = "ask", project: str | None = None, session: str | None = None,
+        approvals: str = "ask", project: str | None = None, session: str | None = None, sent: float | None = None,
     ) -> None:
         """A turn's log. `goal` is the user's message that began the session, "" for a later turn. Both agents' models
         are recorded since a model's reasoning carries over only within its family; `approvals` is how the user chose
         to have steps approved as the session started, which they may change while it works (each `confirm` says how
-        it was)."""
+        it was). `sent` is when a message that waited for this run came."""
         self._write({
             "type": "start", "v": FORMAT, "kind": TURN, "run": self.run, "thread": thread or self.run,
             "session": session or self.run, "goal": goal, "model": model, "main_model": main_model,
             "computer": computer, "approvals": approvals, "project": project, "user": self.store.user,
+            **({"sent": sent} if sent is not None else {}),
         })
 
     def start_task(self, thread: str, session: str, parent: str, id: str, agent: str, brief: str, title: str) -> None:
@@ -175,14 +176,18 @@ class Trajectory:
         self._write({"type": "title", "text": text, "usage": usage, "seconds": round(seconds, 2),
                      "model": model, "cost": cost_breakdown(usage, price) if price else None})
 
+    def plan(self, snapshot: PlanSnapshot) -> None:
+        """The conversation's plan as it stands; like a title, it may arrive after the turn has ended."""
+        self._write({"type": "plan", **snapshot})
+
     def task(self, id: str, agent: str, brief: str, title: str, record: str) -> None:
         """A task started from this turn; the page shows it at work from its own log, `record`."""
         self._write({"type": "task", "state": "started", "id": id, "agent": agent, "brief": brief, "title": title,
                      "record": record})
 
-    def message(self, id: str, text: str) -> None:
-        """A message the user sent while the run worked, logged once an agent has read it."""
-        self._write({"type": "message", "id": id, "text": text})
+    def message(self, id: str, text: str, sent: float) -> None:
+        """A message the user sent while the run worked, logged once an agent has read it; `sent` is when it came."""
+        self._write({"type": "message", "id": id, "text": text, "sent": sent})
 
     async def confirm(
         self, call: dict, args: dict, consequence: str, png: bytes | None, auto_review: bool = False,
@@ -237,6 +242,7 @@ class Trajectory:
         record = await self._record(result, self._named(agent, call["name"]))
         content = record["data"]["content"]
         screenshot = next((block["file"] for block in content if is_image(block)), None) if isinstance(content, list) else None
+        artifact = result.artifact if isinstance(result.artifact, dict) else {}
         self._event(
             "action", agent,
             n=self.main_actions if agent == MAIN else self.actions,
@@ -244,7 +250,8 @@ class Trajectory:
             tool=call["name"],
             args=call["args"],
             status=getattr(result, "status", "success"),
-            reason=(result.artifact or {}).get("reason") if isinstance(result.artifact, dict) else None,
+            reason=artifact.get("reason"),
+            **({"answer": artifact["answer"]} if "answer" in artifact else {}),
             result=text_of(result),
             screenshot=screenshot,
             message=record,

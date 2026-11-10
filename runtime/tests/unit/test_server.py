@@ -101,6 +101,19 @@ async def test_the_agent_uses_the_control_supplied_by_the_server(settings, compu
         assert not settings.control_path.exists()
 
 
+@pytest.mark.parametrize(("password", "offered"), [
+    (None, []),
+    ("secret", [{"urls": "turn:localhost:3478", "username": "live", "credential": "secret"}]),
+])
+async def test_a_turn_server_is_offered_only_with_its_password(settings, computer, password, offered):
+    update = {"turn_url": "turn:localhost:3478", "turn_password": SecretStr(password) if password else None}
+    app = create_app(settings.model_copy(update=update), max_steps=10, computer=computer)
+    async with app.router.lifespan_context(app), httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://localhost",
+    ) as api:
+        assert (await api.get("/api/status")).json()["ice_servers"] == offered
+
+
 async def test_generated_files_download_as_attachments(settings, computer, code_runner, monkeypatch):
     from unittest.mock import AsyncMock
     from computer_use.sandbox import CodeRunnerError

@@ -86,11 +86,11 @@ export function NewProjectRow({
   )
 }
 
-/** A project's row and its conversations set in under it: a folder (open while
- * its conversations are shown) and its name, a click showing or hiding them, a dot while shut for replies that came
- * meanwhile, and on hover a menu that renames it, shows its rules or deletes it with them, and a link to begin a
- * conversation in it (its home). Dragged by its row, it takes another place in the list, the others making room; a
- * conversation dropped on it goes into it. */
+/** A project's row and its conversations set in under it: a folder (open while its conversations are shown) and its
+ * name, a click showing or hiding them, while shut one mark as a conversation's row has (a run that waits for the user,
+ * a spinner for a run under way, a dot for replies that came meanwhile), and on hover a menu that renames it, shows its
+ * rules or deletes it with them, and a link to begin a conversation in it (its home). Dragged by its row, it takes
+ * another place in the list, the others making room; a conversation dropped on it goes into it. */
 export function ProjectGroup({
   project,
   name,
@@ -99,6 +99,8 @@ export function ProjectGroup({
   held,
   selected,
   onOpen,
+  running,
+  needsYou,
   unread,
   failed,
   onRename,
@@ -116,6 +118,8 @@ export function ProjectGroup({
   selected: boolean // its home is the page open
   reading: number // which of its conversations is the page open, or -1
   onOpen: (open: boolean) => void
+  running: boolean // one of its conversations has a run under way
+  needsYou: boolean // that run waits for the user: an approval or a takeover
   unread: number // conversations whose latest run ended since the user saw them
   failed: boolean // one of those ended in an error
   onRename: (name: string) => Promise<void>
@@ -187,7 +191,18 @@ export function ProjectGroup({
   const carried = carriedBy(active)
   const target = isOver && carried !== undefined && carried.project !== project
   const Folder = shown || target ? FolderOpenIcon : FolderIcon
-  const mark = !shown && unread > 0
+  const working = !shown && running
+  const spinning = working && !needsYou
+  const mark = spinning
+    ? null
+    : working
+      ? { color: "bg-warning", label: t.sidebar.needsAttention }
+      : !shown && unread > 0
+        ? {
+            color: failed ? "bg-destructive" : "bg-unread",
+            label: t.sidebar.newReplies(unread),
+          }
+        : null
   // Deleted, it closes up where it was with its conversations, as a conversation's row does, the only project too: the
   // new project row that takes its place is shorter than a project open on its conversations.
   const item = useRef<HTMLLIElement | null>(null)
@@ -228,27 +243,44 @@ export function ProjectGroup({
             onClick={() => onOpen(!open)}
           >
             <Folder className="shrink-0" />
-            {/* The name fades out before the trailing slot: the dot, or on hover the two buttons. */}
+            {/* The name fades out before the trailing slot: the mark, or on hover the two buttons. On a touch screen the
+                buttons stay, with a run's mark before them. */}
             <span
               className={cn(
                 "min-w-0 flex-1 overflow-hidden mask-[linear-gradient(to_right,#000_calc(100%-2rem),transparent)] text-clip! whitespace-nowrap",
-                mark &&
+                (spinning || mark) &&
                   "mask-[linear-gradient(to_right,#000_calc(100%-3.375rem),transparent_calc(100%-1.875rem))]",
-                "group-hover/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] group-has-data-popup-open/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] group-has-[:focus-visible]/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] [@media(hover:none)]:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))]"
+                "group-hover/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] group-has-data-popup-open/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))] group-has-[:focus-visible]/menu-item:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))]",
+                working
+                  ? "[@media(hover:none)]:mask-[linear-gradient(to_right,#000_calc(100%-7.375rem),transparent_calc(100%-5.875rem))]"
+                  : "[@media(hover:none)]:mask-[linear-gradient(to_right,#000_calc(100%-5.375rem),transparent_calc(100%-3.875rem))]"
               )}
             >
               {name}
             </span>
-            {mark && (
-              <span className="pointer-events-none absolute inset-y-0 right-0 flex w-8 items-center justify-center group-hover/menu-item:opacity-0 group-has-data-popup-open/menu-item:opacity-0 group-has-[:focus-visible]/menu-item:opacity-0 [@media(hover:none)]:opacity-0">
-                <span
-                  role="img"
-                  aria-label={t.sidebar.newReplies(unread)}
-                  className={cn(
-                    "size-2 rounded-full",
-                    failed ? "bg-destructive" : "bg-unread"
-                  )}
-                />
+            {(spinning || mark) && (
+              <span
+                className={cn(
+                  "pointer-events-none absolute inset-y-0 right-0 flex w-8 items-center justify-center group-hover/menu-item:opacity-0 group-has-data-popup-open/menu-item:opacity-0 group-has-[:focus-visible]/menu-item:opacity-0",
+                  working
+                    ? "[@media(hover:none)]:right-16"
+                    : "[@media(hover:none)]:opacity-0"
+                )}
+              >
+                {spinning ? (
+                  <Spinner
+                    aria-label={t.sidebar.running}
+                    className="text-muted-foreground"
+                  />
+                ) : (
+                  mark && (
+                    <span
+                      role="img"
+                      aria-label={mark.label}
+                      className={cn("size-2 rounded-full", mark.color)}
+                    />
+                  )
+                )}
               </span>
             )}
           </SidebarMenuButton>

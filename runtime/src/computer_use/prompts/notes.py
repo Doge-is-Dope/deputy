@@ -22,17 +22,67 @@ def full(max_tasks: int) -> str:
     return f"{max_tasks} tasks are running, the most at once. Start another once one has ended."
 
 
-def step_rounds(rounds: int) -> str:
-    """When a plan step has used its rounds of hand-overs."""
-    return f"this step was handed over {rounds} times already. Change the plan, or tell the user what is left."
-
-
 def message_rounds(rounds: int) -> str:
     """When a message without a plan has used its rounds of hand-overs."""
     return (
         f"this message's work was handed over {rounds} times already. Do not hand it over again; tell the user what is "
         "left."
     )
+
+
+def steps_finished(unknown: Sequence[str]) -> str:
+    """What finish_step answers; `unknown` are the ids the plan does not have."""
+    return f"Noted, except {', '.join(unknown)}: the plan has no such step." if unknown else "Noted."
+
+
+def plan_left(left: Sequence[str]) -> str:
+    """How the plan stands once a task ended, after its result: the steps that are not done and nobody is on."""
+    if not left:
+        return ""
+    return (
+        f"Step(s) {', '.join(left)} of the plan are not done and no task is on them. If the work is done, send write_plan "
+        "with done true for them; if they are dropped, leave them out of the plan. Otherwise carry on with them."
+    )
+
+
+def task_asks(id: str, agent: str, question: str) -> str:
+    """A task's question, as the main agent hears it."""
+    return f"The background task {id} ({agent} agent) asks you, and waits for your answer: {question}"
+
+
+STEP_STATUS = {"pending": "to do", "in_progress": "in progress", "completed": "done"}
+
+
+def plan_on_board(steps: Sequence[dict], reader: str) -> str:
+    """The plan as the agent of task `reader` reads it, each step with its state, who is on it and what it needs."""
+    if not steps:
+        return ""
+    lines = []
+    for step in steps:
+        who = ", ".join("you" if task == reader else task for task in step["tasks"])
+        line = f"- {step['id']}. [{STEP_STATUS[step['status']]}{f': {who}' if who else ''}] {step['title']}"
+        if step["needs"]:
+            line += f" (needs {', '.join(step['needs'])})"
+        if step["done_when"]:
+            line += f" Done when: {step['done_when']}"
+        lines.append(line)
+    listed = "\n".join(lines)
+    return f"The plan, which only the main agent changes:\n{listed}"
+
+
+def others_at_work(running: Sequence[dict], reader: str) -> str:
+    """The tasks at work besides task `reader`."""
+    listed = "\n".join(
+        f"- {task['id']} ({task['agent']} agent): {task['title']}"
+        + (f" (steps {', '.join(task['steps'])})" if task["steps"] else "")
+        for task in running if task["id"] != reader
+    )
+    return f"Other tasks at work now:\n{listed}" if listed else ""
+
+
+def bad_plan(max_steps: int) -> str:
+    """What write_plan answers for a list it cannot take."""
+    return f"a plan has 1 to {max_steps} steps, each with an id of its own and a title."
 
 
 UNKNOWN_RESULT = (
@@ -46,8 +96,16 @@ def no_task(id: str) -> str:
     return f"no task {id} is running."
 
 
+# What write_plan answers.
+PLAN_WRITTEN = "Plan written."
+# What a running task hears when the main agent revises the plan's steps.
+PLAN_UPDATED = "The plan was updated. If that may affect your work, read_blackboard shows it."
+# What read_blackboard answers when there is nothing on it.
+EMPTY_BOARD = "The blackboard is empty: no plan, no other task at work and nothing done before this task."
 # What telling or stopping a task answers.
 TOLD = "Told it. It reads it before its next step."
+# What ask_user answers.
+ASKED = "Shown to the user. Their next message answers it."
 TASK_STOPPED_BY_YOU = "Stopped. Tell the user what it did and what it did not, from the steps you know of."
 # What search_conversations answers, as Claude desktop's search_session_transcripts does.
 NOTHING_FOUND = "No other conversation matches."

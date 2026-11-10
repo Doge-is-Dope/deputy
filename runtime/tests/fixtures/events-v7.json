@@ -3,7 +3,7 @@
     [
       {
         "type": "start",
-        "v": 6,
+        "v": 7,
         "run": "turn-1",
         "thread": "turn-1",
         "goal": "Open the report",
@@ -60,6 +60,32 @@
         "time": 102
       },
       {
+        "type": "plan",
+        "version": 2,
+        "steps": [
+          {
+            "id": "find",
+            "title": "Find the reports",
+            "done_when": "",
+            "needs": [],
+            "status": "completed",
+            "tasks": []
+          },
+          {
+            "id": "sum",
+            "title": "Add them up",
+            "done_when": "A total",
+            "needs": [
+              "find"
+            ],
+            "status": "in_progress",
+            "tasks": [
+              "t1"
+            ]
+          }
+        ]
+      },
+      {
         "type": "end",
         "stop_reason": "replied",
         "computer": null,
@@ -70,7 +96,7 @@
     [
       {
         "type": "start",
-        "v": 6,
+        "v": 7,
         "kind": "task",
         "run": "task-1",
         "thread": "turn-1",
@@ -147,7 +173,7 @@
     [
       {
         "type": "start",
-        "v": 6,
+        "v": 7,
         "kind": "turn",
         "run": "turn-2",
         "thread": "turn-1",

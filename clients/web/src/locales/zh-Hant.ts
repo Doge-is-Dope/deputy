@@ -218,12 +218,14 @@ export const zhHant = {
     wait: (seconds: unknown) => `等待 ${seconds} 秒`,
     requestTakeover: (reason: string) =>
       reason ? `請你接管：${reason}` : "請你接管",
+    plan: { read: "查看計劃", finished: "完成步驟" },
     code: {
       run: "執行指令",
       write: (path: string) => `寫入 ${path}`,
     },
     // What a group of steps did, each kind once: "點擊、輸入文字、按鍵".
     kinds: {
+      plan: "查看計劃",
       click: "點擊",
       drag: "拖曳",
       move: "移動游標",
@@ -256,6 +258,16 @@ export const zhHant = {
   },
 
   run: {
+    question: {
+      recommended: "建議",
+      typeBelow: "請在輸入框回答。",
+      placeholder: "輸入你的回答",
+      pickMany: "可選多項",
+      picked: (count: number) => `已選 ${count} 項`,
+      list: (labels: string[]) => labels.join("、"),
+      pressEnterMany: (key: string) => `按 ${key} 送出已選項目，或輸入你的回答`,
+      pressEnter: (key: string) => `按 ${key} 選建議答案，或輸入你的回答`,
+    },
     // What the main agent remembered (under its reply) and the rules a task was given (in the task).
     memory: {
       remembered: "已記住",
@@ -285,6 +297,7 @@ export const zhHant = {
       gaveUp: (time: string) => `桌面 ${time}內沒有重新連上`,
       // The summary of a task under way that waits, in place of "working".
       waiting: {
+        answer: "等主代理回答",
         approval: "等你確認",
         takeover: "等你接手",
         control: "你控制中",

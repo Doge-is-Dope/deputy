@@ -36,16 +36,16 @@ export function LoadingRows({
     <li
       ref={ref}
       role="status"
-      className={cn("@container flex flex-col gap-0.5", className)}
+      className={cn(
+        "flex flex-col gap-0.5 motion-safe:animate-pulse",
+        className
+      )}
     >
       <span className="sr-only">{t.common.loading}</span>
       {Array.from({ length: 3 }, (_, index) => (
         <SidebarMenuSkeleton
           key={index}
-          className={cn(
-            "h-8 pointer-coarse:h-10",
-            inset && "pl-10 [--row-at:32px]"
-          )}
+          className={cn("h-8 pointer-coarse:h-10", inset && "pl-10")}
         />
       ))}
     </li>

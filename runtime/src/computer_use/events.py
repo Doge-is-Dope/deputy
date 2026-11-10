@@ -28,6 +28,23 @@ class NoteEvent(TypedDict):
     data: NoteData
 
 
+StepStatus = Literal["pending", "in_progress", "completed"]
+
+
+class PlanStep(TypedDict):
+    id: str
+    title: str
+    done_when: str
+    needs: list[str]
+    status: StepStatus
+    tasks: list[str]  # the ids of the tasks at work on it
+
+
+class PlanSnapshot(TypedDict):
+    version: int  # the newest of a conversation's snapshots is the highest
+    steps: list[PlanStep]
+
+
 def shown_args(args: dict) -> dict:
     """An action's arguments as people read them: without the approval fields or those left empty, which in a
     batch's actions are most of them and once cut the text it typed out of an action's line (2026-10-08)."""

@@ -4,6 +4,7 @@ import type { Cost, ErrorCode, Status } from "@/lib/api"
 import { EFFORTS } from "@/lib/efforts"
 import { locale, t } from "@/lib/i18n"
 import {
+  CheckCircleIcon,
   ClickIcon,
   ClockIcon,
   CursorPositionIcon,
@@ -11,7 +12,9 @@ import {
   HandIcon,
   KeyboardIcon,
   PencilIcon,
+  PlanIcon,
   PointerIcon,
+  QuestionIcon,
   ScreenshotIcon,
   ScrollIcon,
   TerminalIcon,
@@ -130,6 +133,12 @@ export function describeAction(
         icon: PencilIcon,
         label: say.code.write(String(args.path ?? "")),
       }
+    case "read_blackboard":
+      return { icon: PlanIcon, label: say.plan.read }
+    case "finish_step":
+      return { icon: CheckCircleIcon, label: say.plan.finished }
+    case "ask":
+      return { icon: QuestionIcon, label: String(args.question ?? "") }
     default:
       return { icon: ToolIcon, label: tool }
   }
@@ -157,6 +166,7 @@ const KINDS: Record<string, keyof ReturnType<typeof t>["actions"]["kinds"]> = {
   request_takeover: "takeover",
   bash: "run",
   write_file: "write",
+  read_blackboard: "plan",
 }
 
 /**

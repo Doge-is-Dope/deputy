@@ -1,6 +1,13 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { approvalFor, runningOf, userSince, waitingOf, type Status } from "@/lib/api"
+import {
+  approvalFor,
+  runningOf,
+  userSince,
+  waitingOf,
+  waitingSession,
+  type Status,
+} from "@/lib/api"
 
 // The API's requests carry the browser's choices and language, which these selectors don't touch.
 vi.mock("@/lib/choices", () => ({ currentChoices: () => ({}) }))
@@ -27,6 +34,28 @@ describe("status selectors", () => {
     expect(runningOf(running, { thread: "t1" })?.run).toBe("r1")
     expect(runningOf(running, { thread: "t3" })).toBeNull()
     expect(runningOf(null, { run: "r1" })).toBeNull()
+  })
+
+  it("finds the session waiting for the user by any of its logs", () => {
+    const asking = {
+      run: "r1",
+      thread: "t1",
+      turn: null,
+      tasks: ["task-1"],
+    } as Status["running"][number]
+    const other = {
+      run: "r2",
+      thread: "t2",
+      turn: "r2",
+      tasks: [],
+    } as Status["running"][number]
+    const approval = { id: "a", run: "task-1" } as Status["approval"]
+    expect(waitingSession(status({ running: [other, asking], approval }))).toBe(
+      asking
+    )
+    expect(waitingSession(status({ running: [other], approval }))).toBeNull()
+    expect(waitingSession(status({ running: [asking] }))).toBeNull()
+    expect(waitingSession(null)).toBeNull()
   })
 
   it("says since when the user has had the desktop", () => {

@@ -12,7 +12,8 @@ import { toast } from "sonner"
 import { AppSidebar } from "@/components/sidebar/app-sidebar"
 import { Composer } from "@/components/composer/composer"
 import { LiveView } from "@/components/desktop/live-view"
-import { RunView } from "@/components/conversation/run-view"
+import { RunView, type AskedQuestion } from "@/components/conversation/run-view"
+import { ENTER_KEY } from "@/lib/keys"
 import { preloadMarkdown } from "@/components/markdown/markdown"
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
@@ -92,7 +93,10 @@ export default function App() {
     failed: conversationsFailed,
     refresh: refreshConversations,
     lists,
-  } = useConversations(listsChanged)
+  } = useConversations(
+    listsChanged,
+    status?.running.map((each) => each.thread) ?? []
+  )
   // The address names a conversation by its first run, or by any of its runs (an older link).
   const [opened, open] = useOpenRun()
   const project = useOpenProject() // whose home is open: a new conversation begins in it
@@ -449,6 +453,13 @@ export default function App() {
       )
     })
 
+  // The question the main agent asked, while it is open.
+  const [asked, setAsked] = useState<AskedQuestion | null>(null)
+  // A touch screen's options are tapped; a narrow window on a computer still has Enter.
+  const hasKeyboard = window.matchMedia("(pointer: fine)").matches
+  const recommended = hasKeyboard ? (asked?.recommended ?? null) : null
+  const many = hasKeyboard && asked?.multiple === true
+
   const takeover = asking && {
     text: say.composer.takeover.ask(asking.reason),
     onTakeOver: takeOver,
@@ -471,15 +482,42 @@ export default function App() {
       approval={approval}
       onAnswer={answer}
       takeover={takeover}
+      choice={
+        (recommended !== null || many) && !approval
+          ? {
+              accept: async () => {
+                if (recommended !== null) return start(recommended)
+                document
+                  .querySelector<HTMLElement>("[data-question-send]")
+                  ?.click()
+                return true
+              },
+              browse: () =>
+                [
+                  ...document.querySelectorAll<HTMLElement>(
+                    "[data-question-option]"
+                  ),
+                ]
+                  .at(-1)
+                  ?.focus(),
+            }
+          : null
+      }
       queued={queued}
       onWithdraw={withdraw}
       // A project's home is headed by its name already, and the home by the greeting's question.
       placeholder={
         approval
           ? say.composer.approval.placeholder
-          : thread
-            ? say.home.placeholderNext
-            : say.home.placeholderNew
+          : many
+            ? say.run.question.pressEnterMany(ENTER_KEY)
+            : recommended !== null
+              ? say.run.question.pressEnter(ENTER_KEY)
+              : asked !== null
+                ? asked.placeholder || say.run.question.placeholder
+                : thread
+                  ? say.home.placeholderNext
+                  : say.home.placeholderNew
       }
       autoFocus={!thread}
       ref={input}
@@ -510,6 +548,7 @@ export default function App() {
   const [planOf, setPlanOf] = useState(thread)
   if (planOf !== thread) {
     setPlanOf(thread)
+    setAsked(null)
     setPlan({ has: false, docked: plan.docked })
     setPlanOpen(false)
   }
@@ -517,6 +556,19 @@ export default function App() {
   if (planOpen && !plan.has) setPlanOpen(false)
   const planShown = plan.docked ? !planHidden : planOpen
   const closePlan = useCallback(() => setPlanOpen(false), [])
+  // Always the latest `start`, under a name that stays the same: a new one would draw every turn again.
+  const starting = useRef(start)
+  useEffect(() => {
+    starting.current = start
+  })
+  const reply = useCallback((text: string) => starting.current(text), [])
+  // A question asked brings the cursor to the composer, unless the user is typing somewhere else. A phone's keyboard
+  // would cover the question.
+  const questioned = asked !== null
+  useEffect(() => {
+    if (questioned && hasKeyboard && document.activeElement === document.body)
+      input.current?.focus()
+  }, [questioned, hasKeyboard, input])
   // The status says at once the run is no longer running, which changes the lists (listsChanged). Replaying an ended
   // run, as opening one does, ends its stream too, and asks the lists for nothing.
   const onRunEnded = refreshStatus
@@ -699,6 +751,8 @@ export default function App() {
                 composer={composer}
                 onEnded={onRunEnded}
                 onOpenLive={openLive}
+                onReply={reply}
+                onAsked={setAsked}
                 planShown={planShown}
                 onPlan={setPlan}
                 onClosePlan={closePlan}

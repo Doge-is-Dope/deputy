@@ -6,6 +6,7 @@ import {
   type Page,
   type Project,
 } from "@/lib/api"
+import { conversationOf } from "@/lib/conversations"
 
 /** A list the sidebar draws from, a page at a time: a project's (its id), or the recents (null: in no project). */
 export type ListKind = string | null
@@ -13,11 +14,18 @@ export type ListKind = string | null
 /** How many the recents load at a time, enough to fill the sidebar; a project's list loads PROJECT_PAGE. */
 const RECENTS_PAGE = 20
 
+/** How many of the latest conversations, in any project, each refresh reads: those a shut project's marks need. */
+const LATEST_PAGE = 20
+
 const sizeOf = (kind: ListKind) => (kind === null ? RECENTS_PAGE : PROJECT_PAGE)
+
+type Source = Pick<typeof api, "projects" | "conversations" | "runsOf">
 
 type State = {
   projects: Project[] | null
   pages: ReadonlyMap<ListKind, Page<Conversation>> | null
+  latest: Conversation[]
+  beyond: Conversation[] // running in a shut project, yet in none of the lists: read by themselves, for its marks
   loading: ReadonlySet<ListKind>
   errors: ReadonlySet<ListKind>
   arrived: ReadonlySet<string>
@@ -29,6 +37,8 @@ export class ConversationLists {
   private state: State = {
     projects: null,
     pages: null,
+    latest: [],
+    beyond: [],
     loading: new Set(),
     errors: new Set(),
     arrived: new Set(),
@@ -40,9 +50,10 @@ export class ConversationLists {
   private refreshing = Promise.resolve()
   private loads = new Set<Promise<void>>()
   private waiting: Promise<void> | null = null
+  private running: readonly string[] = [] // the conversations with a run under way
 
-  private source: Pick<typeof api, "projects" | "conversations">
-  constructor(source: Pick<typeof api, "projects" | "conversations">) {
+  private source: Source
+  constructor(source: Source) {
     this.source = source
   }
 
@@ -83,8 +94,36 @@ export class ConversationLists {
     return page
   }
 
-  /** Refresh recents and previously requested projects; unopened projects need only their names. */
-  refresh = () => {
+  private async readConversation(thread: string) {
+    try {
+      const runs = await this.source.runsOf(thread)
+      return conversationOf(runs.filter((run) => run.kind === "turn"))
+    } catch {
+      return null // read again with the next refresh, while it runs
+    }
+  }
+
+  /** Those no list holds and a shut project's marks need: read while they run and once as they end, then kept. */
+  private async readBeyond(held: ReadonlySet<string>) {
+    const kept = this.state.beyond.filter((each) => !held.has(each.id))
+    const unended = (each: Conversation) => each.latest.ended === null
+    const threads = new Set([
+      ...this.running.filter((thread) => !held.has(thread)),
+      ...kept.filter(unended).map((each) => each.id),
+    ])
+    const read = await Promise.all(
+      [...threads].map((thread) => this.readConversation(thread))
+    )
+    return [
+      ...kept.filter((each) => !threads.has(each.id)),
+      ...read.filter((each) => each !== null),
+    ]
+  }
+
+  /** Refresh recents and previously requested projects; unopened projects need only their names. `running` names the
+   * conversations with a run under way; left out, those of the last refresh that named them. */
+  refresh = (running?: readonly string[]) => {
+    if (running) this.running = running
     if (this.waiting) return this.waiting
     const next = this.alone(async () => {
       this.waiting = null
@@ -92,9 +131,10 @@ export class ConversationLists {
         const shown = (kind: ListKind) =>
           this.state.pages?.get(kind)?.items.length ?? 0
         // The recents need no project names; a project's list waits for them, so a deleted one is not asked for.
-        const [projects, recents] = await Promise.all([
+        const [projects, recents, latest] = await Promise.all([
           this.source.projects(),
           this.first(null, shown(null)),
+          this.source.conversations({ limit: LATEST_PAGE }),
         ])
         const existing = new Set(projects.map((project) => project.id))
         const kinds = [...(this.state.pages?.keys() ?? [])].filter(
@@ -109,9 +149,18 @@ export class ConversationLists {
           [null, recents],
           ...pages,
         ])
+        const beyond = await this.readBeyond(
+          new Set(
+            [latest, ...refreshed.values()].flatMap((page) =>
+              page.items.map((each) => each.id)
+            )
+          )
+        )
         this.update({
           projects,
           pages: refreshed,
+          latest: latest.items,
+          beyond,
           // A failed next page still needs retrying unless the list reached its end or its project was deleted.
           errors: new Set(
             [...this.state.errors].filter(

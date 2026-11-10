@@ -2,7 +2,8 @@
 
 eval.py runs this inside the container with a marker argument and the task's setup steps as JSON on stdin. The steps
 become one PowerShell script (setup_script), which Win+R starts from the clipboard; it answers through the clipboard
-with "<marker> ok" or "<marker> failed: <error>". Prints JSON with ok/detail."""
+with "<marker> ok" or "<marker> failed: <error>". The script holds the runtime's run lock throughout, as a run does, so
+nothing else types on the desktop meanwhile. Prints JSON with ok/detail, and busy when another holder has the lock."""
 
 import asyncio
 import base64
@@ -12,11 +13,14 @@ import subprocess
 import sys
 import time
 
+from computer_use.desktop.control import DesktopBusy, RunLock
+
 # Short enough for the Run dialog (259 characters); the script itself has no length limit.
 BOOTSTRAP = 'powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -Command "iex (Get-Clipboard -Raw)"'
 REPLY_TIMEOUT = 180  # downloads included
 SETTLE_SECONDS = 2.0  # the screen must stay the same this long before the task starts
 SETTLE_TIMEOUT = 30.0
+HOLDER = "eval setup"  # what the run lock names while the script has the desktop, as /api/status shows it
 
 # Like the `config` steps of WAA and OSWorld tasks. $docs and $desktop are the user's Documents and Desktop folders,
 # wherever they are redirected (OneDrive); $ev is C:\ev, where the tasks keep their files (step_script).
@@ -128,23 +132,36 @@ async def main(marker: str, steps: list[dict]) -> dict:
 
     settings = get_settings()
     computer = RdpComputer(settings.display, settings.keyboard_pipe)
-    set_clipboard(settings.display, setup_script(steps, marker))
-    before = (await computer.screenshot()).png
-    await computer.press([["win", "r"]])
-    await asyncio.sleep(1.5)
-    if (await computer.screenshot()).png == before:
-        return {"ok": False, "detail": "the Run dialog did not open"}
-    await computer.type_text(BOOTSTRAP)  # Unicode input leaves the setup script on the clipboard.
-    await computer.press([["enter"]])
-    deadline = time.monotonic() + REPLY_TIMEOUT
-    while time.monotonic() < deadline:
-        await asyncio.sleep(1)
-        reply = clipboard(settings.display)
-        if reply.startswith(marker):
-            await settle(computer)
-            status = reply[len(marker):].strip()
-            return {"ok": status == "ok", "detail": status}
-    return {"ok": False, "detail": f"no reply within {REPLY_TIMEOUT}s"}
+    return await setup(computer, settings.display, RunLock(settings.run_lock_path), marker, steps)
+
+
+async def setup(computer, display: str, lock: RunLock, marker: str, steps: list[dict]) -> dict:
+    """Start the steps' script and wait for its reply, holding `lock`; busy, without a key pressed, if another run or
+    tool has it."""
+    try:
+        lock.acquire(HOLDER)
+    except DesktopBusy as error:
+        return {"ok": False, "busy": True, "detail": str(error)}
+    try:
+        set_clipboard(display, setup_script(steps, marker))
+        before = (await computer.screenshot()).png
+        await computer.press([["win", "r"]])
+        await asyncio.sleep(1.5)
+        if (await computer.screenshot()).png == before:
+            return {"ok": False, "detail": "the Run dialog did not open"}
+        await computer.type_text(BOOTSTRAP)  # Unicode input leaves the setup script on the clipboard.
+        await computer.press([["enter"]])
+        deadline = time.monotonic() + REPLY_TIMEOUT
+        while time.monotonic() < deadline:
+            await asyncio.sleep(1)
+            reply = clipboard(display)
+            if reply.startswith(marker):
+                await settle(computer)
+                status = reply[len(marker):].strip()
+                return {"ok": status == "ok", "detail": status}
+        return {"ok": False, "detail": f"no reply within {REPLY_TIMEOUT}s"}
+    finally:
+        lock.release()
 
 
 if __name__ == "__main__":

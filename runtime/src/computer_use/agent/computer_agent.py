@@ -8,12 +8,13 @@ from langchain_core.messages import HumanMessage
 from computer_use.agent.inbox import SUBAGENT, Inbox
 from computer_use.agent.models import MAIN_AGENT, build_chat_model, chosen
 from computer_use.agent.review import Verdict, action_records, review_step
-from computer_use.agent.subagent import Result, Subagent
+from computer_use.agent.subagent import Result, Subagent, TaskContext
 from computer_use.agent.trajectory import Trajectory
 from computer_use.computers import Computer, ComputerError
-from computer_use.config import Approvals, RunChoices, Settings
+from computer_use.config import Approvals
 from computer_use.desktop.control import ApprovalFile, Control
 from computer_use.desktop.executor import ActionResult, Executor
+from computer_use.desktop.judge import ScreenJudge
 from computer_use.execution.approvals import MAX_DECLINES
 from computer_use.execution.desktop import DesktopExecution
 from computer_use.middleware.chat import Mention
@@ -70,22 +71,18 @@ class ComputerAgent(Subagent):
 
     def __init__(
         self,
-        settings: Settings,
+        context: TaskContext,
+        log: Trajectory,
+        taught: str,
         computer: Computer,
         control: Control,
-        log: Trajectory,
-        thread: str,
-        session: str,
-        request: str,
-        max_steps: int,
-        user: Inbox,
-        choices: RunChoices,
         approvals: Callable[[], Approvals],
-        taught: str,
+        judge: ScreenJudge | None = None,
     ):
-        super().__init__(settings, log, thread, session, request, max_steps, user, choices, taught)
+        super().__init__(context, log, taught)
         self.computer = computer
         self.control = control
+        self.judge = judge
         # Read per step, so a change the user makes mid-run applies.
         self.approvals = approvals
 
@@ -114,11 +111,11 @@ class ComputerAgent(Subagent):
         return result, {"stop_reason": self.stop_reason, "reply": reply, "actions": actions}
 
     def how(self) -> str:
-        return stopped(self.stop_reason, self.max_steps, MAX_DECLINES)
+        return stopped(self.stop_reason, self.context.max_steps, MAX_DECLINES)
 
     async def records(self) -> list[str]:
         """Every action whose input an agent sent in this conversation, this task's included."""
-        runs = await self.log.store.runs(self.thread)
+        runs = await self.log.store.runs(self.context.thread)
         return [
             record for each in runs
             for record in action_records(await self.log.store.events(each.id, messages=False))
@@ -126,34 +123,36 @@ class ComputerAgent(Subagent):
 
     async def _run(self, task: str, told: Inbox) -> tuple[str, ActionResult]:
         def announce(reason: str) -> None:
-            self.log.note(f"Agent requests a takeover: {reason}\nOpen {self.settings.web_url}", "takeoverRequested")
+            url = self.context.settings.web_url
+            self.log.note(f"Agent requests a takeover: {reason}\nOpen {url}", "takeoverRequested")
 
-        requests, earlier = await self.earlier()
-        board = notes.blackboard(requests, earlier)
-        text = f"{notes.opening(task, self.words(), board, self.taught)}\n\n{notes.today(self.choices.timezone)}"
+        board = await self.context.blackboard.read(self.task_id)
+        today = notes.today(self.context.choices.timezone)
+        text = f"{self.opening(task, board)}\n\n{today}"
 
         async def review(step: str, png: bytes | None) -> Verdict:
             """Auto review by the main agent's model; a named delete or overwrite target must occur in the user's
             messages or the input the agent sent."""
             sent = [message.text for message in told.read(SUBAGENT)]
             context = review_context(text, sent, await self.steps())
-            sources = [*self.words(), *sent, *requests, *await self.records()]
-            main = build_chat_model(chosen(self.settings, MAIN_AGENT, self.choices.agents), self.settings)
+            sources = [*self.words(), *sent, *board.requests, *await self.records()]
+            settings = self.context.settings
+            main = build_chat_model(chosen(settings, MAIN_AGENT, self.context.choices.agents), settings)
             return await review_step(main, context, step, png, sources)
 
         async with DesktopExecution(
-            self.computer, self.control, ApprovalFile(self.settings.approval_path), self.log, review,
-            lambda: self.approvals() == "auto", announce, self.settings.web_url, told,
+            self.computer, self.control, ApprovalFile(self.context.settings.approval_path), self.log, review,
+            lambda: self.approvals() == "auto", announce, self.context.settings.web_url, told, self.judge,
         ) as execution:
             executor = execution.executor
             start = self._start = HumanMessage(content=content(await executor.observe(f"{text}\n\n{FIRST_SCREEN}")))
             await self.log.input(start, "observe")
-            choice = chosen(self.settings, self.agent, self.choices.agents)
+            choice = chosen(self.context.settings, self.agent, self.context.choices.agents)
             self.log.uses(choice.model, name=self.agent)
             reply = await self.invoke(
-                build_chat_model(choice, self.settings),
+                build_chat_model(choice, self.context.settings),
                 execution.tools,
-                system_prompt(self.choices.locale), execution.middleware, start,
+                system_prompt(self.context.choices.locale), execution.middleware, start,
                 middleware=[SkillsMiddleware(self.agent)],
             )
             return reply, await self._after(executor)

@@ -6,6 +6,7 @@ import type {
   ModelEvent,
   NoteEvent,
   Outcome,
+  Pending,
   RunEvent,
 } from "@/lib/api"
 import { describeAction, formatDuration } from "@/lib/format"
@@ -17,6 +18,7 @@ export type Step = {
   thought: string
   call?: ModelEvent["tool_calls"][number] // what the model asked for, before its result arrives
   action?: ActionEvent
+  finished?: string[] // for a step of the plan reported done: what the plan calls each
   // It needed approval first (the composer asks: agent/confirm.py): whether auto review looks at it first, as the
   // user had it when the step came up, and whether it has yet; how it was answered, by whom ("auto": auto review,
   // with its reason as the note), once it was.
@@ -94,14 +96,29 @@ export type Item =
   // What the main agent remembered, where it called remember, before what it said after: one chip for the rules one
   // reply of its saved. `updated`: one of them replaced a rule it had.
   | { kind: "memory"; key: string; memories: Remembered[]; updated: boolean }
+  // What the main agent asked the user: open until their next message, or until it asks something else.
+  | {
+      kind: "question"
+      key: string
+      question: string
+      options: QuestionOption[]
+      multiple: boolean // several options may be chosen
+      placeholder: string
+      time: number // when it was asked: only what is sent later answers it
+      answered: boolean
+      answer: { id: string; text: string } | null // the message that answered it, drawn with it
+    }
 
-/** A step of the main agent's plan for the work (its write_todos calls: langchain's TodoListMiddleware). */
+/** An answer the main agent offers, the one it recommends first (tools/ask_user.py). */
+export type QuestionOption = { label: string; reason: string }
+
+/** A step of the conversation's plan, as the runtime last showed it (agent/plan.py). */
 export type PlanStep = {
   content: string
   status: "pending" | "in_progress" | "completed"
 }
 
-/** The plan as the main agent last wrote it, and where: the place of the model event that wrote it. */
+/** The plan as it last stood, and where: the place of the event that showed it. */
 export type Plan = { steps: PlanStep[]; at: number }
 
 /** Whether two plans are the same writing: a thread built again, as it is on every word of a reply, makes a new one. */
@@ -125,6 +142,7 @@ export type Thread = {
   items: Item[]
   end: EndEvent | null
   started: number | null
+  sent: number | null // when what began it was sent
   last: number | null
   screenshots: Shot[]
   // The main agent is working out what to say: since the user's latest message or a task's end, it has not answered.
@@ -141,11 +159,12 @@ export type Thread = {
 // (tools/tasks.py).
 const START_TASK = "start_task"
 const TELL_TASK = "tell_task"
-const WRITE_TODOS = "write_todos"
+const ASK_USER = "ask_user"
+const FINISH_STEP = "finish_step"
+const ASK = "ask"
 const REMEMBER = "remember"
 // What remember says it saved (runtime memory/tools.py): the id is the last word of a result that saved one.
 const REMEMBERED = /^Remembered as (\S+?)\.?$/
-const STATUSES: readonly string[] = ["pending", "in_progress", "completed"]
 
 // The runtime's notes, as the conversation tells them in the interface's language.
 function note(event: NoteEvent): string {
@@ -179,12 +198,41 @@ function note(event: NoteEvent): string {
   }
 }
 
+/** What was sent that the log does not have yet. A message a running task has not read is still pending, but the log
+ * has it once the main agent read it, before any question that followed; only what is not in the log can answer one. */
+export const unlogged = (thread: Thread, sent: Pending[]) =>
+  sent.filter(
+    (message) =>
+      !thread.items.some(
+        (item) =>
+          (item.kind === "message" && item.id === message.id) ||
+          (item.kind === "question" && item.answer?.id === message.id)
+      )
+  )
+
+/** The question still waiting for the user's next message, if any. */
+export const openQuestion = (thread: Thread) =>
+  thread.items.findLast(
+    (item): item is Extract<Item, { kind: "question" }> =>
+      item.kind === "question" && !item.answered
+  )
+
+function optionsOf(value: unknown): QuestionOption[] {
+  if (!Array.isArray(value)) return []
+  return value.flatMap((option) =>
+    typeof option?.label === "string"
+      ? [{ label: option.label, reason: String(option.reason ?? "") }]
+      : []
+  )
+}
+
 export function buildThread(events: RunEvent[]): Thread {
   const thread: Thread = {
     goal: null,
     items: [],
     end: null,
     started: events[0]?.time ?? null,
+    sent: null,
     last: events.at(-1)?.time ?? null,
     screenshots: [],
     thinking: false,
@@ -281,6 +329,9 @@ export function buildThread(events: RunEvent[]): Thread {
   // The chip for the rules the main agent's latest reply remembered, which its next remember call joins; a reply of
   // its starts the next.
   let remembered: Extract<Item, { kind: "memory" }> | null = null
+  // The newest plan seen, and what any plan has called each step, so a step later dropped still has a name.
+  let version = -1
+  const titles = new Map<string, string>()
   // The work an event belongs to: the task under way its id names.
   const workOf = (event: RunEvent): Task | undefined =>
     event.task === undefined ? undefined : running.get(event.task)
@@ -290,6 +341,7 @@ export function buildThread(events: RunEvent[]): Thread {
     switch (event.type) {
       case "start":
         thread.goal = event.goal
+        thread.sent = event.sent ?? event.time
         thread.thinking = true
         break
       case "task": {
@@ -364,7 +416,15 @@ export function buildThread(events: RunEvent[]): Thread {
         }
         break
       }
-      case "message":
+      case "message": {
+        const asked = openQuestion(thread)
+        // Read by the main agent, which answers it.
+        thread.thinking = true
+        if (asked && event.sent > asked.time) {
+          asked.answered = true
+          asked.answer = { id: event.id, text: event.text }
+          break
+        }
         add(
           {
             kind: "message",
@@ -375,27 +435,14 @@ export function buildThread(events: RunEvent[]): Thread {
           },
           index
         )
-        // Read by the main agent, which answers it.
-        thread.thinking = true
         break
+      }
       case "model": {
         if (event.agent === "main") {
           remembered = null
           // As written, but for the end: a paragraph indented with full-width spaces keeps them, as it did while being
           // written (trim() takes those too).
           const text = event.text.trimEnd()
-          const listed = event.tool_calls.findLast(
-            (call) => call.name === WRITE_TODOS
-          )
-          if (listed && Array.isArray(listed.args.todos))
-            thread.plan = {
-              steps: (listed.args.todos as PlanStep[]).filter(
-                (step) =>
-                  typeof step?.content === "string" &&
-                  STATUSES.includes(step.status)
-              ),
-              at: index,
-            }
           // Each task it hands over at once, keyed by its call's place too.
           event.tool_calls
             .filter((call) => call.name === START_TASK)
@@ -453,10 +500,17 @@ export function buildThread(events: RunEvent[]): Thread {
           open.set(work, null)
           break
         }
+        const call = event.tool_calls[0]
         const step: Step = {
           key,
           thought: event.text.trim(),
-          call: event.tool_calls[0],
+          call,
+          ...(call.name === FINISH_STEP && {
+            finished: (Array.isArray(call.args.steps)
+              ? (call.args.steps as string[])
+              : []
+            ).map((id) => titles.get(id) ?? id),
+          }),
         }
         work.entries.push({ kind: "step", key, step })
         open.set(work, step)
@@ -464,9 +518,33 @@ export function buildThread(events: RunEvent[]): Thread {
       }
       case "action": {
         if (event.agent === "main") {
-          // Telling a task something ends the main agent's turn too (agent.main_agent): it waits on the task.
-          if (event.tool === TELL_TASK && event.status === "success")
+          // Telling a task something or asking the user ends the main agent's turn too (agent.main_agent).
+          if (
+            (event.tool === TELL_TASK || event.tool === ASK_USER) &&
+            event.status === "success"
+          )
             thread.thinking = false
+          if (event.tool === ASK_USER && event.status === "success") {
+            // Only its latest question waits; one it asks anew takes the place of one nobody answered.
+            thread.items = thread.items.filter(
+              (item) => item.kind !== "question" || item.answered
+            )
+            const options = optionsOf(event.args.options)
+            add(
+              {
+                kind: "question",
+                key: `question-${event.id}`,
+                question: String(event.args.question ?? ""),
+                options,
+                multiple: event.args.multiple === true && options.length > 0,
+                placeholder: String(event.args.placeholder ?? ""),
+                time: event.time,
+                answered: false,
+                answer: null,
+              },
+              index
+            )
+          }
           const saved =
             event.tool === REMEMBER && event.status === "success"
               ? REMEMBERED.exec(event.result.trim())?.[1]
@@ -589,6 +667,19 @@ export function buildThread(events: RunEvent[]): Thread {
         thread.thinking = false
         break
       }
+      case "plan":
+        event.steps.forEach((step) => titles.set(step.id, step.title))
+        if (event.version > version) {
+          version = event.version
+          thread.plan = {
+            steps: event.steps.map(({ title, status }) => ({
+              content: title,
+              status,
+            })),
+            at: index,
+          }
+        }
+        break
       case "input":
         // A message the runtime gave the main agent (a task's result, its status): it is the main agent's turn.
         if (event.agent === "main") thread.thinking = true
@@ -663,10 +754,23 @@ export type Phase = {
  * A task's entries in groups of steps, a new one wherever the agent says something; notes before any step stay as
  * they are.
  */
+/** A step of the plan reported done, or a question to the main agent: lines of their own, not folded with the actions. */
+export function isPlanLine(step: Step): boolean {
+  const { tool } = stepTool(step)
+  return (
+    (tool === FINISH_STEP || tool === ASK) && step.action?.status !== "error"
+  )
+}
+
 export function phasesOf(entries: TaskEntry[]): (TaskEntry | Phase)[] {
   const out: (TaskEntry | Phase)[] = []
   let phase: Phase | null = null
   for (const entry of entries) {
+    if (entry.kind === "step" && isPlanLine(entry.step)) {
+      phase = null
+      out.push(entry)
+      continue
+    }
     if (entry.kind === "step" && (entry.step.thought || !phase)) {
       phase = {
         kind: "phase",
@@ -703,6 +807,7 @@ export function stepUnderWay(task: Task): Step | null {
 /** What the agent working on a task does now: the step under way, or that it thinks about its next. */
 export function doingNow(task: Task): string {
   const call = stepUnderWay(task)?.call
+  if (call?.name === ASK) return t().run.work.waiting.answer
   return call ? describeAction(call.name, call.args).label : t().run.busy.model
 }
 

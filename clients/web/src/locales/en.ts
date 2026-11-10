@@ -195,12 +195,14 @@ export const en: Messages = {
     wait: (seconds) => `Wait ${seconds}s`,
     requestTakeover: (reason) =>
       reason ? `Ask you to take over: ${reason}` : "Ask you to take over",
+    plan: { read: "Read the plan", finished: "Finished a step" },
     code: {
       run: "Run a command",
       write: (path) => `Write ${path}`,
     },
     // What a group of steps did, each kind once: "Clicked, typed text, pressed keys".
     kinds: {
+      plan: "read the plan",
       click: "clicked",
       drag: "dragged",
       move: "moved the pointer",
@@ -236,6 +238,18 @@ export const en: Messages = {
   },
 
   run: {
+    question: {
+      recommended: "Recommended",
+      typeBelow: "Reply in the message box.",
+      placeholder: "Type your answer",
+      pickMany: "Choose any",
+      picked: (count: number) => `${count} selected`,
+      list: (labels: string[]) => labels.join(", "),
+      pressEnterMany: (key: string) =>
+        `Press ${key} to send your choices, or type your own`,
+      pressEnter: (key: string) =>
+        `Press ${key} for the recommended answer, or type your own`,
+    },
     // What the main agent remembered (under its reply) and the rules a task was given (in the task).
     memory: {
       remembered: "Remembered",
@@ -260,6 +274,7 @@ export const en: Messages = {
       wasOffline: (time) => `Desktop was disconnected for ${time}`,
       gaveUp: (time) => `The desktop didn't reconnect within ${time}`,
       waiting: {
+        answer: "Waiting for an answer",
         approval: "Waiting for your OK",
         takeover: "Waiting for you to take over",
         control: "You're in control",

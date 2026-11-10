@@ -12,6 +12,8 @@ from types import SimpleNamespace
 import pytest
 from PIL import Image
 
+from computer_use.desktop.control import RunLock
+
 
 MODEL = "openai:offline-model"
 
@@ -126,6 +128,80 @@ def test_a_version_server_never_replaces_one_with_a_run_going(evaluator, monkeyp
     with pytest.raises(SystemExit, match="has a run going"):  # before compose, which the fixture forbids
         with evaluator.version_server("/tmp/ev-x/src"):
             pass
+
+
+class SetupDesktop:
+    """The Windows desktop as winsetup sees it: each screen differs, and each key pressed or text typed records who
+    held the run lock then."""
+
+    def __init__(self, lock_path, fail: bool = False):
+        self.lock_path, self.fail, self.shots, self.input = lock_path, fail, 0, []
+
+    async def screenshot(self):
+        self.shots += 1
+        return SimpleNamespace(png=b"%d" % self.shots)
+
+    async def press(self, combos):
+        self.input.append((combos, RunLock(self.lock_path).holder()))
+
+    async def type_text(self, text):
+        if self.fail:
+            raise RuntimeError("the display went away")
+        self.input.append((text, RunLock(self.lock_path).holder()))
+
+
+@pytest.fixture
+def winsetup(evaluator, monkeypatch):
+    module = sys.modules["winsetup"]  # as eval.py imported it
+
+    async def no_wait(*args):
+        pass
+
+    monkeypatch.setattr(module.asyncio, "sleep", no_wait)
+    monkeypatch.setattr(module, "settle", no_wait)
+    monkeypatch.setattr(module, "set_clipboard", lambda display, text: None)
+    monkeypatch.setattr(module, "clipboard", lambda display: "EVAL-SETUP-x ok")
+    return module
+
+
+async def test_a_setup_types_only_while_it_holds_the_run_lock(winsetup, tmp_path):
+    lock = RunLock(tmp_path / "run.lock")
+    desktop = SetupDesktop(lock.path)
+
+    result = await winsetup.setup(desktop, ":0", lock, "EVAL-SETUP-x", [{"type": "close-windows"}])
+
+    assert result == {"ok": True, "detail": "ok"}
+    assert [what for what, _ in desktop.input] == [[["win", "r"]], winsetup.BOOTSTRAP, [["enter"]]]
+    assert all(holder["run"] == "eval setup" for _, holder in desktop.input)
+    assert not lock.held and lock.holder() is None
+
+
+async def test_a_setup_lets_go_of_the_lock_when_typing_fails(winsetup, tmp_path):
+    lock = RunLock(tmp_path / "run.lock")
+    with pytest.raises(RuntimeError, match="display went away"):
+        await winsetup.setup(SetupDesktop(lock.path, fail=True), ":0", lock, "EVAL-SETUP-x", [])
+    assert not lock.held and lock.holder() is None
+
+
+async def test_a_setup_presses_nothing_while_another_holder_has_the_desktop(winsetup, monkeypatch, tmp_path):
+    def forbidden(*args):
+        raise AssertionError("a setup that does not hold the desktop must not touch its clipboard")
+
+    monkeypatch.setattr(winsetup, "set_clipboard", forbidden)
+    desktop = SetupDesktop(tmp_path / "run.lock")
+    with RunLock(tmp_path / "run.lock") as other:
+        other.name("20261107-120000")
+        result = await winsetup.setup(desktop, ":0", RunLock(other.path), "EVAL-SETUP-x", [])
+        assert other.holder()["run"] == "20261107-120000"
+    assert result == {"ok": False, "busy": True, "detail": "another run has the desktop: 20261107-120000"}
+    assert desktop.input == [] and desktop.shots == 0
+
+
+def test_a_busy_desktop_stops_the_eval_instead_of_failing_the_setup(evaluator, monkeypatch):
+    reply = {"ok": False, "busy": True, "detail": "another run has the desktop: eval setup"}
+    monkeypatch.setattr(evaluator, "compose", lambda *args, **kwargs: SimpleNamespace(stdout=json.dumps(reply), stderr=""))
+    with pytest.raises(SystemExit, match=r"could not take the desktop \(another run has the desktop: eval setup\)"):
+        evaluator.run_setup([{"type": "close-windows"}])
 
 
 def test_pruning_metadata_comes_from_the_snapshot_without_executing_it(evaluator, tmp_path):

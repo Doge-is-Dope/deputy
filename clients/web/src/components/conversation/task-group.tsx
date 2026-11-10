@@ -24,6 +24,7 @@ import { useT } from "@/lib/i18n"
 import {
   awaitingDesktop,
   doingNow,
+  isPlanLine,
   phasesOf,
   stepTool,
   stepUnderWay,
@@ -45,6 +46,7 @@ import { FollowingLine } from "@/components/memory/lines"
 import {
   PhaseLine,
   PlainLine,
+  PlanLine,
   StepLine,
   Thumbnail,
 } from "@/components/conversation/steps"
@@ -170,6 +172,8 @@ export function TaskGroup({
           takingOver && entry.step === underWay && tool === "request_takeover"
         // Waiting for approval, it is the composer's to ask, right under it: once answered, it is a step as any other.
         if (under && approving) return null
+        if (isPlanLine(entry.step))
+          return <PlanLine key={entry.key} step={entry.step} waiting={under} />
         return (
           <StepLine
             key={entry.key}

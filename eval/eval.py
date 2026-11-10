@@ -313,8 +313,8 @@ def disconnected() -> str:
 
 def desktop_busy() -> str:
     """Why no eval run may start now: the desktop is not connected, the user has control, or another run holds the
-    desktop; empty when it is free. Checked before each task, since its setup and cleanup type on the desktop before
-    the run takes the lock."""
+    desktop; empty when it is free. Checked before each task: its setup and cleanup hold the lock while they type
+    (run_setup), but do not wait for a reconnect or ask who has control."""
     try:
         if detail := disconnected():
             return f"the desktop is not connected ({detail})"
@@ -434,12 +434,17 @@ def reset(after_run: bool) -> Path | None:
 
 
 def run_setup(steps: list[dict]) -> dict:
+    """Run the steps' script on Windows (winsetup.py), which holds the desktop's run lock while it types. Another run
+    or tool holding it stops the eval, as desktop_busy does: typing now would land in what it drives."""
     marker = f"EVAL-SETUP-{uuid.uuid4().hex[:12]}"
     proc = compose("python", "-c", WINSETUP.read_text(), marker, timeout=SETUP_TIMEOUT, stdin=json.dumps(steps))
     try:
-        return json.loads(proc.stdout.strip().splitlines()[-1])
+        result = json.loads(proc.stdout.strip().splitlines()[-1])
     except (IndexError, json.JSONDecodeError):
         return {"ok": False, "detail": (proc.stdout + proc.stderr)[-500:]}
+    if result.get("busy"):
+        raise SystemExit(f"Stopped: the setup could not take the desktop ({result['detail']}).")
+    return result
 
 
 def prepare(task: Task, after_run: bool) -> tuple[Path | None, str]:

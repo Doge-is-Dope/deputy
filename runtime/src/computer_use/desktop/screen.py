@@ -2,7 +2,7 @@
 
 import asyncio
 import io
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 
 from PIL import Image, ImageChops, ImageDraw, ImageFilter
 
@@ -25,6 +25,13 @@ MOVING_MARGIN = 4
 SETTLE_QUIET_SECONDS = 0.5
 SETTLE_MAX_SECONDS = 3.0
 SETTLE_POLL_SECONDS = 0.1
+# While settling, the screen is watched in cells of CELL x CELL pixels. A cell that changes back to a look it had
+# earlier in the same wait is moving on its own, not drawing the action's effect: a blinking arrow or cursor, a
+# flashing taskbar button (two exact looks, 0.53 s apart, measured over RDP 2026-11-07). Without this such a screen
+# is never still for SETTLE_QUIET_SECONDS and every action waits SETTLE_MAX_SECONDS.
+CELL = 32
+# How long settle_judged waits for a judging still running once the screen has settled.
+JUDGE_GRACE_SECONDS = 1.0
 # A screen as the model gets it, and in gray for comparing.
 Shot = tuple[Frame, Image.Image]
 # The ring around a point a step acts on, as the user sees it when asked to approve the step: red on white, so it
@@ -93,10 +100,33 @@ async def lasting_diff(seen: Image.Image, now: Image.Image, later: Image.Image, 
     return await asyncio.to_thread(lasting_changed_pixels, seen, now, later, around)
 
 
-def _compare(old: Image.Image, image: Image.Image) -> tuple[Image.Image, bool]:
-    """The screen `image` in gray, and whether it changed from the gray screen `old`."""
+def _drawn(old: Image.Image, new: Image.Image, looks: dict[tuple[int, int], set[int]]) -> int:
+    """How many pixels changed from the gray screen `old` to `new`, leaving out the cells that went back to a look
+    they had before. `looks` holds each changed cell's looks so far, by its top-left corner, and is updated."""
+    changes = _changes(old, new)
+    if old.size != new.size:
+        looks.clear()
+        return _count(changes, ())
+    drawn = 0
+    # Changed pixels per cell, exactly: a float mean does not round a single pixel away.
+    counts = changes.convert("F").reduce(CELL)
+    for index, mean in enumerate(counts.get_flattened_data()):
+        if not mean:
+            continue
+        x, y = index % counts.width * CELL, index // counts.width * CELL
+        box = (x, y, x + CELL, y + CELL)
+        seen = looks.setdefault((x, y), {hash(old.crop(box).tobytes())})
+        look = hash(new.crop(box).tobytes())
+        if look not in seen:
+            seen.add(look)
+            drawn += round(mean * CELL * CELL / 255)
+    return drawn
+
+
+def _compare(old: Image.Image, image: Image.Image, looks: dict[tuple[int, int], set[int]]) -> tuple[Image.Image, bool]:
+    """The screen `image` in gray, and whether something new was drawn since the gray screen `old` (see _drawn)."""
     new = image.convert("L")
-    return new, _count(_changes(old, new), ()) >= NOISE
+    return new, _drawn(old, new, looks) >= NOISE
 
 
 def _shot(image: Image.Image) -> Shot:
@@ -120,10 +150,49 @@ async def settle(computer: Computer, before: Image.Image, no_change_seconds: flo
     App launches can outlast the no-change timeout. Return the current screen and
     let the agent decide whether to wait longer rather than delay every input.
     Polls compare raw captures; only the returned frame is encoded as PNG."""
+    return await _settle(computer, before, no_change_seconds)
+
+
+async def settle_judged[T](
+    computer: Computer, before: Image.Image, no_change_seconds: float, judge: Callable[[bytes], Awaitable[T]],
+) -> tuple[Shot, T | None]:
+    """settle, and `judge` on the screen it returns. The judging starts as soon as the screen goes still and starts
+    over whenever it draws again, so it mostly ends within the quiet wait rather than after it; None if it has not
+    ended JUDGE_GRACE_SECONDS after that."""
+    task: asyncio.Task[T] | None = None
+
+    async def still(image: Image.Image) -> None:
+        nonlocal task
+        if task:
+            task.cancel()
+        png = (await asyncio.to_thread(Frame.encode, image)).png
+        task = asyncio.create_task(judge(png))
+
+    try:
+        shot = await _settle(computer, before, no_change_seconds, still)
+        try:
+            return shot, await asyncio.wait_for(asyncio.shield(task), JUDGE_GRACE_SECONDS)
+        except TimeoutError:
+            return shot, None
+    finally:
+        if task and not task.done():
+            task.cancel()
+
+
+async def _settle(
+    computer: Computer, before: Image.Image, no_change_seconds: float,
+    still: Callable[[Image.Image], Awaitable[None]] | None = None,
+) -> Shot:
+    """settle, calling `still` with the screen whenever it may be the last one: at first, and once a poll finds it
+    unchanged after drawing (text printing letter by letter draws on every poll)."""
     loop = asyncio.get_running_loop()
     start = still_since = loop.time()
+    looks: dict[tuple[int, int], set[int]] = {}
     image = await computer.image()
-    gray, moved = await asyncio.to_thread(_compare, before, image)
+    gray, moved = await asyncio.to_thread(_compare, before, image, looks)
+    if still:
+        await still(image)
+    drawing = False
     while True:
         now = loop.time()
         if moved and (now - still_since >= SETTLE_QUIET_SECONDS or now - start >= SETTLE_MAX_SECONDS):
@@ -132,6 +201,9 @@ async def settle(computer: Computer, before: Image.Image, no_change_seconds: flo
             return await asyncio.to_thread(Frame.encode, image), gray
         await asyncio.sleep(SETTLE_POLL_SECONDS)
         image = await computer.image()
-        gray, changed = await asyncio.to_thread(_compare, gray, image)
+        gray, changed = await asyncio.to_thread(_compare, gray, image, looks)
         if changed:
-            moved, still_since = True, loop.time()
+            moved, still_since, drawing = True, loop.time(), True
+        elif drawing and still:
+            drawing = False
+            await still(image)

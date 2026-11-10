@@ -54,11 +54,22 @@ export const SearchIcon = (props: IconProps) => (
   </Icon>
 )
 
-// A conversation in the search's list, as SF Symbols' message: a circle of the status marks' size whose lower left
-// curves out into the tail, its bottom edge scooping back into the circle.
+// A speech bubble: a circle of the status marks' size whose lower left curves out into a short tail.
+const BUBBLE =
+  "M7.6 19.6A8.75 8.75 0 1 0 4.4 16.4c.1 1.4-.2 2.7-.8 3.9 1.4 0 2.9-.2 4-.7z"
+
+// A conversation in the search's list, as SF Symbols' message.
 export const ChatIcon = (props: IconProps) => (
   <Icon {...props}>
-    <path d="M8.72 20.11A8.75 8.75 0 1 0 3.38 13.52c.44 2.46.32 5.38-.08 6.88 1.5 0 3.1-1.1 5.42-.29z" />
+    <path d={BUBBLE} />
+  </Icon>
+)
+
+// What the main agent or a task asked, as SF Symbols' questionmark.circle.
+export const QuestionIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="12" cy="12" r="8.75" />
+    <path d="M9.6 9.6a2.45 2.45 0 1 1 3.7 2.1c-.85.5-1.3 1-1.3 1.9M12 16.6h.01" />
   </Icon>
 )
 

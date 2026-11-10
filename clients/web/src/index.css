@@ -139,6 +139,7 @@
   --takeover-glow: oklch(from var(--takeover) min(l, 0.55) max(c, 0.15) h);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-overshoot: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
   --chart-1: oklch(0.87 0 0);
   --chart-2: oklch(0.556 0 0);
@@ -304,6 +305,48 @@
   }
   to {
     transform: translateX(100%);
+  }
+}
+
+/* A conversation's name rolling in over the message that stood in for it, as a wave from the left: --at is when it
+   reaches a character, --for how long the character takes, --tilt how far it leans. Each character stands where plain
+   text puts it and moves by transform alone, so nothing is laid out again and only the characters rolling move. A
+   character that has landed lets go of its animation (backwards) to be drawn with the page, as the plain name that
+   follows will be; one that has left stays gone (forwards). A character the name starts with too stays where it is
+   and only darkens. */
+.name-char-out,
+.name-char-in,
+.name-char-kept {
+  position: absolute;
+  top: 0;
+}
+.name-char-kept {
+  animation: name-char-ink 280ms linear calc(var(--at) + 50ms + var(--for))
+    backwards;
+}
+.name-char-out {
+  color: var(--muted-foreground);
+  animation: name-char-out var(--for) var(--ease-overshoot) var(--at) forwards;
+}
+.name-char-in {
+  animation:
+    name-char-in var(--for) var(--ease-overshoot) calc(var(--at) + 50ms)
+      backwards,
+    name-char-ink 280ms linear calc(var(--at) + 50ms + var(--for)) backwards;
+}
+@keyframes name-char-out {
+  to {
+    transform: translateY(-100%) rotate(calc(var(--tilt) * -1));
+  }
+}
+@keyframes name-char-in {
+  from {
+    transform: translateY(100%) rotate(var(--tilt));
+  }
+}
+@keyframes name-char-ink {
+  from {
+    color: var(--muted-foreground);
   }
 }
 
@@ -622,52 +665,6 @@
       translate: none;
       filter: none;
     }
-  }
-}
-
-/* A shape of a placeholder still loading, and the same pass of light over it as the shimmer's over text: one band
-   sweeping across all the placeholder's shapes as a single light, rather than each shape blinking on its own. Each
-   shape draws its part of the band where the placeholder (a size container: cqw is its width) puts it; a shape that
-   doesn't start at the placeholder's left edge says where it does in --at. The band is three times the placeholder's
-   width, so it crosses in the shimmer's time and rests as long off the edge, and like the shimmer's it moves by
-   transform, so it never repaints. The shape is the text at 10% over whatever it sits on, so it shows on the sidebar
-   as on the page. Lighter than the shape in either mode: toward the page in light, toward the text in dark. Still
-   while motion is reduced. */
-@utility skeleton-shape {
-  --sheen: color-mix(in oklch, var(--background) 70%, transparent);
-  position: relative;
-  overflow: hidden;
-  background-color: color-mix(in oklch, var(--foreground) 10%, transparent);
-
-  &:where([data-mode="dark"] *) {
-    --sheen: color-mix(in oklch, var(--foreground) 8%, transparent);
-  }
-  &::after {
-    content: "";
-    position: absolute;
-    inset-block: 0;
-    left: calc(-100cqw - var(--at, 0px));
-    width: 300cqw;
-    background-image: linear-gradient(
-      90deg,
-      transparent 44%,
-      var(--sheen) 50%,
-      transparent 56%
-    );
-    animation: skeleton-sweep 2.5s linear infinite;
-  }
-  @media (prefers-reduced-motion: reduce) {
-    &::after {
-      display: none;
-    }
-  }
-}
-@keyframes skeleton-sweep {
-  from {
-    transform: translateX(-100cqw);
-  }
-  to {
-    transform: translateX(100cqw);
   }
 }
 

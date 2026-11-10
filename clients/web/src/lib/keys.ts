@@ -1,6 +1,12 @@
 // Shortcuts as the keyboard has them: ⌘ on a Mac, Ctrl elsewhere.
 export const MAC = /Mac|iPhone|iPad/.test(navigator.platform)
 
+/** The Enter key on a keycap. */
+export const ENTER_KEYCAP = MAC ? "⏎" : "Enter"
+
+/** The Enter key's name in a sentence, as its keyboard calls it. */
+export const ENTER_KEY = MAC ? "Return" : "Enter"
+
 /** A shortcut with ⌘ (Ctrl off a Mac): its key, and whether ⇧ goes with it. */
 export type Shortcut = { key: string; shift?: boolean }
 

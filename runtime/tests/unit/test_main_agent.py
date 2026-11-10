@@ -9,6 +9,7 @@ import openai
 import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatGenerationChunk
+from langchain_core.tools import tool
 
 import computer_use.agent.main_agent as main_agent
 import computer_use.agent.session as session
@@ -123,7 +124,7 @@ async def test_a_plan_written_first_is_not_taken_for_a_reply_that_leaves_the_des
     settings, computer, monkeypatch
 ):
     computer_model, _ = use_script(monkeypatch, [AIMessage("Opened Notepad.")], main=[
-        AIMessage(content="", tool_calls=[tool_call("m1-plan", "write_todos", todos=plan("in_progress", "pending"))]),
+        AIMessage(content="", tool_calls=[tool_call("m1-plan", "write_plan", steps=plan(None, None))]),
         delegate("Open Notepad.", "m1"),
         AIMessage("Notepad is open."),
     ])
@@ -258,7 +259,7 @@ async def test_desktop_work_is_handed_over_at_most_twice_per_message(settings, c
 async def test_two_computer_tasks_in_one_reply_start_one(settings, computer, monkeypatch):
     computer_model, _ = use_script(monkeypatch, [AIMessage("Did it.")], main=[
         AIMessage(content="", tool_calls=[
-            tool_call("m1-plan", "write_todos", todos=plan("in_progress", "pending")),
+            tool_call("m1-plan", "write_plan", steps=plan(None, None)),
             tool_call("m1", "start_task", agent="computer", title="Task", task="One."),
             tool_call("m2", "start_task", agent="computer", title="Task", task="Two."),
         ]),
@@ -697,51 +698,233 @@ async def test_a_stop_swallowed_inside_a_graph_is_raised_again():
         await task
 
 
-def plan(*statuses: str) -> list[dict]:
-    return [{"content": "ABCDEFG"[index], "status": status} for index, status in enumerate(statuses)]
+def plan(*marks: bool | None) -> list[dict]:
+    """A plan's steps A, B, ..., each marked done (True), opened again (False) or left as it is (None)."""
+    flags = {True: {"done": True}, False: {"reopen": True}, None: {}}
+    return [{"id": "ABCDEFG"[n], "title": f"Do {'ABCDEFG'[n]}.", **flags[mark]} for n, mark in enumerate(marks)]
 
 
-def handing_over(call_id: str, todos: list[dict] | None, task="Do it.", first="plan") -> AIMessage:
-    calls = [tool_call(call_id, "start_task", agent="computer", title="Task", task=task)]
-    if todos is not None:
-        written = tool_call(f"{call_id}-plan", "write_todos", todos=todos)
+def handing_over(call_id: str, steps: list[dict] | None, task="Do it.", first="plan", on=None) -> AIMessage:
+    calls = [tool_call(call_id, "start_task", agent="computer", title="Task", task=task, **({"steps": on} if on else {}))]
+    if steps is not None:
+        written = tool_call(f"{call_id}-plan", "write_plan", steps=steps)
         calls = [written, *calls] if first == "plan" else [*calls, written]
     return AIMessage(content="", tool_calls=calls)
 
 
-async def test_the_plan_is_logged_for_the_page_and_a_hand_over_beside_it_still_ends_the_turn(
-    settings, computer, monkeypatch
+def snapshots(settings, result) -> list[dict]:
+    """The plan's snapshots in every turn of the run's session, oldest first."""
+    folders = sorted(path for path in runs_dir(settings.data_dir).iterdir() if path.is_dir())
+    logs = [read_events(folder) for folder in folders]
+    found = [event for log in logs for event in log if event["type"] == "plan"]
+    return sorted(found, key=lambda event: event["version"])
+
+
+def shown(snapshot: dict) -> dict[str, tuple[str, list[str]]]:
+    return {step["id"]: (step["status"], step["tasks"]) for step in snapshot["steps"]}
+
+
+@pytest.mark.parametrize("first", ["plan", "task"])
+async def test_a_plan_beside_a_hand_over_shows_the_task_on_its_step_in_either_order_and_ends_the_turn(
+    settings, computer, monkeypatch, first
 ):
-    computer_model, main_model = use_script(monkeypatch, [AIMessage("Did A."), AIMessage("Did B.")], main=[
-        handing_over("m1", plan("in_progress", "pending")),
-        handing_over("m2", plan("completed", "in_progress"), first="task"),
-        AIMessage(content="", tool_calls=[tool_call("m3", "write_todos", todos=plan("completed", "completed"))]),
+    computer_model, main_model = use_script(monkeypatch, [
+        AIMessage(content="", tool_calls=[tool_call("c1", "finish_step", steps=["A"])]),
+        AIMessage("Did A."),
+    ], main=[
+        handing_over("m1", plan(None, None), first=first, on=["A"]),
         AIMessage("Done."),
     ])
 
     result = await run_turn(settings, "do A then B", max_steps=10, computer=computer)
 
-    assert result.reply == "Done." and len(computer_model.received) == 2
-    assert len(main_model.received) == 4
-    # Calls in one reply run at once, so their results are logged in no promised order.
-    actions = logged(result, "action", MAIN)
-    assert sorted(event["tool"] for event in actions) == ["start_task"] * 2 + ["write_todos"] * 3
-    assert all(event["status"] == "success" for event in actions)
-    written = [call["args"]["todos"] for event in logged(result, "model", MAIN) for call in event["tool_calls"]
-               if call["name"] == "write_todos"]
-    assert written == [plan("in_progress", "pending"), plan("completed", "in_progress"), plan("completed", "completed")]
+    assert result.reply == "Done." and len(computer_model.received) == 2 and len(main_model.received) == 2
+    seen = snapshots(settings, result)
+    assert [each["version"] for each in seen] == sorted({each["version"] for each in seen})
+    assert any(shown(each) == {"A": ("in_progress", ["t1"]), "B": ("pending", [])} for each in seen)
+    assert shown(seen[-1]) == {"A": ("completed", []), "B": ("pending", [])}
+    assert notes.plan_left(["B"]) in main_model.received[1][-1].text
 
 
-async def test_a_step_of_the_plan_is_handed_over_at_most_twice_and_the_next_one_twice_more(
-    settings, computer, monkeypatch
-):
-    computer_model, main_model = use_script(
+async def test_a_task_that_did_not_reply_leaves_its_step_undone(settings, computer, monkeypatch):
+    _, main_model = use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "screenshot")])], main=[
+        handing_over("m1", plan(None), on=["A"]),
+        AIMessage("It ran out of steps."),
+    ])
+
+    result = await run_turn(settings, "do A", max_steps=1, computer=computer)
+
+    assert shown(snapshots(settings, result)[-1]) == {"A": ("pending", [])}
+    assert notes.plan_left(["A"]) in main_model.received[1][-1].text
+
+
+async def test_the_main_agent_marks_steps_and_the_plan_goes_on_in_the_next_message(settings, computer, monkeypatch):
+    use_script(monkeypatch, [AIMessage("Did A.")], main=[
+        handing_over("m1", plan(None, None), on=["A"]),
+        AIMessage(content="", tool_calls=[tool_call("m2", "write_plan", steps=plan(False, True))]),
+        AIMessage("A fell short."),
+    ])
+    first = await run_turn(settings, "do A then B", max_steps=10, computer=computer)
+    before = snapshots(settings, first)[-1]
+    assert shown(before) == {"A": ("pending", []), "B": ("completed", [])}
+
+    use_script(monkeypatch, [], main=[
+        AIMessage(content="", tool_calls=[tool_call("m3", "write_plan", steps=plan(None, None))]),
+        AIMessage("Still so."),
+    ])
+    second = await run_turn(settings, "where are we?", max_steps=10, computer=computer, thread=first.run)
+
+    latest = snapshots(settings, second)[-1]
+    assert latest["version"] > before["version"]
+    assert shown(latest) == {"A": ("pending", []), "B": ("completed", [])}
+
+
+async def test_a_list_that_is_no_plan_is_a_failed_call_the_main_agent_can_answer(settings, computer, monkeypatch):
+    twice = [{"id": "A", "title": "One"}, {"id": "A", "title": "Two"}]
+    _, main_model = use_script(monkeypatch, [], main=[
+        AIMessage(content="", tool_calls=[tool_call("m1", "write_plan", steps=twice)]),
+        AIMessage("Sorry."),
+    ])
+
+    result = await run_turn(settings, "plan it", max_steps=10, computer=computer)
+
+    answer = next(m for m in main_model.received[-1] if isinstance(m, ToolMessage))
+    assert answer.status == "error" and notes.bad_plan(12) in answer.text
+    assert result.reply == "Sorry." and snapshots(settings, result) == []
+
+
+async def test_a_task_starts_with_the_plan_and_reports_each_step_it_finishes(settings, computer, monkeypatch):
+    computer_model, _ = use_script(monkeypatch, [
+        AIMessage(content="", tool_calls=[tool_call("c1", "finish_step", steps=["A"])]),
+        AIMessage(content="", tool_calls=[tool_call("c2", "finish_step", steps=["B"])]),
+        AIMessage("Did both."),
+    ], main=[handing_over("m1", plan(None, None), on=["A", "B"]), AIMessage("Done.")])
+
+    result = await run_turn(settings, "do A then B", max_steps=10, computer=computer)
+
+    opening = next(m for m in computer_model.received[0] if isinstance(m, HumanMessage))
+    assert "- A. [in progress: you] Do A." in opening.text
+    assert {"read_blackboard", "finish_step", "ask"} <= {tool.name for tool in computer_model.bindings[0]["tools"]}
+    seen = [shown(each) for each in snapshots(settings, result)]
+    assert {"A": ("completed", ["t1"]), "B": ("in_progress", ["t1"])} in seen
+    assert seen[-1] == {"A": ("completed", []), "B": ("completed", [])}
+
+
+def asks(question: str) -> AIMessage:
+    return AIMessage(content="", tool_calls=[tool_call("c1", "ask", question=question)])
+
+
+async def test_a_task_that_asks_goes_on_with_the_main_agents_answer(settings, computer, monkeypatch):
+    computer_model, main_model = use_script(monkeypatch, [asks("Which file?"), AIMessage("Used B.")], main=[
+        handing_over("m1", plan(None), on=["A"]),
+        AIMessage(content="", tool_calls=[tool_call("m2", "tell_task", task_id="t1", message="Use B.")]),
+        AIMessage("Done."),
+    ])
+
+    result = await run_turn(settings, "do A", max_steps=10, computer=computer)
+
+    assert result.reply == "Done."
+    told = main_model.received[1][-1]
+    assert not from_user(told) and notes.task_asks("t1", "computer", "Which file?") in told.text
+    answer = next(m for m in computer_model.received[1] if isinstance(m, ToolMessage) and m.tool_call_id == "c1")
+    assert answer.text == "Use B."
+
+
+async def test_a_question_the_main_agent_puts_to_the_user_waits_for_the_user(settings, computer, monkeypatch):
+    computer_model, main_model = use_script(monkeypatch, [asks("Which file?"), AIMessage("Used B.")], main=[
+        handing_over("m1", plan(None), on=["A"]),
+        AIMessage("Should it use A or B?"),
+        AIMessage(content="", tool_calls=[tool_call("m2", "tell_task", task_id="t1", message="B, the user says.")]),
+        AIMessage("Done."),
+    ])
+    inbox = Inbox()
+
+    async def answer_once_asked():
+        while len(main_model.received) < 2:
+            await asyncio.sleep(0.01)
+        await asyncio.sleep(0.05)
+        assert len(computer_model.received) == 1  # still waiting
+        inbox.put("Use B")
+
+    answering = asyncio.create_task(answer_once_asked())
+    result = await run_turn(settings, "do A", max_steps=10, computer=computer, inbox=inbox)
+    await answering
+
+    assert result.reply == "Done."
+    answer = next(m for m in computer_model.received[1] if isinstance(m, ToolMessage) and m.tool_call_id == "c1")
+    assert answer.text.startswith("B, the user says.") and "Use B" in answer.text  # the user's own words reach the agent
+    folders = [read_events(path) for path in runs_dir(settings.data_dir).iterdir() if path.is_dir()]
+    (asked,) = [event for log in folders for event in log if event["type"] == "action" and event["tool"] == "ask"]
+    assert asked["answer"] == "B, the user says."  # what the page shows: the runtime's addition is left out
+
+
+async def test_a_reply_whose_calls_lost_their_arguments_is_sent_for_again(settings, computer, monkeypatch):
+    computer_model, main_model = use_script(monkeypatch, [AIMessage("Did it.")], main=[
+        AIMessage(content="", tool_calls=[tool_call("lost", "start_task")]),
+        delegate("Do it.", "m1"),
+        AIMessage("Done."),
+    ])
+
+    result = await run_turn(settings, "do it", max_steps=10, computer=computer)
+
+    assert result.reply == "Done." and len(computer_model.received) == 1 and len(main_model.received) == 3
+    assert [event["id"] for event in logged(result, "action", MAIN)] == ["m1"]
+
+
+async def test_arguments_lost_twice_are_a_failed_call_the_model_hears_of(settings, computer, monkeypatch):
+    lost = AIMessage(content="", tool_calls=[tool_call("lost", "start_task")])
+    _, main_model = use_script(monkeypatch, [], main=[lost, lost, AIMessage("Could not hand it over.")])
+
+    result = await run_turn(settings, "do it", max_steps=10, computer=computer)
+
+    assert result.reply == "Could not hand it over." and len(main_model.received) == 3
+    assert [event["status"] for event in logged(result, "action", MAIN)] == ["error"]
+
+
+@tool
+def no_arguments() -> str:
+    """Takes nothing."""
+    return ""
+
+
+@tool
+def one_argument(text: str) -> str:
+    """Takes some text."""
+    return text
+
+
+@pytest.mark.parametrize(("name", "args", "lost"), [
+    ("one_argument", {}, True),
+    ("one_argument", {"text": "hi"}, False),
+    ("no_arguments", {}, False),
+])
+def test_only_a_tool_that_requires_arguments_can_lose_them(name, args, lost):
+    reply = AIMessage(content="", tool_calls=[tool_call("c1", name, **args)])
+    assert chat.lost_arguments(reply, [no_arguments, one_argument]) is lost
+
+
+async def test_a_list_too_long_to_be_a_plan_does_not_buy_more_hand_overs(settings, computer, monkeypatch):
+    many = [{"id": str(n), "title": "A step"} for n in range(500)]
+    _, main_model = use_script(monkeypatch, [AIMessage("Did it.")] * 30, main=[
+        AIMessage(content="", tool_calls=[tool_call("bad", "write_plan", steps=many)]),
+        *[handing_over(f"m{n}", None) for n in range(26)],
+        AIMessage("Stopped."),
+    ])
+
+    result = await run_turn(settings, "do it", max_steps=10, computer=computer)
+
+    refused = [e for e in logged(result, "action", MAIN) if e["status"] == "error" and e.get("reason") == "taskLimit"]
+    assert len(refused) == 2 and result.reply == "Stopped."
+
+
+async def test_work_is_handed_over_twice_for_each_step_of_the_latest_plan(settings, computer, monkeypatch):
+    computer_model, _ = use_script(
         monkeypatch, [AIMessage("Tried A."), AIMessage("Tried A again."), AIMessage("Did B.")],
         main=[
-            handing_over("m1", plan("in_progress", "pending")),
+            handing_over("m1", plan(None)),
             handing_over("m2", None, task="A, again."),
             handing_over("m3", None, task="A, once more."),
-            handing_over("m4", plan("completed", "in_progress")),
+            handing_over("m4", plan(None, None)),
             AIMessage("Done."),
         ],
     )
@@ -751,19 +934,7 @@ async def test_a_step_of_the_plan_is_handed_over_at_most_twice_and_the_next_one_
     assert result.reply == "Done." and len(computer_model.received) == 3
     refused = {event["id"]: event for event in logged(result, "action", MAIN) if event["status"] == "error"}
     assert list(refused) == ["m3"]
-    assert refused["m3"]["reason"] == "taskLimit" and "this step was handed over 2 times" in refused["m3"]["result"]
-
-
-@pytest.mark.parametrize(
-    ("todos", "step"),
-    [
-        ([{"content": "A", "status": "completed"}, {"content": "B", "status": "in_progress"}], "B"),
-        ([{"content": "A", "status": "pending"}], None),
-        ("not a list", None),
-    ],
-)
-def test_the_step_under_way_is_the_one_in_progress(todos, step):
-    assert chat.under_way({"todos": todos}) == step
+    assert refused["m3"]["reason"] == "taskLimit" and "was handed over 2 times" in refused["m3"]["result"]
 
 
 async def test_the_main_agent_finds_other_conversations_by_what_was_said_in_them(settings, computer, monkeypatch):
@@ -874,3 +1045,86 @@ async def test_memory_is_neither_written_nor_followed_unless_the_user_chose_it(s
     assert await memory.list("local") == []
     system = system_text(main_model.received[0])
     assert "## Memory" not in system and "## What you remember" not in system and "Today is " in system
+
+
+def asking(**args) -> AIMessage:
+    return AIMessage(content="", tool_calls=[tool_call("ask", "ask_user", question="Which one?", **args)])
+
+
+async def test_asking_the_user_ends_the_turn_until_they_answer(settings, computer, monkeypatch):
+    _, main_model = use_script(monkeypatch, [], main=[
+        asking(options=[{"label": "The first", "reason": "It is newer."}], placeholder="Or name another"),
+    ])
+
+    result = await run_turn(settings, "Pick one for me", max_steps=10, computer=computer)
+
+    assert len(main_model.received) == 1
+    (action,) = logged(result, "action", MAIN)
+    assert (action["tool"], action["status"]) == ("ask_user", "success")
+    assert action["args"]["options"] == [{"label": "The first", "reason": "It is newer."}]
+
+
+async def test_a_question_with_too_many_options_goes_back_to_the_main_agent(settings, computer, monkeypatch):
+    options = [{"label": f"Option {n}", "reason": "Why not."} for n in range(5)]
+    _, main_model = use_script(monkeypatch, [], main=[asking(options=options), AIMessage("Tell me which one you want.")])
+
+    result = await run_turn(settings, "Pick one for me", max_steps=10, computer=computer)
+
+    assert result.reply == "Tell me which one you want." and len(main_model.received) == 2
+    (action,) = logged(result, "action", MAIN)
+    assert action["status"] == "error"
+
+
+async def test_a_question_asked_while_a_task_runs_waits_for_the_users_next_message(settings, computer, monkeypatch):
+    working = asyncio.Event()
+
+    class Hanging(ScriptedModel):  # the task works on for as long as the test needs
+        async def ainvoke(self, input, config=None, **kwargs):
+            working.set()
+            await asyncio.Event().wait()
+
+    async def calls(count: int) -> None:
+        while len(main_model.received) < count:
+            await asyncio.sleep(0.01)
+
+    _, main_model = use_script(monkeypatch, [], main=[delegate("Open Start."), asking(), AIMessage("Noted.")])
+    monkeypatch.setattr(computer_agent, "build_chat_model",
+                        lambda _spec, _settings: Hanging(messages=iter([]), received=[], bindings=[]))
+    inbox = Inbox()
+    run = asyncio.create_task(run_turn(settings, "open start", max_steps=10, computer=computer, inbox=inbox))
+    await asyncio.wait_for(working.wait(), 5)
+
+    inbox.put("Which one is it?")
+    await asyncio.wait_for(calls(2), 5)
+    await asyncio.sleep(0.05)
+    assert len(main_model.received) == 2 and not run.done()  # the question ended its turn; the task goes on
+
+    inbox.put("The first")
+    await asyncio.wait_for(calls(3), 5)
+    assert any(isinstance(m, HumanMessage) and m.text == "The first" for m in main_model.received[2])
+    run.cancel()
+    await asyncio.gather(run, return_exceptions=True)
+
+
+async def test_a_question_can_take_several_answers(settings, computer, monkeypatch):
+    options = [{"label": "A", "reason": "One."}, {"label": "B", "reason": "Two."}]
+    use_script(monkeypatch, [], main=[asking(options=options, multiple=True)])
+
+    result = await run_turn(settings, "Pick for me", max_steps=10, computer=computer)
+
+    (action,) = logged(result, "action", MAIN)
+    assert action["status"] == "success" and action["args"]["multiple"] is True
+
+
+async def test_a_message_logs_when_it_was_sent(settings, computer, monkeypatch):
+    use_script(monkeypatch, [], main=[AIMessage("Hello.")])
+    inbox = Inbox()
+    inbox.put("and Italy?")
+    before = inbox.pending()[0].time
+
+    result = await run_turn(settings, "hi", max_steps=10, computer=computer, inbox=inbox, sent=12.5)
+
+    events = events_of(settings, result.run)
+    assert events[0]["sent"] == 12.5
+    (message,) = [event for event in events if event["type"] == "message"]
+    assert message["sent"] == before

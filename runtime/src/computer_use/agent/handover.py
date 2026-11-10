@@ -44,12 +44,12 @@ def task_tool(
     """`kind`'s part of start_task. Tasks that need a `resource` run one at a time and hold it, under their log's name,
     until they end. `memory` supplies the remembered rules a task is handed over with, by id."""
 
-    async def start(title: str, task: str, rules: list[str], call_id: str) -> str | ToolMessage:
+    async def start(title: str, task: str, rules: list[str], steps: list[str], call_id: str) -> str | ToolMessage:
         # One hand-over at a time: what refuses one is decided before its log exists, as the one before left things.
         async with background.starting:
-            return await begin(title, task, rules, call_id)
+            return await begin(title, task, rules, steps, call_id)
 
-    async def begin(title: str, task: str, rules: list[str], call_id: str) -> str | ToolMessage:
+    async def begin(title: str, task: str, rules: list[str], steps: list[str], call_id: str) -> str | ToolMessage:
         call = {"id": call_id, "name": START_TASK}
         if resource is not None and (using := background.working(kind.agent)) is not None:
             return not_executed(call, *resource.in_use(using.id))
@@ -69,6 +69,7 @@ def task_tool(
         worker = make(log, handed.text)
 
         async def work(id: str, told: Inbox):
+            worker.task_id = id
             if handed.rules:  # the page shows them in the task
                 log.note(notes.following(len(handed.rules)), "memoryUsed", rules=list(handed.rules))
             ending, reply, by = FAILED, "", None
@@ -89,7 +90,7 @@ def task_tool(
 
         return notes.started(background.start(
             kind.agent, task, work, worker.steps, turn=parent, record=log.run, heard=len(user.read(MAIN)),
-            title=title,
+            title=title, plan_steps=steps,
         ))
 
     return TaskTool(kind.agent, kind.about, start)

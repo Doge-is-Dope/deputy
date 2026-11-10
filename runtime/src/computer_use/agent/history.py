@@ -146,6 +146,15 @@ def action_lines(events: Iterable[dict]) -> list[str]:
     return lines
 
 
+async def latest_plan(store: Runs, thread: Thread) -> dict | None:
+    """The newest plan snapshot in a conversation's logs, its tasks' included; None if it has no plan."""
+    snapshots = [
+        event for summary in await store.runs(thread)
+        for event in await store.events(summary.id, messages=False) if event["type"] == "plan"
+    ]
+    return max(snapshots, key=itemgetter("version"), default=None)
+
+
 def user_messages(events: list[dict]) -> list[str]:
     start = events[0] if events and events[0]["type"] == "start" else {}
     return [*([start["goal"]] if start.get("goal") else []), *(event["text"] for event in events if event["type"] == "message")]

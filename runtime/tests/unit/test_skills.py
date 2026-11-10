@@ -149,3 +149,8 @@ async def test_the_coding_agent_is_told_its_skills_and_reads_one(settings, compu
     assert "- python: About python." in coding_model.received[0][0].text
     skill = coding_model.received[1][-1]
     assert isinstance(skill, ToolMessage) and skill.status == "success" and "How to python." in skill.text
+
+
+def test_the_desktop_skills_ship_with_the_computer_agent_alone():
+    assert "windows" in SkillsMiddleware("computer").section and "pokemon-red" in SkillsMiddleware("computer").section
+    assert not SkillsMiddleware("main").section and not SkillsMiddleware("coding").section

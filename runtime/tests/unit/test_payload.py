@@ -110,9 +110,24 @@ def test_openai_is_offered_the_hand_over_tools_and_left_to_choose_among_them(set
     assert "tool_choice" not in payload  # a message for the desktop is not forced (agent.main_agent DESKTOP_ASKED)
     # Without a code runner, start_task offers only the computer agent.
     assert [each["name"] for each in payload["tools"]] == ["start_task", "tell_task", "stop_task"]
-    assert list(payload["tools"][0]["parameters"]["properties"]) == ["agent", "title", "task"]
+    assert list(payload["tools"][0]["parameters"]["properties"]) == ["agent", "title", "task", "steps"]
     assert payload["tools"][0]["parameters"]["properties"]["agent"]["enum"] == ["computer"]
     assert list(payload["tools"][2]["parameters"]["properties"]) == ["task_id"]
+
+
+def test_openai_is_offered_a_plan_of_steps_each_with_an_id_and_a_title(settings):
+    from computer_use.agent.plan import Plan
+    from computer_use.tools.plan import plan_tool
+
+    settings.openai_api_key = "sk-offline"
+    bound = build_chat_model(Choice("openai:gpt-6-luna", "high"), settings).bind_tools([plan_tool(Plan(), lambda: None)])
+    payload = bound.bound._get_request_payload([HumanMessage("Plan it.")], **bound.kwargs)
+
+    (offered,) = payload["tools"]
+    step = offered["parameters"]["properties"]["steps"]["items"]
+    assert offered["name"] == "write_plan" and list(offered["parameters"]["properties"]) == ["steps"]
+    assert list(step["properties"]) == ["id", "title", "done_when", "needs", "done", "reopen"]
+    assert step["required"] == ["id", "title"]
 
 
 async def test_openai_responses_gets_back_an_update_before_a_call_as_commentary_after_the_log_restores_it(settings, store):

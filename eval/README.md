@@ -30,7 +30,7 @@ eval/ev report             # pass rates, the grading sheet and the HTML report
 
 To try a version by hand the same way, `eval/ev serve [--version REF]` serves it on port 8001 until Ctrl-C. Docker commands use your current Docker context (`docker context use` or `DOCKER_CONTEXT`).
 
-The eval and web servers share stored runs and the desktop lock. Only one run can use the desktop at a time. Eval conversations appear under the eval project in the web UI. To follow them live, run `CU_API_URL=http://127.0.0.1:8001 bun run dev` in `clients/web/`. Versions predating the CLI's HTTP API client are unsupported.
+The eval and web servers share stored runs and the desktop lock. Only one run can use the desktop at a time. Task setups and the cleanup script hold the same lock while they type; if something else holds it, the eval stops. Eval conversations appear under the eval project in the web UI. To follow them live, run `CU_API_URL=http://127.0.0.1:8001 bun run dev` in `clients/web/`. Versions predating the CLI's HTTP API client are unsupported.
 
 ## Tasks
 

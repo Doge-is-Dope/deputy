@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest"
 
 import type { RunEvent } from "@/lib/api"
 import single from "../../../../runtime/tests/fixtures/events-v5.json"
-import records from "../../../../runtime/tests/fixtures/events-v6.json"
+import records from "../../../../runtime/tests/fixtures/events-v7.json"
 import { mergeSession, type SessionLog } from "@/lib/logs"
 import { buildThread, runningTask } from "@/lib/thread"
 

@@ -62,7 +62,7 @@ class Inbox:
         new = [message for message in self._steering() if reader not in message.read_by]
         for message in new:
             if not message.read_by and self.log is not None:
-                self.log.message(message.id, message.text)
+                self.log.message(message.id, message.text, message.time)
             message.read_by.add(reader)
         return new
 

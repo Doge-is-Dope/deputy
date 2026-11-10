@@ -1,6 +1,7 @@
 """Shared contract for the agents the main agent hands tasks to; a subclass provides its tool metadata and `run`."""
 
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from typing import ClassVar
 
 from langchain.agents import create_agent
@@ -12,9 +13,11 @@ from computer_use.middleware.common import raise_if_stopped, retrying_failed_str
 from computer_use.middleware.subagent import SubagentMiddleware
 from computer_use.agent.trajectory import Trajectory
 from computer_use.config import RunChoices, Settings
-from computer_use.agent.history import action_lines, tasks, user_messages
+from computer_use.agent.blackboard import Blackboard, Board
+from computer_use.agent.history import action_lines
 from computer_use.prompts import notes
-from computer_use.storage import MAIN, TURN
+from computer_use.storage import MAIN
+from computer_use.tools.plan import task_tools
 
 # How a task ended. "replied": its own last turn called no tool. The runtime stopped the others: "step_limit" when its
 # last allowed model call still asked for a tool, "error" when what it works on could not be used at all, or a reason of
@@ -28,6 +31,19 @@ Result = tuple[list[dict], dict]
 MakeAgent = Callable[[Trajectory, str], "Subagent"]
 
 
+@dataclass(frozen=True)
+class TaskContext:
+    """What every task of a session works with."""
+
+    settings: Settings
+    thread: str  # the conversation
+    request: str  # the user's message, which every task quotes word for word
+    max_steps: int  # model calls per task
+    user: Inbox
+    choices: RunChoices
+    blackboard: Blackboard
+
+
 class Subagent:
     """An agent on one task the main agent handed it, started afresh on a log of its own."""
 
@@ -35,29 +51,13 @@ class Subagent:
     name: ClassVar[str]  # what its result calls it, e.g. "computer-use agent"
     about: ClassVar[str]  # its line in start_task's description
 
-    def __init__(
-        self,
-        settings: Settings,
-        log: Trajectory,
-        thread: str,
-        session: str,
-        request: str,
-        max_steps: int,
-        user: Inbox,
-        choices: RunChoices,
-        taught: str,
-    ):
-        self.settings = settings
-        self.choices = choices
+    def __init__(self, context: TaskContext, log: Trajectory, taught: str):
+        self.context = context
         self.log = log
-        self.session = session
-        self.thread = thread  # the conversation, whose logs make the blackboard
-        self.request = request  # the user's message, which every task quotes word for word
-        self.max_steps = max_steps  # model calls per task
-        self.user = user
         self.stop_reason: StopReason | None = None  # None until its task has ended
         self._start: HumanMessage | None = None  # the task's first message, once it is logged
         self.taught = taught  # the remembered rules its task was handed over with, word for word
+        self.task_id = ""  # as the main agent knows it, once it runs
 
     async def run(self, task: str, told: Inbox) -> Result:
         """Carry out a task, reading what the main agent tells it meanwhile (`told`)."""
@@ -68,24 +68,10 @@ class Subagent:
 
     def words(self) -> list[str]:
         """The user's messages in this run so far, word for word, those the main agent has read included."""
-        return [self.request, *(message.text for message in self.user.read(MAIN))]
+        return [self.context.request, *(message.text for message in self.context.user.read(MAIN))]
 
-    async def opening(self, task: str) -> str:
-        requests, earlier = await self.earlier()
-        return notes.opening(task, self.words(), notes.blackboard(requests, earlier), self.taught)
-
-    async def earlier(self) -> tuple[list[str], list[dict]]:
-        """For the blackboard: the user's messages before this session's, and every task before this one, this
-        session's included."""
-        requests, earlier = [], []
-        for summary in await self.log.store.runs(self.thread):
-            if summary.kind != TURN:
-                continue
-            events = await self.log.store.events(summary.id)
-            if events and events[0]["type"] == "start" and events[0]["session"] != self.session:
-                requests += user_messages(events)
-            earlier += tasks(events)
-        return requests, earlier
+    def opening(self, task: str, board: Board) -> str:
+        return notes.opening(task, self.words(), board.text, self.taught)
 
     async def actions_since(self, start: HumanMessage) -> list[str]:
         return action_lines(await self.events_since(start))
@@ -103,14 +89,15 @@ class Subagent:
         `stop_reason`. The middleware runs in order: `guard`, the agent's own, the model call limit, then retries of
         failed streams. Middleware every subagent needs goes in this list."""
         stack = [
-            guard, *middleware, ModelCallLimitMiddleware(run_limit=self.max_steps, exit_behavior="end"),
+            guard, *middleware, ModelCallLimitMiddleware(run_limit=self.context.max_steps, exit_behavior="end"),
             retrying_failed_streams(),
         ]
-        agent = create_agent(model, tools, system_prompt=prompt, middleware=stack)
+        shared = task_tools(self.context.blackboard, self.task_id, guard.inbox, self.log)
+        agent = create_agent(model, [*tools, *shared], system_prompt=prompt, middleware=stack)
         config = {
             # Each model call passes through every graph node once; only a backstop: the model call limit ends the
             # task first.
-            "recursion_limit": self.max_steps * len(agent.get_graph().nodes) + 10,
+            "recursion_limit": self.context.max_steps * len(agent.get_graph().nodes) + 10,
             # A LangSmith trace carries this run's id as metadata.
             "metadata": {"run": self.log.run},
         }

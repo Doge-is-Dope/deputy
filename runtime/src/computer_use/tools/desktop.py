@@ -265,6 +265,29 @@ def desktop_tools(executor: Executor) -> list[BaseTool]:
         return reply(await executor.run_batch(valid), call_id, "computer_batch")
 
     tools.append(computer_batch)
+
+    @tool
+    async def press_while(
+        text: str,
+        condition: Annotated[str, Field(min_length=1)],
+        max_presses: Annotated[int, Field(ge=1, le=50)] = 20,
+        *,
+        call_id: CallId,
+        needs_confirmation: NeedsConfirmationArg,
+        consequence: ConsequenceArg = None,
+    ) -> ToolMessage:
+        """Press a key again and again while a condition still holds on the screen, with no model call between presses.
+
+        Before each press a fast check judges the current screen against the condition, a statement describing the
+        screen on which another press is still wanted, e.g. pagedown while "The table does not show the row for
+        invoice 1042 yet". It stops when the condition no longer holds, after max_presses, or when a press leaves the
+        screen unchanged. Use it to move through many screens that each take the same key; decide yourself where a
+        choice is to be made. Returns how many presses were sent and the screen after them.
+        """
+        return await run("press_while", call_id, text=text, condition=condition, max_presses=max_presses)
+
+    if executor.judge:
+        tools.append(press_while)
     for each in tools:
         each.handle_tool_error = True  # rejected input and computer errors reach the model as failed tool results
     return tools

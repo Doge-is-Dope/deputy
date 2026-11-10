@@ -51,7 +51,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   runningOf,
-  waitingOf,
+  waitingSession,
   type Conversation,
   type Project,
   type Status,
@@ -250,11 +250,13 @@ export function AppSidebar({
   const [dragged, setDragged] = useState<string | null>(null)
   // While it is dragged, until it is dropped: shut meanwhile (ProjectGroup), and no row under the pointer lit.
   const [sorting, setSorting] = useState(false)
-  const land = (project: string) =>
-    setTimeout(
-      () => setDragged((held) => (held === project ? null : held)),
+  const landing = useRef(0) // the wait for the last project to land, which the next drag of a project ends
+  const land = () => {
+    landing.current = window.setTimeout(
+      () => setDragged(null),
       DROP.duration + FOLD_DURATION
     )
+  }
   // The conversation being carried onto a project or out to the recents, until it is dropped.
   const [carried, setCarried] = useState<Conversation | null>(null)
   // The page marked while anything is dragged, for the system's closed hand over all of it (index.css).
@@ -286,6 +288,11 @@ export function AppSidebar({
   const [asking, setAsking] = useState(false)
   const [scrolled, setScrolled] = useState(false) // the list scrolled down from its top
   const [below, setBelow] = useState(false) // more of the list below, under the account row
+  const [starting, setStarting] = useState(true) // the placeholder's delayed entrance still has its time to run
+  useEffect(() => {
+    const timer = window.setTimeout(() => setStarting(false), 500)
+    return () => window.clearTimeout(timer)
+  }, [])
   const list = useRef<HTMLDivElement>(null)
   const rows = useRef<HTMLDivElement>(null) // everything in the list, which grows and folds within it
   const measure = () => {
@@ -323,7 +330,7 @@ export function AppSidebar({
     return () => window.removeEventListener("keydown", onKeyDown)
   }, [composer])
 
-  const waitingRun = waitingOf(status)?.run
+  const waiting = waitingSession(status)
   // None left once those being deleted have folded shut: the new project row is there meanwhile, so the list folds
   // straight to it.
   const none = projects.length === closing.length
@@ -344,6 +351,10 @@ export function AppSidebar({
     () => ids.map((id) => ({ id, name: names[id] ?? "" })),
     [ids, names]
   )
+  const isRunning = (conversation: Conversation) =>
+    runningOf(status, { thread: conversation.id }) !== null
+  const isWaiting = (conversation: Conversation) =>
+    conversation.id === waiting?.thread
   const row = (conversation: Conversation, inset = false) => (
     <ConversationItem
       key={conversation.id}
@@ -358,8 +369,8 @@ export function AppSidebar({
             : undefined
       }
       arriving={lists.arrived.has(conversation.id)}
-      active={runningOf(status, { thread: conversation.id }) !== null}
-      needsYou={conversation.latest.id === waitingRun}
+      active={isRunning(conversation)}
+      needsYou={isWaiting(conversation)}
       fresh={isNew(conversation.id, conversation.latest.ended)}
       selected={conversation.id === openConversation}
       projects={choices}
@@ -385,15 +396,16 @@ export function AppSidebar({
         const conversation = carriedBy(active)
         if (conversation) setCarried(conversation)
         else {
+          window.clearTimeout(landing.current)
           setDragged(String(active.id))
           setSorting(true)
         }
       }}
-      onDragCancel={({ active }) => {
+      onDragCancel={() => {
         grab(false)
         setCarried(null)
         setSorting(false)
-        land(String(active.id))
+        land()
       }}
       onDragEnd={({ active, over }) => {
         grab(false)
@@ -413,7 +425,7 @@ export function AppSidebar({
             )
           return
         }
-        land(String(active.id))
+        land()
         if (!over || active.id === over.id) return
         setOrder((list) =>
           arrayMove(
@@ -481,26 +493,36 @@ export function AppSidebar({
               </p>
             )}
             {conversations === null && !conversationsFailed && (
-              // Delay the placeholder to avoid flashing on fast loads; share one shimmer across both groups. Laid out as the
-              // list is once in: Projects with a row, then Recents down to the bottom, cut off there as a long list is.
+              // Delayed as the page starts to avoid flashing on fast loads; opened after that, there at once. Laid out as
+              // the list is once in: Projects with a row, then Recents down to the bottom, cut off there as a long list
+              // is. No height of its own (h-0), so its rows do not stretch the list and leave the sidebar something to
+              // scroll.
               <div
                 aria-hidden
-                className="@container flex min-h-0 flex-1 animate-in flex-col gap-3 overflow-hidden delay-300 duration-200 ease-(--ease-out) fill-mode-both fade-in"
+                className={cn(
+                  "flex h-0 grow flex-col gap-3 overflow-hidden",
+                  starting &&
+                    "animate-in delay-300 duration-200 ease-(--ease-out) fill-mode-both fade-in"
+                )}
               >
                 {[
                   { rows: 1, icon: true },
-                  { rows: 30, icon: false },
+                  // A row and its gap are 34px: as many as the window is tall.
+                  { rows: Math.ceil(window.innerHeight / 34), icon: false },
                 ].map(({ rows, icon }, group) => (
-                  <SidebarGroup key={group} className="py-0">
+                  <SidebarGroup
+                    key={group}
+                    className="py-0 motion-safe:animate-pulse"
+                  >
                     <div className="flex h-8 items-center px-2">
-                      <Skeleton className="h-3 w-12 [--at:16px]" />
+                      <Skeleton className="h-3 w-12" />
                     </div>
                     <SidebarMenu className="gap-0.5">
                       {Array.from({ length: rows }, (_, index) => (
                         <SidebarMenuItem key={index}>
                           <SidebarMenuSkeleton
                             showIcon={icon}
-                            className="h-8 [--row-at:8px] pointer-coarse:h-10"
+                            className="h-8 pointer-coarse:h-10"
                           />
                         </SidebarMenuItem>
                       ))}
@@ -557,6 +579,8 @@ export function AppSidebar({
                                 conversation.id === openConversation
                             )}
                             onOpen={(open) => setOpened(project, open)}
+                            running={items.some(isRunning)}
+                            needsYou={items.some(isWaiting)}
                             unread={unreadOf(items).length}
                             failed={unreadOf(items).some(
                               (conversation) => conversation.latest.failed

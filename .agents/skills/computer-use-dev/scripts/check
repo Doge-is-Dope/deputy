@@ -7,6 +7,7 @@ set -u
 # One check per line, tab-separated: area, folder, the changed paths that call for it, command.
 # CI also runs the MongoDB contract tests; they join in when CU_TEST_MONGO_URL names a database.
 CHECKS="runtime	runtime	^(runtime|eval)/	uv run --frozen pytest tests/unit -q${CU_TEST_MONGO_URL:+ -m 'not model'}
+runtime	runtime	^(runtime|eval)/	uv run --frozen ruff check src tests
 cli	clients/cli	^clients/cli/	uv run --frozen pytest -q
 web	clients/web	^clients/web/	bun run lint
 web	clients/web	^clients/web/	bun run test

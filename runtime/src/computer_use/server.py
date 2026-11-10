@@ -26,7 +26,7 @@ from computer_use.agent.main_agent import SUBAGENTS, run_turn
 from computer_use.auth import Authenticate, build_authenticator
 from computer_use.agent.models import MAIN_AGENT, efforts, offered, starting
 from computer_use.agent.title import MAX_CHARS, Titles, title_model
-from computer_use.adapters import build_code_runner, build_computer, build_control, build_stores
+from computer_use.adapters import build_code_runner, build_computer, build_control, build_screen_judge, build_stores
 from computer_use.computers import Computer
 from computer_use.config import APPROVALS, FOLLOW, RunChoices, Settings
 from computer_use.desktop.control import ApprovalFile, ControlSyncError, DesktopBusy, RunLock
@@ -78,15 +78,19 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
     control = build_control(settings)
     computer = computer if computer is not None else build_computer(settings)
     code_runner = build_code_runner(settings)
-    start_turn = partial(run_turn, settings, computer=computer, control=control, code_runner=code_runner, memory=memory)
+    start_turn = partial(
+        run_turn, settings, computer=computer, control=control, code_runner=code_runner, memory=memory,
+        judge=build_screen_judge(settings),
+    )
     runner = Runner(store, start_turn, Titles(settings))
     run_lock = RunLock(settings.run_lock_path)
     asked = ApprovalFile(settings.approval_path)
     share = ScreenShare(computer, control)
     ice_servers = []
-    if settings.turn_url:
-        password = settings.turn_password.get_secret_value() if settings.turn_password else ""
-        ice_servers.append({"urls": settings.turn_url, "username": "live", "credential": password})
+    # Without its password a TURN server is no use, and a browser refuses one with an empty credential outright.
+    if settings.turn_url and settings.turn_password:
+        credential = settings.turn_password.get_secret_value()
+        ice_servers.append({"urls": settings.turn_url, "username": "live", "credential": credential})
     def active() -> str | None:
         """The run that has the desktop, which may be another server's, such as the eval's."""
         holder = run_lock.holder()

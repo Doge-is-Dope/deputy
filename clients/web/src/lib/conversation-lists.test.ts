@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest"
-import type { Conversation, Project } from "@/lib/api"
+import type { Conversation, Project, RunSummary } from "@/lib/api"
 import { ConversationLists } from "@/lib/conversation-lists"
 import { merged } from "@/lib/conversations"
 
@@ -17,6 +17,13 @@ function fixture() {
   )
   const source = {
     projects: vi.fn(async () => projects),
+    runsOf: vi.fn(
+      async (thread: string) =>
+        [
+          { id: thread, thread, kind: "turn", ended: null },
+          { id: "task", thread, kind: "task", ended: null },
+        ] as RunSummary[]
+    ),
     conversations: vi.fn(
       async ({
         before,
@@ -44,18 +51,21 @@ describe("lazy conversation lists", () => {
     await loader.refresh()
     expect(source.conversations.mock.calls.map(([q]) => q?.project)).toEqual([
       null,
+      undefined,
     ])
     const first = loader.read("p1")
     loader.read("p1")
     await first
     expect(loader.get().pages?.get("p1")?.items).toHaveLength(5)
     await loader.read("p1")
-    expect(source.conversations).toHaveBeenCalledTimes(2)
+    expect(source.conversations).toHaveBeenCalledTimes(3)
     await loader.refresh()
     expect(source.conversations.mock.calls.map(([q]) => q?.project)).toEqual([
       null,
+      undefined,
       "p1",
       null,
+      undefined,
       "p1",
     ])
   })
@@ -106,11 +116,57 @@ describe("lazy conversation lists", () => {
     await new Promise((resolve) => setTimeout(resolve))
     expect(source.conversations.mock.calls.map(([q]) => q?.project)).toEqual([
       null,
+      undefined,
     ])
     answer(projects)
     await refreshed
     expect(loader.get().projects).toEqual(projects)
     expect(loader.get().pages?.get(null)?.items).toHaveLength(20)
+  })
+  it("reads the latest conversations in any project with each refresh, a page only", async () => {
+    const { source, loader, items } = fixture()
+    await loader.refresh()
+    expect(loader.get().latest).toEqual(items.slice(0, 20))
+    await loader.load(null)
+    expect(
+      source.conversations.mock.calls.filter(([q]) => q?.project === undefined)
+    ).toHaveLength(1)
+    items.shift()
+    await loader.refresh()
+    expect(loader.get().latest).toEqual(items.slice(0, 20))
+  })
+  it("reads a running conversation by itself only when no list holds it", async () => {
+    const { source, loader } = fixture()
+    await loader.refresh(["0", "19"])
+    expect(source.runsOf).not.toHaveBeenCalled()
+    await loader.refresh(["far"])
+    expect(source.runsOf.mock.calls).toEqual([["far"]])
+    expect(loader.get().beyond.map((each) => each.id)).toEqual(["far"])
+  })
+  it("reads it once more as it ends, then keeps it without reading", async () => {
+    const { source, loader } = fixture()
+    await loader.refresh(["far"])
+    source.runsOf.mockResolvedValueOnce([
+      { id: "far", thread: "far", kind: "turn", ended: 9 },
+    ] as RunSummary[])
+    await loader.refresh([])
+    expect(source.runsOf).toHaveBeenCalledTimes(2)
+    expect(loader.get().beyond[0].latest.ended).toBe(9)
+    await loader.refresh([])
+    await loader.refresh()
+    expect(source.runsOf).toHaveBeenCalledTimes(2)
+    expect(loader.get().beyond.map((each) => each.id)).toEqual(["far"])
+  })
+  it("lets go of one a list holds again, and survives one it cannot read", async () => {
+    const { source, loader, items } = fixture()
+    await loader.refresh(["far"])
+    items.unshift({ id: "far", last: 999 } as Conversation)
+    await loader.refresh()
+    expect(loader.get().beyond).toEqual([])
+    source.runsOf.mockRejectedValueOnce(new Error("gone"))
+    await loader.refresh(["lost"])
+    expect(loader.get().failed).toBe(false)
+    expect(loader.get().beyond).toEqual([])
   })
   it("preserves more than MAX_PAGE loaded rows through a refresh", async () => {
     const { loader, items } = fixture()

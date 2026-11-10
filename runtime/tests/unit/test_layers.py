@@ -7,9 +7,9 @@ import computer_use
 
 SOURCE = Path(computer_use.__file__).parent
 CORE = {
-    "agent.background", "agent.failures", "agent.handover", "agent.history", "agent.inbox",
+    "agent.background", "agent.blackboard", "agent.failures", "agent.handover", "agent.history", "agent.inbox", "agent.plan",
     "agent.session", "agent.subagent", "agent.trajectory", "agent.usage", "events", "middleware.chat",
-    "middleware.common", "middleware.subagent", "runner", "streaming", "tools.common", "tools.conversations",
+    "middleware.common", "middleware.subagent", "runner", "streaming", "tools.ask_user", "tools.common", "tools.conversations", "tools.plan",
     "tools.tasks",
 }
 OPTIONAL = (

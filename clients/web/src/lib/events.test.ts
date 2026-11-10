@@ -19,7 +19,7 @@ function body(text: string, size = 1): ReadableStream<Uint8Array> {
   })
 }
 
-const start: RunEvent = { type: "start", v: 6, goal: "你好", time: 1 }
+const start: RunEvent = { type: "start", v: 7, goal: "你好", time: 1 }
 const reply: RunEvent = {
   type: "model",
   agent: "main",

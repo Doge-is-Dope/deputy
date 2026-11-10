@@ -18,8 +18,9 @@ from computer_use.computers import Combo, Computer, ComputerError, Frame, Point
 from computer_use.events import ActionReason
 from computer_use.desktop.actions import BATCHABLE, CLICKS
 from computer_use.desktop.control import Control, ControlState, let_go
+from computer_use.desktop.judge import ScreenJudge
 from computer_use.desktop.keys import blocked_combo, parse_combos, parse_modifiers
-from computer_use.desktop.screen import NOISE, Shot, capture, describe, diff, gray, lasting_diff, settle
+from computer_use.desktop.screen import NOISE, Shot, capture, describe, diff, gray, lasting_diff, settle, settle_judged
 
 # How long to wait after an action for a change that never comes (screen.settle); some keys say less.
 SETTLE_SECONDS = 1.5
@@ -40,6 +41,10 @@ RECONNECT_SIGN_IN_SECONDS = 3.0
 # Measured at 1280x800 over RDP (2026-10-06): the smallest such change, the taskbar's two-item menu, is 2301 pixels;
 # Windows redrawing the taskbar about a second after a window switch, well after the switch has settled, is 68-249.
 FOCUS_CHANGE = 1000
+# A press in press_while is held this long: games read the keys once a frame and miss a 12 ms tap.
+PRESS_HOLD_SECONDS = 0.2
+# How many times press_while waits out a screen still moving after a press (screen.settle, up to its cap each).
+PRESS_ANIMATION_WAITS = 3
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,7 @@ class ActionResult:
     frame: Frame | None = None
     changed: bool | None = None  # input meant to change the screen: whether the screen the model saw changed
     reason: ActionReason | None = None  # a deliberate refusal, distinct from input that failed or may have arrived
+    judged: bool | None = None  # the screen judge's verdict on the returned screen, when one was asked (press_while)
 
 
 class Rejected(Exception):
@@ -64,9 +70,10 @@ class Disconnected(Exception):
 
 
 class Executor:
-    def __init__(self, computer: Computer, control: Control):
+    def __init__(self, computer: Computer, control: Control, judge: ScreenJudge | None = None):
         self.computer = computer
         self.control = control
+        self.judge = judge
         self.shown: Frame | None = None
         self._seen: Image.Image | None = None  # that screen in gray, to compare later screens with
         self.shown_at: float | None = None  # when it was given, on the clock Control's `since` uses
@@ -88,6 +95,7 @@ class Executor:
             "key": self._key,
             "hold_key": self._hold_key,
             "wait": self._wait,
+            "press_while": self._press_while,
         }
 
     @property
@@ -196,7 +204,7 @@ class Executor:
 
     async def _send(
         self, send: Callable[[], Awaitable[None]], note: str, points: Sequence[Point] = (), expect_change: bool = True,
-        *, no_change_seconds: float | None = None,
+        *, no_change_seconds: float | None = None, condition: str | None = None,
     ) -> ActionResult:
         """Send input if the screen still looks as the model saw it (around `points`, where a pointer action lands,
         or anywhere for keys); return the screen once it is still."""
@@ -219,14 +227,18 @@ class Executor:
                 await let_go(self.computer)
                 raise
         wait = SETTLE_SECONDS if no_change_seconds is None else min(no_change_seconds, SETTLE_SECONDS)
-        shot = await settle(self.computer, now, wait)
+        judged = None
+        if self.judge and condition:  # press_while: judge the screen while it settles
+            shot, judged = await settle_judged(self.computer, now, wait, partial(self.judge.holds, condition=condition))
+        else:
+            shot = await settle(self.computer, now, wait)
         if not expect_change:
             return await self.observe(note, shot)
         after = shot[1]
         if await diff(now, after) < NOISE:
             # Windows panels can take seconds to open; without this the model repeats toggles like "win".
             note += " The screen has not changed yet; it may still be loading. Use wait and look again before repeating it."
-        result = await self.observe(note, shot)
+        result = replace(await self.observe(note, shot), judged=judged)
         return result if seen is None else replace(result, changed=await diff(seen, after) >= NOISE)
 
     def _control_blocked(self, control: ControlState) -> ActionResult | None:
@@ -259,7 +271,13 @@ class Executor:
         if await diff(seen, now, points) < least:
             return False
         await asyncio.sleep(MOVING_WATCH_SECONDS)
-        return await lasting_diff(seen, now, await gray(self.computer), points) >= least
+        if await lasting_diff(seen, now, await gray(self.computer), points) < least:
+            return False
+        if points or self.judge is None or self.shown is None:
+            return True
+        # A window animating on its own (a game's title, text printing) moves more than a menu would, yet it is the
+        # same screen and the keys still mean what the model meant.
+        return not await self.judge.same_screen(self.shown.png, (await self.computer.screenshot()).png)
 
     async def _target(self, point: Point | None) -> list[Point]:
         return [point if point is not None else await self.computer.cursor_position()]
@@ -339,6 +357,47 @@ class Executor:
         combo = combos[0]
         note = f"Held {'+'.join(combo)} for {duration:g} seconds."
         return await self._send(lambda: self.computer.hold(combo, duration), note)
+
+    async def _press_while(self, text: str, condition: str, max_presses: int = 20) -> ActionResult:
+        """Press a key again and again while the judge finds the condition on the screen, checked before each press."""
+        combos = _combos(text)
+        if self.judge is None:
+            raise Rejected("press_while needs a screen judge, and none is set up")
+        if len(combos) != 1:
+            raise Rejected("Press one key or combo at a time")
+        combo, pressed, waits, result = combos[0], 0, 0, None
+        key = '+'.join(combo)
+        why = f"it reached {max_presses} presses"
+        while pressed < max_presses:
+            if result and result.judged is not None:
+                held = result.judged  # judged while the screen settled after the last press
+            else:
+                shown = result.frame if result else self.shown
+                held = shown is not None and await self.judge.holds(shown.png, condition)
+            if not held:
+                why = "the condition no longer held"
+                break
+            press = partial(self.computer.hold, combo, PRESS_HOLD_SECONDS)
+            sent = await self._send(press, f"Held {key}.", condition=condition)
+            if not sent.ok and not (pressed and sent.reason == "screenChanged"):
+                return sent
+            if not sent.ok:  # still moving after the last press, e.g. a scene's animation: wait for it, then judge
+                waits += 1
+                if waits > PRESS_ANIMATION_WAITS:
+                    result, why = sent, "the screen kept changing after the last press"
+                    break
+                result = await self.observe(f"Held {key}.", await settle(self.computer, await gray(self.computer), 0))
+                continue
+            result = sent
+            pressed += 1
+            if result.changed is False or "has not changed yet" in result.text:
+                why = "the last press left the screen unchanged"
+                break
+        note = f"Pressed {key} {pressed} times; stopped because {why}."
+        if result is None:
+            return await self.observe(note)
+        # A last press refused because the screen kept moving does not undo the presses before it.
+        return replace(result, ok=True, reason=None, text=describe(note, result.frame, await self.computer.status()))
 
     async def _wait(self, duration: float = 2.0) -> ActionResult:
         await asyncio.sleep(duration)

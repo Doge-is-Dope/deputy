@@ -11,6 +11,7 @@ from computer_use.agent.trajectory import Trajectory
 from computer_use.computers import Computer
 from computer_use.desktop.control import ApprovalFile, Control, DesktopBusy, RunLock, release_input
 from computer_use.desktop.executor import Executor
+from computer_use.desktop.judge import ScreenJudge
 from computer_use.execution.approvals import Confirmations
 from computer_use.middleware.desktop import DesktopMiddleware
 from computer_use.prompts.computer import DESKTOP_BUSY, computer_in_use, desktop_offline
@@ -56,9 +57,9 @@ class DesktopExecution:
     def __init__(
         self, computer: Computer, control: Control, approvals: ApprovalFile, log: Trajectory,
         review: Callable[[str, bytes | None], Awaitable[Verdict]], auto: Callable[[], bool],
-        on_request: Callable[[str], None], web_url: str, inbox: Inbox,
+        on_request: Callable[[str], None], web_url: str, inbox: Inbox, judge: ScreenJudge | None = None,
     ):
-        self.executor = Executor(computer, control)
+        self.executor = Executor(computer, control, judge)
         self.confirm = Confirmations(approvals, control, self.executor, log, review, auto)
         self.tools = [*desktop_tools(self.executor), takeover_tool(control, computer, on_request)]
         self.middleware = DesktopMiddleware(self.executor, control, log, web_url, self.confirm, inbox)

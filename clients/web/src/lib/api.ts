@@ -155,7 +155,8 @@ export type ActionReason =
 export type RunEvent = { time: number; task?: string } & (
   | {
       type: "start"
-      v: 6 // only the current log format is served
+      v: 7 // only the current log format is served
+      sent?: number // when a message that waited for this run came
       kind?: "turn" | "task"
       run?: string
       thread?: string
@@ -183,9 +184,11 @@ export type RunEvent = { time: number; task?: string } & (
   // A message the runtime gave an agent; what it said stays in the runtime, which restores the conversation from it.
   | { type: "input"; agent?: "main" }
   // A message the user sent while the run worked, logged once an agent read it (agent/inbox.py)
-  | { type: "message"; id: string; text: string }
+  | { type: "message"; id: string; text: string; sent: number }
   // The conversation's name, made from its first message in the background (agent/title.py)
   | { type: "title"; text: string; seconds?: number }
+  // The conversation's plan as it stands, whole each time; the highest version is the newest (agent/plan.py)
+  | { type: "plan"; version: number; steps: PlannedStep[] }
   // Work the main agent handed over in the background starting or ending (agent/background.py)
   | {
       type: "task"
@@ -212,6 +215,7 @@ export type RunEvent = { time: number; task?: string } & (
       status: "success" | "error"
       result: string
       reason?: ActionReason | null
+      answer?: string // of a question to the main agent: its words alone (tools/plan.py)
       screenshot: string | null
     }
   | {
@@ -274,6 +278,14 @@ export type Cost = {
   output: number
 }
 
+export type PlannedStep = {
+  id: string
+  title: string
+  done_when: string
+  needs: string[]
+  status: "pending" | "in_progress" | "completed"
+  tasks: string[] // the ids of the tasks at work on it
+}
 export type NoteEvent = Extract<RunEvent, { type: "note" }>
 export type ModelEvent = Extract<RunEvent, { type: "model" }>
 export type ActionEvent = Extract<RunEvent, { type: "action" }>
@@ -456,7 +468,12 @@ export function waitingOf(
       consequence: status.approval.consequence,
     }
   const { owner, reason, since } = status.control
-  if (owner === "user" && status.active && reason && !reason.startsWith(TAKEN_OVER))
+  if (
+    owner === "user" &&
+    status.active &&
+    reason &&
+    !reason.startsWith(TAKEN_OVER)
+  )
     return {
       id: `${status.active}-${since}`,
       run: status.active,
@@ -474,6 +491,17 @@ export function runningOf(
   const matches = (each: Running) =>
     "run" in which ? each.run === which.run : each.thread === which.thread
   return status?.running.find(matches) ?? null
+}
+
+/** The session in progress that waits for the user, by any of its logs: a task asks, not the turn that gave it. */
+export function waitingSession(status: Status | null): Running | null {
+  const run = waitingOf(status)?.run
+  if (!run) return null
+  return (
+    status?.running.find((each) =>
+      [each.run, each.turn, ...each.tasks].includes(run)
+    ) ?? null
+  )
 }
 
 /** Since when the user has had the desktop; null while the agent has it. */

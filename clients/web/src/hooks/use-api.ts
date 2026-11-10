@@ -1,6 +1,7 @@
 import {
   useCallback,
   useEffect,
+  useEffectEvent,
   useMemo,
   useRef,
   useState,
@@ -75,12 +76,13 @@ export type Lists = {
 }
 
 /** Project names and recents load first; a project's conversations load when it opens and stay cached. */
-export function useConversations(changed: string | null) {
+export function useConversations(changed: string | null, running: string[]) {
   const [loader] = useState(() => new ConversationLists(api))
   const state = useSyncExternalStore(loader.subscribe, loader.get)
+  const refresh = useEffectEvent(() => void loader.refresh(running))
   useEffect(() => {
-    if (changed !== null) void loader.refresh()
-  }, [changed, loader])
+    if (changed !== null) refresh()
+  }, [changed])
   const lists = useMemo<Lists>(
     () => ({
       more: (kind) => (state.pages?.get(kind)?.next ?? null) !== null,
@@ -96,8 +98,12 @@ export function useConversations(changed: string | null) {
   const conversations = useMemo(
     () =>
       state.pages &&
-      merged([...state.pages.values()].map((page) => page.items)),
-    [state.pages]
+      merged([
+        state.latest,
+        state.beyond,
+        ...[...state.pages.values()].map((page) => page.items),
+      ]),
+    [state.pages, state.latest, state.beyond]
   )
   return {
     conversations,

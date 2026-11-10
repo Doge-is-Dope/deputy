@@ -515,21 +515,14 @@ function SidebarMenuSkeleton({
       )}
       {...props}
     >
-      {/* Where each shape starts in the size container round the list, so the one band of light crosses them in
-          step: the row's own --at (where it starts there) and its padding, and past the icon for the text. */}
       {showIcon && (
         <Skeleton
-          className="size-5 rounded-md [--at:calc(var(--row-at,0px)+8px)]"
+          className="size-5 rounded-md"
           data-sidebar="menu-skeleton-icon"
         />
       )}
       <Skeleton
-        className={cn(
-          "h-4 max-w-(--skeleton-width) flex-1",
-          showIcon
-            ? "[--at:calc(var(--row-at,0px)+38px)]"
-            : "[--at:calc(var(--row-at,0px)+8px)]"
-        )}
+        className="h-4 max-w-(--skeleton-width) flex-1"
         data-sidebar="menu-skeleton-text"
         style={
           {

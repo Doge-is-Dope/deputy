@@ -1,11 +1,10 @@
 import { useLayoutEffect, useRef, useState } from "react"
 import { cn } from "cn"
-import { slotText } from "slot-text"
 
 import { reducedMotion } from "@/lib/motion"
 
 /** Show the first message until a title arrives. Animate only titles received while mounted;
- * reduced motion replaces the text immediately. Preserve kerning when switching to and from cells. */
+ * reduced motion replaces the text immediately. */
 export function ConversationName({
   name,
   placeholder,
@@ -19,52 +18,26 @@ export function ConversationName({
   const [arrives] = useState(() => name === null && !reducedMotion())
   const [rolled, setRolled] = useState(false)
   const rolling = name !== null && arrives && !rolled
-  const cell = useRef<HTMLSpanElement>(null)
+  const line = useRef<HTMLSpanElement>(null)
   useLayoutEffect(() => {
-    const element = cell.current
-    if (!rolling || !element || name === null) return
-    // The visible part of the message is enough to roll from: the item shows a few dozen characters at most.
-    const from = Array.from(placeholder).slice(0, ROLL_FROM).join("")
-    // Every character rolls, the ones the name shares with the message too: one left in place would stay dimmed.
-    const label = slotText(element, from, {
-      rollBy: "character",
-      direction: "up",
-      skipUnchanged: false,
-    })
-    element
-      .querySelectorAll<HTMLElement>(".char-face")
-      .forEach((face) => (face.style.color = "var(--muted-foreground)"))
-    const kerned = kerning(element, from)
-    kern(element, kerned)
-    // slot-text's 45ms between characters, closer for a long name, so it lands within about a second.
-    const stagger = Math.min(45, Math.round(600 / Math.max(1, name.length - 1)))
-    label.set(name, { stagger, color: "var(--muted-foreground)" })
-    // Each cell takes the name's kerning as its character rolls in, so no character still in place moves.
-    const target = kerning(element, name)
-    element.querySelectorAll<HTMLElement>(".char-slot").forEach((slot, index) =>
-      slot.animate(
-        {
-          marginRight: [`${kerned[index] ?? 0}px`, `${target[index] ?? 0}px`],
-        },
-        {
-          duration: 300,
-          delay: index * stagger,
-          easing: "ease-out",
-          fill: "both",
-        }
-      )
+    const element = line.current
+    if (!rolling || !element) return
+    const { width } = element.getBoundingClientRect()
+    const [message, title] = element.children
+    const characters = rollingCharacters(
+      placed(message, width),
+      placed(title, width)
     )
-    // Its last step puts the settled text in place of the cells, kerned as the name was: then it is plain text again.
-    const settled = new MutationObserver(() => {
-      kern(element, target)
-      setRolled(true)
-    })
-    settled.observe(element, { childList: true })
-    return () => {
-      settled.disconnect()
-      label.destroy()
-    }
-  }, [rolling]) // eslint-disable-line react-hooks/exhaustive-deps
+    element.append(...characters)
+    // A roll that is cut short rejects: its row has gone, or this effect runs again.
+    Promise.all(
+      element.getAnimations({ subtree: true }).map(({ finished }) => finished)
+    ).then(
+      () => setRolled(true),
+      () => {}
+    )
+    return () => characters.forEach((character) => character.remove())
+  }, [rolling])
   if (name === null)
     return (
       <span
@@ -77,57 +50,89 @@ export function ConversationName({
         {placeholder}
       </span>
     )
-  // A cell rolling out to nothing keeps the line's height and place: slot-text empties its sizer at once, and the
-  // cell, clipped above and below and with no baseline to line up by, would drop or lose its character before it
-  // rolls out. A character at rest is drawn with the page, not on a layer of its own (slot-text's will-change), which
-  // Chrome puts on whole pixels: drawn so, it sits where plain text puts it, and nothing shifts as the cells go.
+  // The copies hold the line and show where plain text puts each character; the row around them clips the roll.
   if (rolling)
     return (
-      <span
-        ref={cell}
-        aria-label={name}
-        className="[&_.char-face]:will-change-auto! [&_.char-slot]:self-stretch"
-      />
+      <span ref={line} aria-label={name} className="relative block">
+        <span className="invisible absolute">{placeholder}</span>
+        <span className="invisible">{name}</span>
+      </span>
     )
   return <>{name}</>
 }
 
-// The characters of the message a name rolls in from.
-const ROLL_FROM = 64
+// How long the wave takes to cross a pixel of the row: a full row in about 600ms.
+const MS_PER_PX = 3
+
+// Characters in the same column of the row share their timing, so one never arrives over one still leaving.
+const COLUMN_PX = 8
 
 const GRAPHEMES = new Intl.Segmenter(undefined, { granularity: "grapheme" })
 
-/** Measure per-character kerning from a plain-text copy so animated cells keep the same positions. */
-function kerning(element: HTMLElement, text: string): number[] {
-  const copy = document.createElement("span")
-  copy.style.cssText = "position:absolute;visibility:hidden;white-space:pre"
-  copy.textContent = text
-  element.after(copy)
-  const node = copy.firstChild!
+/** A character showing in the row, where plain text puts it: on the page (start) and in the row (x). */
+type Placed = { segment: string; start: number; x: number }
+
+/** The characters of `copy` that show in the row, read from laid-out text: cells side by side would lose the font's
+ * kerning, and any width they gave up would move everything after them. */
+function placed(copy: Element, width: number) {
+  const text = copy.firstChild as Text
+  const { left } = copy.getBoundingClientRect()
   const range = document.createRange()
-  const starts: number[] = []
-  let at = 0
-  for (const { segment } of GRAPHEMES.segment(text)) {
-    range.setStart(node, at)
-    range.setEnd(node, (at += segment.length))
-    starts.push(range.getBoundingClientRect().left)
+  const characters: Placed[] = []
+  for (const { segment, index } of GRAPHEMES.segment(text.data)) {
+    if (!segment.trim()) continue
+    range.setStart(text, index)
+    range.setEnd(text, index + segment.length)
+    const start = range.getBoundingClientRect().left
+    if (start - left >= width) break
+    characters.push({ segment, start, x: start - left })
   }
-  starts.push(copy.getBoundingClientRect().right)
-  copy.remove()
-  const sizers = element.querySelectorAll(".char-sizer")
-  return starts
-    .slice(1)
-    .map(
-      (next, index) =>
-        next - starts[index] - sizers[index].getBoundingClientRect().width
-    )
+  return characters
 }
 
-/** Gives each cell in `element` its character's kerning as room after it, so each character stands as in plain text. */
-function kern(element: HTMLElement, kerning: number[]) {
-  element
-    .querySelectorAll<HTMLElement>(".char-slot")
-    .forEach(
-      (slot, index) => (slot.style.marginRight = `${kerning[index] ?? 0}px`)
-    )
+/** The spans that carry the message into the name: what both start with stays where it is, every other character
+ * rolls. */
+function rollingCharacters(message: Placed[], name: Placed[]) {
+  const first = name.findIndex(
+    ({ segment, start }, index) =>
+      segment !== message[index]?.segment ||
+      Math.abs(start - message[index].start) > 0.5
+  )
+  const same = first < 0 ? name.length : first
+  return [
+    ...name
+      .slice(0, same)
+      .map((character) => rollingSpan(character, "name-char-kept")),
+    ...message
+      .slice(same)
+      .map((character) => rollingSpan(character, "name-char-out")),
+    ...name
+      .slice(same)
+      .map((character) => rollingSpan(character, "name-char-in")),
+  ]
+}
+
+function rollingSpan({ segment, start, x }: Placed, className: string) {
+  const span = document.createElement("span")
+  span.className = className
+  span.textContent = segment
+  // Each column lands a little early or late, quick or slow, and leaning: an even wave looks mechanical.
+  const column = Math.round(x / COLUMN_PX)
+  const at = x * MS_PER_PX * (1 + 0.15 * noise(column, 2))
+  const duration = 300 * (1 + 0.27 * noise(column, 1))
+  // A leaning box is drawn from a whole device pixel: start it on one and pad the rest of the way, or its text would
+  // hop by a fraction of a pixel as it starts and as it lands.
+  const edge = Math.floor(start * devicePixelRatio) / devicePixelRatio
+  span.style.left = `${x - (start - edge)}px`
+  span.style.paddingLeft = `${start - edge}px`
+  span.style.setProperty("--at", `${at}ms`)
+  span.style.setProperty("--for", `${duration}ms`)
+  span.style.setProperty("--tilt", `${3 * noise(column, 3)}deg`)
+  return span
+}
+
+/** Repeatable noise from -1 to 1 for a column of the row, a different sequence on each channel. */
+function noise(column: number, channel: number) {
+  const seed = Math.sin(column * 12.9898 + channel * 78.233) * 43758.5453
+  return (seed - Math.floor(seed)) * 2 - 1
 }

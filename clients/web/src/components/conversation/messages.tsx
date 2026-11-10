@@ -60,17 +60,8 @@ export function UserMessage({
       <div className="max-w-[85%] rounded-3xl bg-bubble px-4 py-2.5 text-sm leading-6 whitespace-pre-wrap">
         <MessageText text={text} />
       </div>
-      {/* Where nothing can hover (a phone), there is no row under it, as Messages has none: pressing the text selects
-        it. */}
-      <div
-        className={cn(
-          "flex items-center gap-x-1.5 text-xs text-muted-foreground [@media(hover:none)]:hidden",
-          ON_HOVER
-        )}
-      >
-        <CopyButton text={text} />
-        {time !== undefined && <TimeAgo time={time} />}
-      </div>
+      {/* Mirrors a reply's row, as the message sits on the other side: the buttons keep to the edge. */}
+      <MessageActions text={text} time={time} className="flex-row-reverse" />
     </div>
   )
 }
@@ -83,35 +74,42 @@ type About = {
   cited: Remembered[] // the rules its tasks were handed over with (citedMemories)
 }
 
-/** Reply actions appear on hover; keep the latest reply's buttons visible. */
-function ReplyActions({
+/** The row under a message: its buttons and when it was said. It appears on hover; the latest reply's buttons stay. */
+function MessageActions({
   text,
   time,
   about,
   pinned = false,
+  className,
 }: {
   text?: string
   time?: number
   about?: About
   pinned?: boolean
+  className?: string
 }) {
   return (
     <div
       className={cn(
-        "flex min-h-6 flex-wrap items-center gap-x-1.5 gap-y-2 text-xs text-muted-foreground",
+        "flex min-h-7 text-xs text-muted-foreground",
         !pinned && ON_HOVER
       )}
     >
       {text && (
-        // Fading in once the reply's words are all there, rather than popping up under them.
-        <span className="flex items-center gap-x-1.5 transition-opacity duration-250 motion-reduce:transition-none in-data-settled:starting:opacity-0">
+        // Fading in together once the reply's words are all there, rather than popping up under them.
+        <span
+          className={cn(
+            "flex flex-wrap items-center gap-x-1.5 gap-y-2 transition-opacity duration-250 motion-reduce:transition-none in-data-settled:starting:opacity-0",
+            className
+          )}
+        >
           <CopyButton text={text} />
           {about && <ReplyMore about={about} />}
-        </span>
-      )}
-      {time !== undefined && (
-        <span className={cn("flex", pinned && ON_HOVER)}>
-          <TimeAgo time={time} />
+          {time !== undefined && (
+            <span className={cn("flex", pinned && ON_HOVER)}>
+              <TimeAgo time={time} />
+            </span>
+          )}
         </span>
       )}
     </div>
@@ -359,11 +357,13 @@ export function Reply({
     >
       <Markdown text={shown} streaming={coming} className="text-sm leading-6" />
       {actions && !writing && (
-        <ReplyActions
+        <MessageActions
           text={streaming ? undefined : text}
           time={time}
           about={about}
           pinned={pinned}
+          // The button's background overhangs the text, so its icon sits closer to the text's edge.
+          className="-ms-1"
         />
       )}
     </div>

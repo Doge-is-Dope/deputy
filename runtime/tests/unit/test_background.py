@@ -173,3 +173,54 @@ def test_a_task_the_model_service_failed_is_told_as_the_model_services_error():
 
     assert "the model service reported an error. APIError: Our servers" in report(job, overloaded).text
     assert "model service" not in report(job, RuntimeError("runner down")).text
+
+
+async def test_a_question_waits_for_the_main_agent_and_nothing_else_answers_it():
+    class Turn:
+        def task(self, *_):
+            pass
+
+    background = Background()
+    finish = asyncio.Event()
+
+    async def work(id, inbox):
+        await finish.wait()
+        return [], {}
+
+    id = background.start("computer", "One.", work, lambda: [], turn=Turn(), record="r1")
+    background.notify("A notice waiting before the question.")
+    asking = asyncio.create_task(background.ask(id, "Which?"))
+    await asyncio.sleep(0)
+    background.notify("A notice during it.")
+    await asyncio.sleep(0)
+    assert not asking.done() and background.news
+
+    job = background.jobs[id]
+    job.answer = "That one."
+    background.tell(id, "That one.")
+
+    assert await asking == "That one."
+    finish.set()
+    await asyncio.gather(*(each.task for each in background.jobs.values()))
+
+
+async def test_a_failure_while_told_of_a_tasks_end_does_not_lose_the_end():
+    class Turn:
+        def task(self, *_):
+            pass
+
+    def fail_at_the_end(job, outcome):
+        if outcome is not None:
+            raise RuntimeError("the log failed")
+
+    background = Background(fail_at_the_end)
+    loop = asyncio.get_running_loop()
+    loop.set_exception_handler(lambda *_: None)
+
+    async def work(id, inbox):
+        return [], {}
+
+    background.start("computer", "One.", work, lambda: [], turn=Turn(), record="r1")
+    await asyncio.wait_for(background.wait(), 1)
+
+    assert background.ended

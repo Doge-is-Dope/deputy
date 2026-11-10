@@ -30,7 +30,7 @@ import {
 import { useT } from "@/lib/i18n"
 import { SIZE as GLASS } from "@/lib/liquid-glass"
 import { reducedMotion } from "@/lib/motion"
-import { samePlan, type Plan } from "@/lib/thread"
+import { openQuestion, samePlan, unlogged, type Plan } from "@/lib/thread"
 import { ArrowDownIcon } from "@/components/icons"
 
 // The plan's card beside the conversation: its width (w-72), its gap to the window's edge (right-3) and to the
@@ -86,9 +86,18 @@ function overlayScrollbars() {
   return overlay
 }
 
+/** What the composer needs of the open question: what to prompt for, and the answer Enter takes. */
+export type AskedQuestion = {
+  placeholder: string
+  recommended: string | null
+  multiple: boolean
+}
+
 type TurnActions = {
   onEnded: () => void
   onOpenLive: () => void // the live view, from the screen of the step under way
+  onReply: (text: string) => Promise<boolean> // sends the user's choice as their next message
+  onAsked: (question: AskedQuestion | null) => void // the open question, for the composer
 }
 
 const NO_LOGS: readonly string[] = []
@@ -108,6 +117,8 @@ function RunTurn({
   status,
   continued,
   latest,
+  nextAnswer,
+  answersQuestion,
   visible,
   takingOver,
   steering,
@@ -124,6 +135,9 @@ function RunTurn({
   status: Status | null
   continued: boolean
   latest: boolean // the conversation's last run
+  nextAnswer: string | null // what began the next run, if it answers the question this one left open
+  answersQuestion: boolean // what began this run answers the question the last one left open
+  onTimes: (run: string, asked: number | null, sent: number | null) => void // when its open question was asked, and when what began it was sent
   visible: boolean // the conversation is shown
   takingOver: boolean // the composer asks the user to take over the desktop for this run
   steering: Pending[] // sent to steer this session, until its log has them
@@ -178,6 +192,23 @@ function RunTurn({
     () => onPlan(run, thread.plan, active),
     [run, thread.plan, active, onPlan]
   )
+  const open =
+    unlogged(thread, steering).length === 0 ? openQuestion(thread) : undefined
+  const placeholder = open?.placeholder ?? null
+  const multiple = open?.multiple ?? false
+  const recommended = multiple ? null : (open?.options[0]?.label ?? null)
+  const askedAt = openQuestion(thread)?.time ?? null
+  const { onAsked, onTimes } = actions
+  useEffect(
+    () => onTimes(run, askedAt, thread.sent),
+    [run, askedAt, thread.sent, onTimes]
+  )
+  useEffect(() => {
+    if (latest)
+      onAsked(
+        placeholder === null ? null : { placeholder, recommended, multiple }
+      )
+  }, [latest, placeholder, recommended, multiple, onAsked])
   const [shot, setShot] = useState<number | null>(null)
 
   // An earlier turn read on the way up shows once it has some; one whose read fails keeps its skeleton.
@@ -209,6 +240,9 @@ function RunTurn({
           setShot(thread.screenshots.findIndex((each) => each.name === name))
         }
         onOpenLive={actions.onOpenLive}
+        onReply={actions.onReply}
+        nextAnswer={nextAnswer}
+        answersQuestion={answersQuestion}
       />
       <ScreenshotViewer
         run={run}
@@ -240,6 +274,8 @@ export function RunView({
   onClosePlan,
   onEnded,
   onOpenLive,
+  onReply,
+  onAsked,
 }: TurnActions & {
   thread: string
   runs: string[] // oldest first: each session's first turn
@@ -326,6 +362,28 @@ export function RunView({
   const [plans, setPlans] = useState<
     Record<string, { plan: Plan | null; active: boolean }>
   >({})
+  // When each run's open question was asked, and when what began it was sent.
+  const [times, setTimes] = useState<
+    Record<string, { asked: number | null; sent: number | null }>
+  >({})
+  const onRunTimes = useCallback(
+    (run: string, asked: number | null, sent: number | null) =>
+      setTimes((current) =>
+        current[run]?.asked === asked && current[run]?.sent === sent
+          ? current
+          : { ...current, [run]: { asked, sent } }
+      ),
+    []
+  )
+  // Whether what began a run answers the question the run before it left open: sent once it was asked, and not that
+  // run carried on. Then it is drawn with the question.
+  const answers = (run: string | undefined) => {
+    if (run === undefined || continued.has(run)) return false
+    const asked = times[runs[runs.indexOf(run) - 1]]?.asked
+    const sent = times[run]?.sent
+    // Until its log comes, what was just sent counts as the answer: it must not show as a bubble first.
+    return asked != null && (sent == null || sent > asked)
+  }
   const [reading, setReading] = useState<string | null>(null)
   // Kept as it was while the same: a new copy every frame of a reply would draw the whole conversation again.
   const onRunPlan = useCallback(
@@ -440,11 +498,18 @@ export function RunView({
   const working = runs.some((run) => runningOf(status, { run }) !== null)
   const latestWorking =
     runs.length > 0 && runningOf(status, { run: runs.at(-1)! }) !== null
-  const now = useRef({ shown: false, latestWorking: false, first: "" })
+  const now = useRef({
+    shown: false,
+    latestWorking: false,
+    answering: false,
+    first: "",
+  })
   useLayoutEffect(() => {
     now.current = {
       shown: ready && placeholder === null,
       latestWorking,
+      // The last run left a question open: what comes next is its answer, which stays where it was asked.
+      answering: times[runs.at(-2) ?? ""]?.asked != null,
       first: shownRuns[0] ?? "",
     }
   })
@@ -546,8 +611,10 @@ export function RunView({
         } else if (
           opening
             ? now.current.latestWorking
-            : lastHeight.current - lastTop.current - element.clientHeight <
-                STICK_PX || placed.current?.isConnected === false
+            : !now.current.answering &&
+              (lastHeight.current - lastTop.current - element.clientHeight <
+                STICK_PX ||
+                placed.current?.isConnected === false)
         ) {
           placed.current = sent
           following.current = false
@@ -734,11 +801,20 @@ export function RunView({
                 onPlan={onRunPlan}
                 onEnded={onEnded}
                 onOpenLive={onOpenLive}
+                onReply={onReply}
+                onAsked={onAsked}
+                onTimes={onRunTimes}
+                nextAnswer={
+                  answers(runs[runs.indexOf(run) + 1])
+                    ? (goals.get(runs[runs.indexOf(run) + 1]) ?? null)
+                    : null
+                }
+                answersQuestion={answers(run)}
               />
             ))}
           </div>
           {/* The room under a placed message, as tall as the content's least height leaves it. */}
-          {placeholder === null && (
+          {ready && placeholder === null && (
             <div ref={room} aria-hidden className="flex-1" />
           )}
         </div>

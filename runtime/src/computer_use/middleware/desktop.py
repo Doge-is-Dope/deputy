@@ -105,7 +105,11 @@ class DesktopMiddleware(SubagentMiddleware):
         return {"messages": [message], "jump_to": "end"}
 
     async def awrap_model_call(self, request, handler):
-        pruned = request.override(messages=prune_screenshots(request.messages))
+        # Calls of one turn run at once, but a desktop takes input in order; computer_batch is how to send several.
+        pruned = request.override(
+            messages=prune_screenshots(request.messages),
+            model_settings={**request.model_settings, "parallel_tool_calls": False},
+        )
         return await super().awrap_model_call(pruned, handler)
 
     async def held(self, request) -> ToolMessage | None:

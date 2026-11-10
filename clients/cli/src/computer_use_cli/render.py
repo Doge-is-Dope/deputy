@@ -20,6 +20,16 @@ def shown_args(args: dict) -> dict:
     return shown
 
 
+def asked(args: dict) -> str:
+    """The main agent's question, its recommended option marked; a next message answers it."""
+    multiple = args.get("multiple")
+    options = [
+        f"  {n}. {option['label']}{' (recommended)' if n == 1 and not multiple else ''}: {option['reason']}"
+        for n, option in enumerate(args.get("options") or [], 1)
+    ]
+    return "\n".join([f"The agent asks{' (choose any)' if multiple else ''}: {args['question']}", *options])
+
+
 def line(event: dict) -> str | None:
     """What the terminal shows of one event, or None for one it does not show."""
     main = event.get("agent") == MAIN
@@ -34,6 +44,8 @@ def line(event: dict) -> str | None:
             return f"      {event['agent']} {event['state']}: {event['brief']}"
         case "model" if event.get("text", "").strip():
             return f"      {'main' if main else 'model'}: {event['text'].strip()}"
+        case "action" if main and event["tool"] == "ask_user" and event["status"] == "success":
+            return asked(event["args"])
         case "action":
             args = json.dumps(shown_args(event["args"]), ensure_ascii=False)
             outcome = "" if event["status"] == "success" else f"  -> {event['result']}"

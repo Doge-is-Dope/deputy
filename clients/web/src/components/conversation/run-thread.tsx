@@ -3,12 +3,20 @@ import { RememberedChip } from "@/components/memory/lines"
 import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
+import { Skeleton } from "@/components/ui/skeleton"
 import { useCopy } from "@/hooks/use-copy"
 import { type Pending } from "@/lib/api"
 import { useNow } from "@/hooks/use-now"
 import { formatDuration, problemReport, type Problem } from "@/lib/format"
 import { useT } from "@/lib/i18n"
-import { citedMemories, type Item, type Task, type Thread } from "@/lib/thread"
+import {
+  citedMemories,
+  openQuestion,
+  unlogged,
+  type Item,
+  type Task,
+  type Thread,
+} from "@/lib/thread"
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -23,6 +31,7 @@ import {
 } from "@/components/conversation/messages"
 import { TaskGroup } from "@/components/conversation/task-group"
 import { AgentsGroup } from "@/components/conversation/agents-group"
+import { QuestionCard } from "@/components/conversation/question-card"
 import { PlainLine, skippedReason } from "@/components/conversation/steps"
 
 /** Show a readable failure; keep the code and exception in the copyable report. */
@@ -77,7 +86,7 @@ const NONE: ReadonlySet<number> = new Set()
 const NO_MESSAGES: Pending[] = []
 
 // How wide each line of a reply still loading is drawn: in paragraphs, as a reply's are, each one's last short. A turn
-// draws the first three; a conversation opening draws all of them, about a view's height.
+// draws the first three; a conversation opening repeats them down the view, cut off at its end.
 const REPLY_LINES = [
   ["w-full", "w-11/12", "w-full", "w-3/4"],
   ["w-full", "w-5/6", "w-2/5"],
@@ -91,29 +100,40 @@ const REPLY_LINES = [
  * and mount it separately so the real turn starts its own entrance animation. */
 export function TurnSkeleton({ long = false }: { long?: boolean }) {
   const t = useT()
+  // A paragraph averages 98px with its gap; the message above them makes up for a run of short ones.
+  const paragraphs = long ? Math.ceil(window.innerHeight / 98) : 3
   return (
-    // A turn still to come, marked where it starts as the turn is (run-view.tsx places it).
+    // A turn still to come, marked where it starts as the turn is (run-view.tsx places it). Opening a conversation,
+    // it takes the height left in the view and no more, so nothing scrolls, down over the content's pb-10 to reach the
+    // composer as a reply does.
     <div
       role="status"
       data-turn
-      className="@container animate-in space-y-6 delay-300 duration-200 ease-(--ease-out) fill-mode-both fade-in"
+      className={cn(
+        "animate-in delay-300 duration-200 ease-(--ease-out) fill-mode-both fade-in",
+        long && "-mb-10 h-0 grow overflow-hidden"
+      )}
     >
       <span className="sr-only">{t.common.loading}</span>
-      <div className="flex flex-col items-end gap-1">
-        <div className="skeleton-shape h-11 w-2/5 rounded-3xl [--at:60cqw]" />
-        <div className="h-7" />
-      </div>
-      {/* Paragraphs spaced as Markdown spaces a reply's. */}
-      <div className="space-y-2.5">
-        {REPLY_LINES.slice(0, long ? undefined : 3).map((lines, paragraph) => (
-          <div key={paragraph}>
-            {lines.map((width, line) => (
-              <div key={line} className="flex h-6 items-center">
-                <div className={cn("skeleton-shape h-3.5 rounded-md", width)} />
-              </div>
-            ))}
-          </div>
-        ))}
+      <div className="space-y-6 motion-safe:animate-pulse">
+        <div className="flex flex-col items-end gap-1">
+          <Skeleton className="h-11 w-2/5 rounded-3xl" />
+          <div className="h-7" />
+        </div>
+        {/* Paragraphs spaced as Markdown spaces a reply's. */}
+        <div className="space-y-2.5">
+          {Array.from({ length: paragraphs }, (_, paragraph) => (
+            <div key={paragraph}>
+              {REPLY_LINES[paragraph % REPLY_LINES.length].map(
+                (width, line) => (
+                  <div key={line} className="flex h-6 items-center">
+                    <Skeleton className={cn("h-3.5", width)} />
+                  </div>
+                )
+              )}
+            </div>
+          ))}
+        </div>
       </div>
     </div>
   )
@@ -185,7 +205,8 @@ function WorkFold({ open, children }: { open: boolean; children: ReactNode }) {
       data-open={open || undefined}
       className="-mt-6 grid grid-rows-[0fr] opacity-0 transition-[grid-template-rows,opacity] duration-300 ease-(--ease-out) motion-reduce:transition-none in-data-settled:starting:grid-rows-[1fr] in-data-settled:starting:opacity-100 data-open:grid-rows-[1fr] data-open:opacity-100"
     >
-      <div className="min-h-0 overflow-hidden">
+      {/* Room each side for a focus ring: the fold clips what it holds. */}
+      <div className="-mx-1 min-h-0 overflow-hidden px-1">
         <div data-refolded={fresh || undefined} className="space-y-6 pt-6">
           {children}
         </div>
@@ -227,6 +248,9 @@ export function RunThread({
   streamed = NONE,
   onOpenShot,
   onOpenLive,
+  onReply,
+  nextAnswer = null,
+  answersQuestion = false,
 }: {
   run: string
   thread: Thread
@@ -248,6 +272,9 @@ export function RunThread({
   streamed?: ReadonlySet<number> // its logged replies this page saw being written, by their model event's place
   onOpenShot: (name: string) => void
   onOpenLive: () => void
+  onReply: (text: string) => Promise<boolean> // sends the user's choice as their next message
+  nextAnswer?: string | null // the next run began with this, the answer to the question this one left open
+  answersQuestion?: boolean // what began this run answers the question the last one left open, which draws it
 }) {
   const t = useT()
   // The work groups the user opened, by key: kept here, since a group under way is drawn apart from those done, and
@@ -319,6 +346,7 @@ export function RunThread({
   if (!shown) return loaded ? null : <TurnSkeleton />
 
   const items = thread.items
+  const sending = unlogged(thread, steering)
   const lastReply = items.findLast((item) => item.kind === "reply")
   const taskGroup = (
     task: Task,
@@ -438,6 +466,22 @@ export function RunThread({
             updated={item.updated}
           />
         )
+      case "question":
+        return (
+          <QuestionCard
+            key={item.key}
+            question={item.question}
+            options={item.options}
+            multiple={item.multiple}
+            // A later run began with their answer; a message sent counts before the log has it.
+            answered={item.answered || !latest || sending.length > 0}
+            answer={
+              item.answer?.text ??
+              (item.answered ? null : (nextAnswer ?? sending[0]?.text ?? null))
+            }
+            onReply={onReply}
+          />
+        )
       case "note":
         return (
           <p
@@ -462,30 +506,39 @@ export function RunThread({
             streamed.has(item.at) &&
             written.indexOf(item.at) === answered
         )
+  // A question still waiting stays in view: nothing folds it away.
   const final =
-    end?.stop_reason === "replied" && lastReply
-      ? items.indexOf(lastReply)
-      : working.length > 0
-        ? -1
-        : answering && words
-          ? items.length
-          : answer >= 0 && answer === items.length - 1
-            ? answer
-            : -1
+    latest && openQuestion(thread)
+      ? -1
+      : end?.stop_reason === "replied" && lastReply
+        ? items.indexOf(lastReply)
+        : working.length > 0
+          ? -1
+          : answering && words
+            ? items.length
+            : answer >= 0 && answer === items.length - 1
+              ? answer
+              : -1
   // The session's work: what it did and said before its final reply, or so far (a turn of work, words on the way, a
   // message meanwhile, a reply with more after it); not a reply alone, or what it recalled. Once the final reply has
   // come, or starts, the work folds under the worked line.
   const work = items.filter(
     (item, index) =>
       item.kind !== "memory" &&
+      item.kind !== "question" &&
       (final < 0
         ? item !== lastReply || index < items.length - 1
         : index < final)
   )
   const fold = final > 0 && work.length > 0
+  // Words said with a question are no work to account for.
+  const onlyAsked =
+    !fold &&
+    items.some((item) => item.kind === "question") &&
+    work.every((item) => item.kind === "commentary")
   // In one list with the rows, so a reply keeps its key from draft to logged.
   const all = [
-    thread.started !== null && work.length > 0 ? (
+    thread.started !== null && work.length > 0 && !onlyAsked ? (
       <WorkedLine
         key="worked"
         started={thread.started}
@@ -515,13 +568,8 @@ export function RunThread({
     ) : null,
     // What the user sent to steer it, where it goes: after what the main agent is writing, which it reads next. Under
     // the same key as once its log has it, there in the conversation.
-    ...steering
-      .filter(
-        (message) =>
-          !items.some(
-            (item) => item.kind === "message" && item.id === message.id
-          )
-      )
+    ...sending
+      .filter((_, index) => !(index === 0 && openQuestion(thread)))
       .map((message) => <UserMessage key={message.id} text={message.text} />),
     // The main agent working out what to say, until the first of its words comes. Last of all, under the work under way,
     // and
@@ -541,14 +589,15 @@ export function RunThread({
     <div
       data-turn
       data-run={run}
-      className="space-y-6"
+      // A run that answers the last one's question reads as more of it: the gap within a turn, not between turns.
+      className={cn("space-y-6", answersQuestion && "-mt-4")}
       data-settled={settled || undefined}
     >
       {continued ? (
         <p className="flex dashed-rule items-center gap-3 text-xs text-muted-foreground">
           {t.run.continued}
         </p>
-      ) : (
+      ) : answersQuestion ? null : (
         <UserMessage text={goal!} time={thread.started ?? undefined} />
       )}
 

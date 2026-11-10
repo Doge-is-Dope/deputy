@@ -75,6 +75,7 @@ export function Composer({
   approval = null,
   onAnswer,
   takeover = null,
+  choice = null,
   queued = [],
   onWithdraw,
   placeholder,
@@ -92,6 +93,7 @@ export function Composer({
   approval?: Approval | null // the step the open run waits for the user to approve
   onAnswer?: (decision: Decision, note: string) => Promise<boolean> // true once answered
   takeover?: Takeover | null
+  choice?: { accept: () => Promise<boolean>; browse: () => void } | null // the open question's options, with nothing written
   queued?: Pending[] // sent to the run in progress, not read by its agents yet
   onWithdraw?: (message: Pending) => void
   placeholder: string
@@ -251,6 +253,12 @@ export function Composer({
     setSending(false)
   }
 
+  async function takeRecommended() {
+    setSending(true)
+    await choice?.accept()
+    setSending(false)
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     // While the handover is asked, Enter and Esc here answer it (useAnswerKeys).
     if (handover) return
@@ -261,9 +269,19 @@ export function Composer({
     // While a run that takes no message works, nothing goes yet: what is written stays, and the stop button says
     // when it can.
     const key = event.shiftKey ? "" : event.key
+    const held = running && !takesMessages && !approval
+    if (choice && !goal.trim() && !held && key === "ArrowUp") {
+      event.preventDefault()
+      choice.browse()
+      return
+    }
     if (key !== "Enter" || (approval && !declining)) return
     event.preventDefault()
-    const held = running && !takesMessages && !approval
+    if (choice && !goal.trim() && !held) {
+      if (blocked) showHint()
+      else if (!event.repeat && !sending) void takeRecommended()
+      return
+    }
     if (goal.trim() && (blocked || held)) showHint()
     else if (!held) submit(undefined, event.metaKey || event.ctrlKey)
   }

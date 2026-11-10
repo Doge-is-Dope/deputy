@@ -1,12 +1,12 @@
 import { cn } from "cn"
 
-// The same pass of light as the conversation's placeholder (index.css's skeleton-shape), not shadcn's pulse: it needs a
-// size container round the shapes, and --at where a shape starts in it.
+// One shape of a placeholder, the text at 10% over whatever it sits on. It does not pulse by itself: what holds the
+// shapes does, as one animation however many there are.
 function Skeleton({ className, ...props }: React.ComponentProps<"div">) {
   return (
     <div
       data-slot="skeleton"
-      className={cn("skeleton-shape rounded-md", className)}
+      className={cn("rounded-md bg-foreground/10", className)}
       {...props}
     />
   )

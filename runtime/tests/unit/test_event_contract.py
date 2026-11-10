@@ -1,4 +1,4 @@
-"""The runtime emits the same v6 event contract the web projects, without reading prose: a turn's log, its task's
+"""The runtime emits the same v7 event contract the web projects, without reading prose: a turn's log, its task's
 and the next turn's."""
 
 import json
@@ -17,7 +17,7 @@ from conftest import fixture_png, new_log
 
 
 async def test_shared_web_fixture_matches_runtime_writers(settings):
-    records = json.loads((Path(__file__).parents[1] / "fixtures/events-v6.json").read_text())["records"]
+    records = json.loads((Path(__file__).parents[1] / "fixtures/events-v7.json").read_text())["records"]
     for events in records:
         start = events[0]
         log = await new_log(settings.data_dir)
@@ -60,6 +60,11 @@ async def written_as_in(settings, log, events: list[dict]) -> None:
             written = read_events(run_dir(settings, log.run))[-1]
             for field in ("state", "id", "agent", "brief", "title", "record"):
                 assert written[field] == event[field], field
+        elif event["type"] == "plan":
+            log.plan({"version": event["version"], "steps": event["steps"]})
+            written = read_events(run_dir(settings, log.run))[-1]
+            for field in ("version", "steps"):
+                assert written[field] == event[field], field
         elif event["type"] == "end":
             log.end(event["stop_reason"], event["summary"], event["computer"])
             written = read_events(run_dir(settings, log.run))[-1]
@@ -68,6 +73,7 @@ async def written_as_in(settings, log, events: list[dict]) -> None:
 
 
 def test_action_classification_covers_the_actual_tools_and_dispatch(executor):
+    executor.judge = object()  # press_while is offered only with a screen judge
     tools = {tool.name: tool for tool in desktop_tools(executor)}
     assert set(ACTIONS) == set(executor._actions)
     assert set(tools) == {*ACTIONS, "computer_batch"}

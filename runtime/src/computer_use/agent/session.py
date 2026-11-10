@@ -13,19 +13,23 @@ from dataclasses import dataclass
 from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, HumanMessage, ToolMessage
 from langgraph.graph.state import CompiledStateGraph
 
-from computer_use.agent.background import USER, Background, Resource, runtime_message
+from computer_use.agent.background import USER, Background, Job, Resource, runtime_message
 from computer_use.agent.handover import SessionMemory, task_tool
-from computer_use.agent.history import load_conversation
+from computer_use.agent.blackboard import Blackboard
+from computer_use.agent.history import latest_plan, load_conversation
 from computer_use.agent.inbox import Inbox
-from computer_use.agent.subagent import MakeAgent, StopReason, Subagent
+from computer_use.agent.plan import Plan
+from computer_use.agent.subagent import MakeAgent, Result, StopReason, Subagent
 from computer_use.agent.trajectory import MAIN, Trajectory
 from computer_use.config import RunChoices
 from computer_use.middleware.chat import ChatMiddleware, Mention, RestartingDraft
 from computer_use.middleware.common import raise_if_stopped, retrying_failed_streams
 from computer_use.prompts import notes
 from computer_use.streaming import Draft
+from computer_use.tools.ask_user import ask_user
 from computer_use.tools.conversations import conversation_tools
-from computer_use.tools.tasks import START_TASK, handover_tools
+from computer_use.tools.plan import plan_tool
+from computer_use.tools.tasks import TaskTool, handover_tools
 
 # Only a backstop: a turn replies, or hands work over and replies.
 MAIN_CALLS = 8
@@ -105,7 +109,7 @@ class Session:
         self, main_agent: MainAgent, *, first: Trajectory, thread: str, agents: dict[type[Subagent], MakeAgent],
         resources: dict[str, Resource], mention: Mention | None, computer: str,
         inbox: Inbox, draft: Draft, choices: RunChoices, models: tuple[str, str], memory: SessionMemory | None,
-        project: str | None, watch: str,
+        project: str | None, watch: str, background: Background, blackboard: Blackboard,
     ):
         self.main_agent, self.thread, self.agents, self.watch = main_agent, thread, agents, watch
         self.resources, self.mention, self.computer, self.inbox, self.draft = resources, mention, computer, inbox, draft
@@ -113,11 +117,14 @@ class Session:
         self.id, self.first = first.run, first
         self.log: Trajectory | None = first  # the turn under way
         self.turns = [first.run]
-        self.background = Background()
+        self.background, self.blackboard = background, blackboard
+        background.on_task = self.task_changed
         self.date = notes.today(choices.timezone)  # fixed while the session works, appended after the rules
         self.idle: set[str] = set()  # replies the main agent wrote while no task ran, whose hand-overs count
         self.messages: list[BaseMessage] = []
         self.tools: list = []
+        self.handing: dict[str, TaskTool] = {}  # what hands a task over, by the agent's name
+        self.planned = False  # this session wrote the plan: one restored from an earlier session is no work of its own
         self.turning: asyncio.Task | None = None  # the turn under way, which the user may stop on its own
         self.calls: set[asyncio.Future] = set()  # task tools' calls under way, which a stopped turn lets finish
 
@@ -127,6 +134,25 @@ class Session:
     def current(self) -> Trajectory:
         """The log of the turn under way; tasks are handed over only from one."""
         return self.log
+
+    def show_plan(self) -> None:
+        """Log the plan as it stands, for the page, in the turn under way; without one, the next turn shows it."""
+        if self.log is not None:
+            self.blackboard.show(self.log)
+
+    def plan_written(self, revised: bool) -> None:
+        self.planned = True
+        self.show_plan()
+        if revised:
+            self.background.notify(notes.PLAN_UPDATED)
+
+    def task_changed(self, job: Job, outcome: Result | BaseException | None) -> None:
+        """A task started or ended. One that ended leaves the main agent a word, with its result, on the steps nobody
+        is on: only an agent knows whether its work is done, so the runtime marks nothing."""
+        if isinstance(outcome, tuple):
+            left = self.blackboard.plan.view(self.background.on_steps()) if self.planned else []
+            job.plan_note = notes.plan_left([step["id"] for step in left if step["status"] == "pending"])
+        self.show_plan()
 
     async def start(self, opening: Opening) -> HumanMessage:
         """Open the session in its first turn, closing the logs of tasks the runtime died under; the user's message,
@@ -155,20 +181,23 @@ class Session:
         if opening.mentioned:
             self.messages.append(asked := runtime_message(self.mention.asked, "mention_asked"))
             await log.input(asked, "mention-asked", MAIN)
+        if opening.earlier and (saved := await latest_plan(log.store, self.thread)) is not None:
+            self.blackboard.plan = Plan.restored(saved)
         rules = await self.memory.recall() if self.memory is not None else False
         tasks = [task_tool(kind, make, self.background, self.inbox, self.current, self.id, self.thread, self.memory,
                            self.resources.get(kind.agent)) for kind, make in self.agents.items()]
+        self.handing = {each.agent: each for each in tasks}
         self.tools = [*handover_tools(tasks, self.background, self.inbox, with_rules=rules),
+                      plan_tool(self.blackboard.plan, self.plan_written), ask_user,
                       *conversation_tools(log.store, self.thread)]
         return start
 
-    async def hand_mentioned(self, text: str) -> ToolMessage:
-        """Hand the user's words to the agent they name as they are, when the main agent's reply did not."""
-        start_task = next(each for each in self.tools if each.name == START_TASK)
-        return await start_task.ainvoke({
-            "type": "tool_call", "id": f"runtime-{uuid.uuid4().hex[:12]}", "name": START_TASK,
-            "args": {"agent": self.mention.agent, "title": self.mention.title(text), "task": text},
-        })
+    async def hand_mentioned(self, text: str) -> str:
+        """Hand the user's words to the agent they name as they are, when the main agent's reply did not; what handing
+        them over answers."""
+        call_id = f"runtime-{uuid.uuid4().hex[:12]}"
+        handed = await self.handing[self.mention.agent].start(self.mention.title(text), text, [], [], call_id)
+        return handed.text if isinstance(handed, ToolMessage) else handed
 
     async def open_turn(self) -> Trajectory:
         log = await Trajectory.open(self.first.store, self.first.listeners)
@@ -224,6 +253,7 @@ class Session:
                 if not await self.woken():
                     break
                 self.log = await self.open_turn()
+                self.show_plan()
         except (asyncio.CancelledError, Exception) as error:
             await self.cut(error)
             for run in self.turns:
@@ -240,9 +270,9 @@ class Session:
         return final.text.strip() if final is not None else ""
 
     async def woken(self) -> bool:
-        """Wait until the user's message or a task's end or failure wakes the main agent: True; False once nothing
+        """Wait until the user's message, a task's question, or its end or failure wakes the main agent: True; False once nothing
         could, with no task at work. A task the user stopped does not wake it: it hears of it at its next call."""
-        while not (self.background.ended or self.inbox.unread(MAIN)):
+        while not (self.background.news or self.inbox.unread(MAIN)):
             if not self.background.running:
                 return False
             await next_event(self.inbox, self.background)

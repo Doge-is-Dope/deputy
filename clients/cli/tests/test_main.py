@@ -241,3 +241,21 @@ def test_stop_stops_one_agent_and_says_when_it_is_not_at_work(api, client, capsy
 
     out = capsys.readouterr()
     assert "Stopped k1." in out.out and "Not in progress: k2" in out.err
+
+
+def test_the_main_agents_question_is_shown_with_its_recommendation():
+    from computer_use_cli.render import line
+
+    args = {"question": "Which one?", "options": [{"label": "A", "reason": "Newer."}, {"label": "B", "reason": "Older."}]}
+    shown = line({"type": "action", "agent": "main", "n": 1, "tool": "ask_user", "args": args, "status": "success", "result": ""})
+
+    assert shown == "The agent asks: Which one?\n  1. A (recommended): Newer.\n  2. B: Older."
+
+
+def test_a_question_with_several_answers_marks_no_recommendation():
+    from computer_use_cli.render import line
+
+    args = {"question": "Which?", "multiple": True, "options": [{"label": "A", "reason": "One."}]}
+    shown = line({"type": "action", "agent": "main", "n": 1, "tool": "ask_user", "args": args, "status": "success", "result": ""})
+
+    assert shown == "The agent asks (choose any): Which?\n  1. A: One."

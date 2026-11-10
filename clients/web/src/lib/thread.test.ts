@@ -1,18 +1,22 @@
 import { describe, expect, it, vi } from "vitest"
 
-import type { RunEvent } from "@/lib/api"
+import type { Pending, RunEvent } from "@/lib/api"
 import events from "../../../../runtime/tests/fixtures/events-v5.json"
 import {
   awaitingDesktop,
   buildThread,
   citedMemories,
   doingNow,
+  openQuestion,
   stepFailed,
+  unlogged,
   waitingFor,
   workedFor,
   type Step,
   type Task,
   type TaskEntry,
+  isPlanLine,
+  phasesOf,
 } from "@/lib/thread"
 
 vi.mock("@/lib/i18n", async () => {
@@ -382,7 +386,7 @@ describe("v4 event projection", () => {
         remember(2, "Not remembered: this conversation is in no project.", 103),
         remember(3, "Remembered as m3.", 104, "m0"),
         said("Noted.", 105),
-        { type: "message", id: "u1", text: "Also this", time: 106 },
+        { type: "message", id: "u1", text: "Also this", sent: 106, time: 106 },
         said("", 107, true),
         remember(4, "Remembered as m4.", 108),
       ])
@@ -504,7 +508,12 @@ describe("v4 event projection", () => {
         type: "model",
         agent: "main",
         text: "I will add them.",
-        tool_calls: [{ name: "start_task", args: { agent: "coding", task: "Add 2 and 2" } }],
+        tool_calls: [
+          {
+            name: "start_task",
+            args: { agent: "coding", task: "Add 2 and 2" },
+          },
+        ],
         time: 101,
       },
       {
@@ -633,12 +642,15 @@ describe("v4 event projection", () => {
   })
 
   describe("a plan and the work done on it", () => {
-    const step = (content: string, status: string) => ({ content, status })
+    const step = (
+      content: string,
+      status: "pending" | "in_progress" | "completed"
+    ) => ({ content, status })
     // The main agent handing a task over with its plan beside it, the task's one step, and the task's end.
     const handing = (
       at: number,
       task: string,
-      todos: unknown[],
+      todos: ReturnType<typeof step>[],
       said: string,
       result = "Done.",
       words = ""
@@ -648,7 +660,7 @@ describe("v4 event projection", () => {
         agent: "main",
         text: said,
         tool_calls: [
-          { name: "write_todos", args: { todos } },
+          { name: "write_plan", args: { steps: [] } },
           { name: "start_task", args: { agent: "computer", task } },
         ],
         time: at,
@@ -658,11 +670,24 @@ describe("v4 event projection", () => {
         agent: "main",
         n: 1,
         id: `p${at}`,
-        tool: "write_todos",
-        args: { todos },
+        tool: "write_plan",
+        args: { steps: [] },
         status: "success",
-        result: "Updated todo list",
+        result: "Plan written.",
         screenshot: null,
+        time: at,
+      },
+      {
+        type: "plan",
+        version: at,
+        steps: todos.map(({ content, status }) => ({
+          id: content,
+          title: content,
+          done_when: "",
+          needs: [],
+          status,
+          tasks: [],
+        })),
         time: at,
       },
       {
@@ -762,19 +787,85 @@ describe("v4 event projection", () => {
       ])
     })
 
-    it("reads the plan from the main agent's latest write_todos, not as work handed over", () => {
+    it("keeps a step reported done and a question as lines of their own, by the plan's name, among folded actions", () => {
+      const planned: RunEvent = {
+        type: "plan",
+        version: 1,
+        steps: [
+          {
+            id: "1",
+            title: "Find the file",
+            done_when: "",
+            needs: [],
+            status: "in_progress",
+            tasks: ["t1"],
+          },
+        ],
+        time: 90,
+      }
+      const called = (
+        name: string,
+        args: Record<string, unknown>,
+        at: number
+      ): RunEvent => ({
+        type: "model",
+        text: "",
+        tool_calls: [{ name, args }],
+        task: "t1",
+        time: at,
+      })
+      const thread = buildThread([
+        fixture[0],
+        planned,
+        {
+          type: "task",
+          state: "started",
+          id: "t1",
+          agent: "computer",
+          brief: "B",
+          title: "",
+          time: 95,
+        },
+        called("key", { text: "win" }, 100),
+        called("finish_step", { steps: ["1", "gone"] }, 101),
+        called("ask", { question: "Which?" }, 102),
+      ])
+      const task = [...thread.tasks.values()][0]
+      const parts = phasesOf(task.entries)
+      expect(parts.map((part) => part.kind)).toEqual(["phase", "step", "step"])
+      const [, finished, asked] = parts as Extract<
+        TaskEntry,
+        { kind: "step" }
+      >[]
+      expect(finished.step.finished).toEqual(["Find the file", "gone"])
+      expect(isPlanLine(asked.step)).toBe(true)
+      expect(doingNow(task)).toBe("Waiting for an answer")
+    })
+
+    it("reads the plan from its newest snapshot, in any order of logs, not as work handed over", () => {
       const thread = buildThread([
         fixture[0],
         ...handing(
           100,
           "Find A",
-          [
-            step("A", "in_progress"),
-            step("B", "pending"),
-            { content: 3, status: "x" },
-          ],
+          [step("A", "in_progress"), step("B", "pending")],
           "First A."
         ),
+        {
+          type: "plan",
+          version: 1,
+          steps: [
+            {
+              id: "old",
+              title: "Older",
+              done_when: "",
+              needs: [],
+              status: "pending",
+              tasks: [],
+            },
+          ],
+          time: 101,
+        },
       ])
       expect(thread.plan?.steps).toEqual([
         step("A", "in_progress"),
@@ -862,8 +953,14 @@ describe("v4 event projection", () => {
           agent: "main",
           text: "Both at once.",
           tool_calls: [
-            { name: "start_task", args: { agent: "computer", title: "A", task: "Open A" } },
-            { name: "start_task", args: { agent: "coding", title: "B", task: "Add B" } },
+            {
+              name: "start_task",
+              args: { agent: "computer", title: "A", task: "Open A" },
+            },
+            {
+              name: "start_task",
+              args: { agent: "coding", title: "B", task: "Add B" },
+            },
           ],
           time: 101,
         },
@@ -939,7 +1036,10 @@ describe("v4 event projection", () => {
           agent: "main",
           text: "First A.",
           tool_calls: [
-            { name: "start_task", args: { agent: "computer", title: "A", task: "Open A" } },
+            {
+              name: "start_task",
+              args: { agent: "computer", title: "A", task: "Open A" },
+            },
           ],
           time: 101,
         },
@@ -949,7 +1049,10 @@ describe("v4 event projection", () => {
           agent: "main",
           text: "Meanwhile B.",
           tool_calls: [
-            { name: "start_task", args: { agent: "coding", title: "B", task: "Add B" } },
+            {
+              name: "start_task",
+              args: { agent: "coding", title: "B", task: "Add B" },
+            },
           ],
           time: 103,
         },
@@ -993,5 +1096,149 @@ describe("a task's groups of steps and the step under way", () => {
         action: action({ reason: "userControl" }),
       })
     ).toBe(false)
+  })
+})
+
+describe("a question to the user", () => {
+  const asked = (
+    n: number,
+    status: "success" | "error" = "success"
+  ): RunEvent => ({
+    type: "action",
+    agent: "main",
+    n,
+    id: `ask-${n}`,
+    tool: "ask_user",
+    args: {
+      question: `Question ${n}`,
+      options: [{ label: "A", reason: "Newer." }, { reason: "No label." }],
+      placeholder: "Or name another",
+    },
+    status,
+    result: "Shown to the user.",
+    screenshot: null,
+    time: n,
+  })
+  const said: RunEvent = {
+    type: "message",
+    id: "m",
+    text: "A",
+    sent: 9,
+    time: 9,
+  }
+
+  it("is open, with its options, and stops the thinking row", () => {
+    const thread = buildThread([asked(1)])
+    expect(openQuestion(thread)).toMatchObject({
+      question: "Question 1",
+      options: [{ label: "A", reason: "Newer." }],
+      placeholder: "Or name another",
+    })
+    expect(thread.thinking).toBe(false)
+  })
+
+  it("takes only what the log does not have yet as an answer on its way", () => {
+    const before: RunEvent = {
+      type: "message",
+      id: "b",
+      text: "Ask me",
+      sent: 0,
+      time: 0,
+    }
+    const thread = buildThread([before, asked(1)])
+    const read = { id: "b", text: "Ask me" } as Pending
+    const sent = { id: "c", text: "A" } as Pending
+    expect(unlogged(thread, [read])).toEqual([])
+    expect(unlogged(thread, [read, sent])).toEqual([sent])
+    expect(openQuestion(thread)?.question).toBe("Question 1")
+  })
+
+  it("says when several options may be chosen", () => {
+    const event = asked(1)
+    if (event.type !== "action") throw new Error("not an action")
+    const many: RunEvent = {
+      ...event,
+      args: { ...event.args, multiple: true },
+    }
+    expect(openQuestion(buildThread([many]))?.multiple).toBe(true)
+    expect(openQuestion(buildThread([event]))?.multiple).toBe(false)
+  })
+
+  it("closes with the user's next message", () => {
+    expect(openQuestion(buildThread([asked(1), said]))).toBeUndefined()
+  })
+
+  it("keeps the answer with the question, not as a message of its own", () => {
+    const thread = buildThread([asked(1), said])
+    expect(thread.items.map((item) => item.kind)).toEqual(["question"])
+    expect(thread.items[0]).toMatchObject({
+      answered: true,
+      answer: { id: "m", text: "A" },
+    })
+  })
+
+  it("leaves a later message as a message of its own", () => {
+    const later: RunEvent = {
+      type: "message",
+      id: "n",
+      text: "B",
+      sent: 10,
+      time: 10,
+    }
+    const thread = buildThread([asked(1), said, later])
+    expect(thread.items.map((item) => item.kind)).toEqual([
+      "question",
+      "message",
+    ])
+  })
+
+  it("gives way to the next question, which takes its place", () => {
+    const thread = buildThread([asked(1), asked(2)])
+    expect(openQuestion(thread)?.question).toBe("Question 2")
+    expect(
+      thread.items.filter((item) => item.kind === "question")
+    ).toHaveLength(1)
+  })
+
+  it("is not answered by a message sent before it was asked", () => {
+    const early: RunEvent = {
+      type: "message",
+      id: "e",
+      text: "Remind me too",
+      sent: 0.5,
+      time: 2,
+    }
+    const thread = buildThread([asked(1), early])
+    expect(openQuestion(thread)?.question).toBe("Question 1")
+    expect(thread.items.map((item) => item.kind)).toEqual([
+      "question",
+      "message",
+    ])
+  })
+
+  it("keeps its key when an earlier event comes in late", () => {
+    const earlier: RunEvent = {
+      type: "note",
+      text: "A step read late",
+      code: null,
+      data: {},
+      time: 0,
+    }
+    const key = (events: RunEvent[]) => openQuestion(buildThread(events))?.key
+    expect(key([earlier, asked(1)])).toBe(key([asked(1)]))
+  })
+
+  it("is not several answers without options to choose", () => {
+    const event = asked(1)
+    if (event.type !== "action") throw new Error("not an action")
+    const empty: RunEvent = {
+      ...event,
+      args: { question: "Which?", multiple: true },
+    }
+    expect(openQuestion(buildThread([empty]))?.multiple).toBe(false)
+  })
+
+  it("is not shown when the call failed", () => {
+    expect(openQuestion(buildThread([asked(1, "error")]))).toBeUndefined()
   })
 })

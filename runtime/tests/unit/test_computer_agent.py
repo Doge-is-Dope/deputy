@@ -55,7 +55,7 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
 
     assert (result.reply, result.computer) == ("Done.", "replied")
     assert handed_back(result)["reply"] == "Typed the note."
-    # The two calls of one turn run at once, in no promised order.
+    # A model may ignore the request for one call per turn; its calls then run at once, in no promised order.
     assert computer.calls[0] == ("press", [["win"]]) and computer.calls[3] == ("type_text", "會議紀錄")
     assert sorted(computer.calls[1:3]) == [("press", [["enter"]]), ("type_text", "notepad")]
     actions = {event["id"]: event for event in logged(result, "action")}
@@ -68,6 +68,17 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
         if event["status"] == "success":
             assert run_file(settings, result.run, event["screenshot"]).exists()
     assert '1. Open Start. -> key {"text": "win"} -> success' in computer_use_result(result)["result"]
+
+
+async def test_a_desktop_task_asks_for_one_tool_call_per_turn(settings, computer, monkeypatch):
+    computer_model, _ = use_script(monkeypatch, [
+        AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")]),
+        AIMessage(content="Opened Start."),
+    ])
+
+    await run_turn(settings, "open start", max_steps=10, computer=computer)
+
+    assert [binding.get("parallel_tool_calls") for binding in computer_model.bindings] == [False, False]
 
 
 async def test_loop_runs_a_batch_as_one_tool_call(settings, computer, monkeypatch):

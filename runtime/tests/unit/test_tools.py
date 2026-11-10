@@ -12,7 +12,7 @@ import computer_use.desktop.screen
 from computer_use.tools.desktop import desktop_tools
 from computer_use.desktop.actions import BATCHABLE, CONFIRMABLE
 from computer_use.computers import ComputerError
-from computer_use.desktop.screen import NOISE, changed_pixels, lasting_changed_pixels, mark, settle
+from computer_use.desktop.screen import NOISE, changed_pixels, lasting_changed_pixels, mark, settle, settle_judged
 from conftest import fixture_png, tool_call
 
 
@@ -190,6 +190,69 @@ async def test_settle_waits_for_a_late_effect_to_finish_drawing(computer, monkey
     settle_waits(monkeypatch, 1.0, 0.05, 2.0)
     frame, _ = await settle(computer, gray(desktop), 1.0)
     assert changed_pixels(gray(frame.png), gray(app)) == 0
+
+
+async def test_settle_judged_judges_the_screen_it_returns(computer, monkeypatch, fast_polls):
+    # Drawn in two frames: the judging of the half-drawn screen is dropped for that of the finished one.
+    desktop, half, app = screen_with(), screen_with((0, 0, 640, 400)), screen_with((0, 0, 1280, 400))
+    frames = iter([desktop] * 3 + [half] + [app] * 1000)
+    computer.screen = lambda: next(frames)
+    settle_waits(monkeypatch, 1.0, 0.05, 2.0)
+    judged = []
+
+    async def judge(png: bytes) -> bool:
+        judged.append(png)
+        return changed_pixels(gray(png), gray(app)) == 0
+
+    (frame, _), verdict = await settle_judged(computer, gray(desktop), 1.0, judge)
+    assert verdict and changed_pixels(gray(frame.png), gray(app)) == 0
+    assert changed_pixels(gray(judged[-1]), gray(app)) == 0
+
+
+def fake_clock(monkeypatch) -> SimpleNamespace:
+    """A clock for screen.settle that moves only when it sleeps; `clock.now` is the time in seconds."""
+    clock = SimpleNamespace(now=0.0)
+
+    async def sleep(seconds):
+        clock.now += seconds
+
+    monkeypatch.setattr(computer_use.desktop.screen, "asyncio", SimpleNamespace(
+        get_running_loop=lambda: SimpleNamespace(time=lambda: clock.now), sleep=sleep, to_thread=asyncio.to_thread,
+    ))
+    return clock
+
+
+# A dialog the action opens, and an arrow on it that blinks every 0.27 s for as long as the dialog is up, like the
+# prompt for more text in a game; it straddles cells, as nothing lines up with them.
+DIALOG, ARROW = (300, 500, 1000, 700), (950, 710, 990, 740)
+
+
+def blinking(clock, *boxes) -> bytes:
+    return screen_with(*boxes, ARROW) if int(clock.now / 0.27) % 2 else screen_with(*boxes)
+
+
+def shows(frame, *boxes) -> bool:
+    """Whether the frame is the screen with these boxes, the arrow on or off."""
+    return 0 in (changed_pixels(gray(frame.png), gray(screen_with(*boxes, *arrow))) for arrow in ((), (ARROW,)))
+
+
+async def test_settle_does_not_wait_out_what_keeps_blinking(computer, monkeypatch):
+    settle_waits(monkeypatch, 1.5, 0.5, 3.0)
+    clock = fake_clock(monkeypatch)
+    computer.screen = lambda: blinking(clock, DIALOG)
+    frame, _ = await settle(computer, gray(screen_with()), 1.5)
+    assert clock.now < 1.0 and shows(frame, DIALOG)
+
+
+async def test_settle_waits_for_drawing_that_goes_on_beside_a_blink(computer, monkeypatch):
+    # Text printed one word every 0.3 s for 2.1 s, each in new cells, while the arrow keeps blinking.
+    settle_waits(monkeypatch, 1.5, 0.5, 3.0)
+    clock = fake_clock(monkeypatch)
+    words = lambda: [(320 + 80 * n, 520, 380 + 80 * n, 560) for n in range(min(int(clock.now / 0.3), 7) + 1)]
+    computer.screen = lambda: blinking(clock, *words())
+    frame, _ = await settle(computer, gray(screen_with()), 1.5)
+    assert 2.6 <= clock.now < 3.0
+    assert len(words()) == 8 and shows(frame, *words())
 
 
 async def test_settle_stops_waiting_when_nothing_changes(computer, monkeypatch, fast_polls):

@@ -112,6 +112,7 @@ class Runner:
         choices: RunChoices = RunChoices(),
         project: str | None = None,
         user: str = LOCAL_USER,
+        sent: float | None = None,
     ) -> str:
         """Starts a run in the background and returns its id once its log exists.
         ConversationBusy while the conversation has a run in progress; DesktopBusy, for a message for the desktop,
@@ -149,7 +150,7 @@ class Runner:
                 listeners=listeners, thread=thread, force_computer=force_computer, take_control=take_control,
                 inbox=running.inbox, draft=running.draft, choices=choices,
                 titles=self.titles, approvals=lambda: running.choices.approvals, project=project,
-                opened=lambda session: setattr(running, "session", session),
+                opened=lambda session: setattr(running, "session", session), sent=sent,
             )
         )
         try:
@@ -193,7 +194,7 @@ class Runner:
         first, *rest = sorted(unread, key=lambda message: message.queued)  # stable: in the order sent
         try:
             await self.start(
-                first.text, max_steps, thread=thread, choices=choices, user=user
+                first.text, max_steps, thread=thread, choices=choices, user=user, sent=first.time
             )
         except Exception as error:  # e.g. another run took the desktop meanwhile
             traceback.print_exception(error)

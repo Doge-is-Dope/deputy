@@ -5,13 +5,13 @@ from dataclasses import dataclass
 from typing import Annotated, Literal
 
 from langchain_core.messages import ToolMessage
-from langchain_core.tools import BaseTool, tool
+from langchain_core.tools import BaseTool, InjectedToolArg, tool
 from pydantic import Field, WithJsonSchema
 
 from computer_use.agent.background import MAX_TASKS, Background
 from computer_use.agent.inbox import Inbox
 from computer_use.prompts import notes
-from computer_use.prompts.main import AGENT, BRIEF, TITLE, start_task
+from computer_use.prompts.main import AGENT, BRIEF, STEPS, TITLE, start_task
 from computer_use.storage import MAIN
 from computer_use.tools.common import CallId, not_executed
 
@@ -24,11 +24,12 @@ RULES = "The ids of the remembered rules that apply to this task, for its agent 
 @dataclass(frozen=True)
 class TaskTool:
     """An agent start_task hands tasks to: its name, its line in the tool's description, and what starts its task
-    (its title, the task, the ids of the rules it follows and the call's id in; the call's result out)."""
+    (its title, the task, the ids of the rules it follows, the ids of the plan's steps it carries out and the call's id
+    in; the call's result out)."""
 
     agent: str
     about: str
-    start: Callable[[str, str, list[str], str], Awaitable[str | ToolMessage]]
+    start: Callable[[str, str, list[str], list[str], str], Awaitable[str | ToolMessage]]
 
 
 def handover_tools(
@@ -53,6 +54,7 @@ def handover_tools(
             return not_executed({"id": call_id, "name": TELL_TASK}, notes.no_task(task_id), "noTask")
         said = [sent.text for sent in user.read(MAIN)[job.heard:]]
         job.heard += len(said)
+        job.answer = message
         background.tell(task_id, message + notes.since_heard(said))
         return notes.TOLD
 
@@ -80,26 +82,19 @@ def handover_tool(tasks: Sequence[TaskTool], *, with_rules: bool) -> BaseTool:
     starts = {each.agent: each.start for each in tasks}
     # An enum even for one agent, as for several: a single choice would come out as a const.
     Agent = Annotated[Literal[tuple(starts)], WithJsonSchema({"type": "string", "enum": list(starts)})]
+    # Injected arguments are left out of the schema: with no rules to name, the model is not offered the argument.
+    Rules = Annotated[list[str] | None, Field(description=RULES) if with_rules else InjectedToolArg]
 
     async def hand_task(
         agent: Annotated[Agent, Field(description=AGENT)],
         title: Annotated[str, Field(description=TITLE)],
         task: Annotated[str, Field(description=BRIEF)],
+        steps: Annotated[list[str] | None, Field(description=STEPS)] = None,
+        rules: Rules = None,
         *,
         call_id: CallId,
     ) -> str | ToolMessage:
-        return await starts[agent](title, task, [], call_id)
+        return await starts[agent](title, task, rules or [], steps or [], call_id)
 
-    async def hand_task_with_rules(
-        agent: Annotated[Agent, Field(description=AGENT)],
-        title: Annotated[str, Field(description=TITLE)],
-        task: Annotated[str, Field(description=BRIEF)],
-        rules: Annotated[list[str] | None, Field(description=RULES)] = None,
-        *,
-        call_id: CallId,
-    ) -> str | ToolMessage:
-        return await starts[agent](title, task, rules or [], call_id)
-
-    handing = hand_task_with_rules if with_rules else hand_task
     description = start_task(MAX_TASKS, [(each.agent, each.about) for each in tasks])
-    return tool(START_TASK, description=description)(handing)
+    return tool(START_TASK, description=description)(hand_task)

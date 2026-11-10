@@ -28,7 +28,6 @@
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "remark-breaks": "^4.0.0",
-    "slot-text": "0.3.4",
     "sonner": "^2.0.8",
     "streamdown": "^2.7.1",
     "tailwindcss": "^4.3.3",

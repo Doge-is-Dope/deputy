@@ -15,7 +15,7 @@ from typing import Protocol
 
 from computer_use.files import FileStore, run_key
 
-FORMAT = 6
+FORMAT = 7
 # The tag of the main agent's events; a subagent's are untagged.
 MAIN = "main"
 # The user when nobody signed in (auth.LOCAL).

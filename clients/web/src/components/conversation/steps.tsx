@@ -22,9 +22,11 @@ import { useT } from "@/lib/i18n"
 import type { Messages } from "@/locales/zh-Hant"
 import { stepFailed, stepTool, type Phase, type Step } from "@/lib/thread"
 import {
+  CheckCircleIcon,
   ChevronRightIcon,
   HandIcon,
   NoSignIcon,
+  QuestionIcon,
   SpinnerIcon,
   XCircleIcon,
 } from "@/components/icons"
@@ -266,6 +268,54 @@ export function PlainLine({
       </TraceLine>
       {after}
     </div>
+  )
+}
+
+/**
+ * A line of the plan's among the actions: what the agent said with it, then a step it finished, by the plan's name for
+ * it, or its question to the main agent, waiting, and once answered the answer under it.
+ */
+export function PlanLine({ step, waiting }: { step: Step; waiting: boolean }) {
+  const { args } = stepTool(step)
+  const answer = step.action?.answer
+  return (
+    <>
+      {step.thought && (
+        <Markdown
+          text={step.thought}
+          className="arrive-line pt-2 pb-1 text-sm leading-6 first:pt-0"
+        />
+      )}
+      {step.finished ? (
+        <PlainLine icon={<CheckCircleIcon />} className="text-foreground">
+          {step.finished.join("、")}
+        </PlainLine>
+      ) : (
+        <PlainLine
+          icon={
+            <span className="swap">
+              <SpinnerIcon
+                className="size-4"
+                data-hidden={waiting ? undefined : ""}
+              />
+              <QuestionIcon
+                className="size-4"
+                data-hidden={waiting ? "" : undefined}
+              />
+            </span>
+          }
+          className="text-foreground"
+        >
+          {String(args.question ?? "")}
+        </PlainLine>
+      )}
+      {!step.finished && answer && (
+        <Markdown
+          text={answer}
+          className="ml-6 arrive-line pb-1 text-sm leading-6 text-muted-foreground"
+        />
+      )}
+    </>
   )
 }
 

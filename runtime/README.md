@@ -21,7 +21,9 @@ cp .env.example .env   # set OPENAI_API_KEY, RDP_HOST, RDP_USER, RDP_PASSWORD, M
 docker compose up -d --build
 ```
 
-Compose starts the runtime at <http://localhost:8000>, the code runner and MongoDB. Screenshots are kept in `data/`; deleting a conversation removes its records for good.
+Compose starts the web page at <http://localhost:8080>, the runtime's API at <http://localhost:8000>, the code runner and MongoDB. Screenshots are kept in `data/`; deleting a conversation removes its records for good.
+
+Everything listens on 127.0.0.1. To open the page from other machines, set `CU_BIND`, `CU_TURN_URL` and `CU_WEB_URL` in `.env` with `CU_AUTH=token`; the API stays on this machine and other machines reach it through the page's `/api`. A sign-in proxy (`CU_AUTH=proxy`) must front the runtime directly, since behind the web service every request comes from it.
 
 The runtime trusts the PC's RDP certificate on first use. After a legitimate certificate change, run `docker compose down` and `docker volume rm computer-use_rdp-certs`.
 
@@ -100,7 +102,7 @@ Routes are in [server.py](src/computer_use/server.py). To run the API outside th
 - **Desktop:** one desktop task at a time across all servers (`RunLock`). `"computer": true` or `@Computer` takes the desktop at once, or returns 409.
 - **Concurrency:** conversations run in parallel; a message sent while a session works joins it.
 - **Stopping:** `POST /api/runs/{id}/stop` stops one turn or task; `POST /api/conversations/{thread}/stop` stops the whole session.
-- **Live view:** WebRTC through coturn (`CU_TURN_URL`, TURN over TCP at `127.0.0.1:3478` by default), with a password made at startup.
+- **Live view:** WebRTC through coturn (`CU_TURN_URL`, TURN over TCP on port 3478, `localhost` by default), with a password made at startup.
 - **Tracing:** set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` in `.env`, then rebuild. Screenshots are left out of traces.
 
 ## Limitations

@@ -17,27 +17,27 @@ computer-use/
 │   └── cli/                  # Command line
 ├── eval/                     # Windows evaluation tasks and reports
 ├── diagrams/                 # Architecture diagrams
-└── .github/workflows/        # CI checks
+└── .github/workflows/        # CI checks and image builds
 ```
 
 ## Requirements
 
 - Docker Compose, an OpenAI API key and a Windows PC with Remote Desktop ([details](runtime/README.md#requirements))
-- Node.js 24, Bun 1.4.4 and uv for the web UI and the CLI
+- For development: Node.js 24, Bun 1.4.4 and uv
 
 ## Quick start
 
-Configure and start the runtime as described in [runtime setup](runtime/README.md#setup).
-
-In a new terminal at the repository root, start the web UI:
+Download `deploy.tar.gz` from the [latest release](../../releases/latest), unpack it, and start the stack:
 
 ```bash
-cd clients/web
-bun install --frozen-lockfile
-bun run dev
+tar -xzf deploy.tar.gz && cd deputy
+cp .env.example .env   # set OPENAI_API_KEY, RDP_HOST, RDP_USER, RDP_PASSWORD, MONGO_ROOT_PASSWORD, MONGO_RUNTIME_PASSWORD
+docker compose up -d
 ```
 
-Open <http://localhost:5173> and send a task. Or send it from a terminal with the [CLI](clients/cli/README.md):
+It pulls that version's images; no build or source is needed. To upgrade, unpack the next release's bundle over it and run `docker compose up -d` again. From a clone, build the same stack instead as described in [runtime setup](runtime/README.md#setup).
+
+Open <http://localhost:8080> and send a task. Or send it from a terminal with the [CLI](clients/cli/README.md):
 
 ```bash
 uv run --project clients/cli computer-use run "<goal>"

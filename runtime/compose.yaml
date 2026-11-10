@@ -1,4 +1,4 @@
-# RDP/runtime, isolated code runner and the database. Configuration: .env (see .env.example).
+# RDP/runtime, the web page, isolated code runner and the database. Configuration: .env (see .env.example).
 name: computer-use
 
 services:
@@ -17,7 +17,7 @@ services:
       - RDP_DOMAIN
       # Runs, projects and memories go to the mongo service (files under data/ are for running outside compose).
       - CU_DATABASE_URL=mongodb://runtime:${MONGO_RUNTIME_PASSWORD}@mongo/computer_use?replicaSet=rs0
-      - CU_AUTH=${CU_AUTH:-none}  # said outright: none is safe only because the ports are on 127.0.0.1
+      - CU_AUTH=${CU_AUTH:-none}  # said outright: none is safe only while CU_BIND is 127.0.0.1
       - CU_AUTH_TOKEN
       - CU_AUTH_HEADER
       - CU_AUTH_PROXIES
@@ -32,18 +32,28 @@ services:
       - LANGSMITH_API_KEY
       - LANGSMITH_PROJECT=${LANGSMITH_PROJECT:-computer-use}
       - CU_DATA_DIR=/app/data
-      - CU_TURN_URL=turn:localhost:3478?transport=tcp  # as the browser on the host sees it
+      - CU_TURN_URL=${CU_TURN_URL:-turn:localhost:3478?transport=tcp}  # as the browser sees it
+      - CU_WEB_URL=${CU_WEB_URL:-http://localhost:8080}  # the web service's page, as the browser sees it
       - CU_CODE_RUNNER_URL=unix:///run/code-runner/runner.sock
     ports:
-      - "127.0.0.1:8000:8000"  # HTTP API for the web page and the CLI
+      - "127.0.0.1:8000:8000"  # HTTP API for the CLI and the web dev server
       - "127.0.0.1:8001:8001"  # the eval's server, for the version it tests (eval/README.md)
-      - "127.0.0.1:3478:3478"  # TURN over TCP: the live view's WebRTC media
+      - "${CU_BIND:-127.0.0.1}:3478:3478"  # TURN over TCP: the live view's WebRTC media
     volumes:
       - ./data:/app/data  # run logs and screenshots, readable from the Mac
       - code-runner:/run/code-runner  # the code runner's socket
       - rdp-certs:/root/.config/freerdp  # the Windows PC's certificate, trusted on first use, kept across rebuilds
     depends_on:
       mongo: {condition: service_healthy}
+
+  # The web page, with /api passed on to the runtime.
+  web:
+    build: ../clients/web
+    image: computer-use-web:local
+    restart: unless-stopped
+    ports:
+      - "${CU_BIND:-127.0.0.1}:8080:80"
+    depends_on: [runtime]
 
   # Isolated code runner: no network, runtime files or secrets.
   # The shared socket carries requests; working folders live in memory.

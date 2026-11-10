@@ -11,7 +11,7 @@
 4. Merge only when asked: `git fetch`, check that `origin/main` is an ancestor of the branch, then
    `git checkout main && git merge --ff-only <branch> && git push origin main`. If it cannot fast-forward, stop and
    ask before rebasing.
-5. The container runs a copy of main and never follows edits. After a merge that touches `runtime/` or `code-runner/`,
+5. The container runs a copy of main and never follows edits. After a merge that touches `runtime/`, `code-runner/` or `clients/web/`,
    with the user's agreement:
    `uv run --project clients/cli computer-use status --idle && (cd runtime && docker compose up -d --build)`.
    If it is busy, say so and leave the rebuild for later.

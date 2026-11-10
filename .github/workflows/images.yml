@@ -1,0 +1,63 @@
+name: images
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.image.name }} (${{ matrix.arch.name }})
+    runs-on: ${{ matrix.arch.runner }}
+    timeout-minutes: 30
+    permissions: {contents: read, packages: write}
+    strategy:
+      matrix:
+        arch:
+          - {name: amd64, runner: ubuntu-24.04}
+          - {name: arm64, runner: ubuntu-24.04-arm}
+        image:
+          - {name: runtime, context: runtime}
+          - {name: code-runner, context: code-runner}
+          - {name: web, context: clients/web}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      # Each machine builds its own architecture; the bundle job joins the two under one tag.
+      - run: |
+          image="ghcr.io/${GITHUB_REPOSITORY,,}/${{ matrix.image.name }}:$GITHUB_REF_NAME-${{ matrix.arch.name }}"
+          docker build --provenance=false \
+            --label "org.opencontainers.image.source=$GITHUB_SERVER_URL/$GITHUB_REPOSITORY" \
+            -t "$image" "${{ matrix.image.context }}"
+          docker push "$image"
+
+  bundle:
+    name: manifests and deploy bundle
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions: {contents: write, packages: write}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: echo "${{ github.token }}" | docker login ghcr.io -u "${{ github.actor }}" --password-stdin
+      - run: |
+          for name in runtime code-runner web; do
+            image="ghcr.io/${GITHUB_REPOSITORY,,}/$name:$GITHUB_REF_NAME"
+            docker buildx imagetools create -t "$image" "$image-amd64" "$image-arm64"
+          done
+      # The compose file with this version's images in place of local builds, and the files it mounts.
+      - working-directory: runtime
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          export images="ghcr.io/${GITHUB_REPOSITORY,,}"
+          yq -i '
+            del(.services[].build) |
+            .services.runtime.image = strenv(images) + "/runtime:" + strenv(GITHUB_REF_NAME) |
+            .services["code-runner"].image = strenv(images) + "/code-runner:" + strenv(GITHUB_REF_NAME) |
+            .services.web.image = strenv(images) + "/web:" + strenv(GITHUB_REF_NAME)' compose.yaml
+          MONGO_ROOT_PASSWORD=x MONGO_RUNTIME_PASSWORD=x docker compose config --quiet
+          tar -czf "$RUNNER_TEMP/deploy.tar.gz" --transform "s|^|${GITHUB_REPOSITORY#*/}/|" compose.yaml .env.example mongo
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/deploy.tar.gz" --verify-tag --generate-notes

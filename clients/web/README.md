@@ -53,4 +53,6 @@ bun run build
 
 `bun run build` checks types and writes `dist/`. `bun run preview` serves it with the same `/api` proxy; the runtime does not serve the front end.
 
+The image (`Dockerfile`, `Caddyfile`) builds `dist/` and serves it with `/api` passed on to the runtime; compose runs it on port 8080. Front-end work stays on the dev server at 5173.
+
 KaTeX is overridden to 0.19.1 until the math plugins accept a patched version. Shared UI state variants live in `src/components/ui/variants.css`, so styling does not need the shadcn CLI.

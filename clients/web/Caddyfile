@@ -1,0 +1,22 @@
+{
+	admin off
+	auto_https off
+}
+
+:80 {
+	# No other site may show the page in a frame (vite.config.ts sets the same for the dev server).
+	header Content-Security-Policy "frame-ancestors 'none'"
+
+	handle /api/* {
+		# The Host header passes through unchanged, as the runtime's sign-in check expects; run events are sent on
+		# as they arrive.
+		reverse_proxy runtime:8000 {
+			flush_interval -1
+		}
+	}
+	handle {
+		root * /srv
+		encode zstd gzip
+		file_server
+	}
+}

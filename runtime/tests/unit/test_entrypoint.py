@@ -27,7 +27,12 @@ def launch(tmp_path):
     executable("hostname", "echo 127.0.0.1\n")
     for name in ("turnserver", "Xvfb", "xdotool", "python", "rm"):
         executable(name, "exit 0\n")
-    executable("xfreerdp3", 'printf "%s\\n" "$@" > "$CAPTURE/rdp.args"\nexec sleep 30\n')
+    executable("xfreerdp3", '''
+printf "%s\\n" "$@" > "$CAPTURE/rdp.args"
+echo attempt >> "$CAPTURE/attempts"
+[ -z "${RDP_EXIT:-}" ] || exit "$RDP_EXIT"
+exec sleep 30
+''')
     executable("computer-use-runtime", '''
 test -n "$CU_TURN_PASSWORD"
 printf "%s\\n" "$@" > "$CAPTURE/api.args"
@@ -35,6 +40,9 @@ echo "$$" > "$CAPTURE/api.pid"
 if [ "${EXPECT_RDP:-}" = 1 ]; then
     until [ -s "$CAPTURE/rdp.args" ]; do sleep 0.01; done
     printf "%s\\n" "$DISPLAY" "$RDP_KEYBOARD_PIPE" > "$CAPTURE/display"
+fi
+if [ -n "${EXPECT_LOG:-}" ]; then
+    until grep -q "$EXPECT_LOG" "$CAPTURE/output"; do sleep 0.01; done
 fi
 exit 7
 ''')
@@ -80,3 +88,19 @@ def test_rdp_launcher_prepares_the_shared_session_then_execs_the_common_entrypoi
     args = (captured / "rdp.args").read_text().splitlines()
     assert "/size:1440x900" in args and "/d:test-domain" in args and "/cert:tofu" in args
     assert f"/kbd:layout:0x00000409,lang:0x0409,pipe:{captured / 'keyboard'},unicode:on" in args
+
+
+@pytest.mark.parametrize(("exit_code", "line", "attempts"), [
+    (134, "RDP sign-in failed (xfreerdp exit 134); not retrying", 1),  # wrong user or password
+    (141, "RDP session ended; reconnecting in 5s", None),  # connection refused: keeps trying
+])
+def test_rdp_launcher_stops_only_when_windows_refuses_the_sign_in(launch, exit_code, line, attempts):
+    run, captured = launch
+    code, _, output = run("rdp-entrypoint.sh", RDP_HOST="test-host", RDP_USER="test-user", RDP_PASSWORD="wrong",
+                          RDP_KEYBOARD_PIPE=str(captured / "keyboard"), RDP_EXIT=str(exit_code), EXPECT_LOG=line)
+    assert code == 7 and line in output
+    if attempts:
+        assert (captured / "attempts").read_text().count("attempt") == attempts
+        assert (captured / "rdp-signin-failed").read_text().strip() == str(exit_code)
+    else:
+        assert not (captured / "rdp-signin-failed").exists()

@@ -35,10 +35,21 @@ rdp_args=(
 )
 rdp_args+=(/kbd:"layout:0x00000409,lang:0x0409,pipe:$RDP_KEYBOARD_PIPE,unicode:on")
 [[ -n "${RDP_DOMAIN:-}" ]] && rdp_args+=(/d:"$RDP_DOMAIN")
+# Beside the keyboard pipe; computers/rdp.py reports it as the desktop's status.
+signin_failed="$(dirname "$RDP_KEYBOARD_PIPE")/rdp-signin-failed"
+rm -f "$signin_failed"
 while true; do
   # FreeRDP creates the keyboard pipe and fails if it exists, as after a kept /tmp or a killed xfreerdp.
   rm -f "$RDP_KEYBOARD_PIPE"
-  xfreerdp3 "${rdp_args[@]}" || true
+  code=0
+  xfreerdp3 "${rdp_args[@]}" || code=$?
+  # Windows refused the sign-in (xfreerdp's exit codes for credentials that do not work, a locked, disabled or
+  # expired account): every retry is another failed sign-in, and enough of them lock the account.
+  case $code in 134 | 135 | 151 | 153 | 154 | 155 | 156 | 157 | 159)
+    echo "RDP sign-in failed (xfreerdp exit $code); not retrying: check RDP_USER and RDP_PASSWORD" >&2
+    echo "$code" >"$signin_failed"
+    break ;;
+  esac
   echo "RDP session ended; reconnecting in 5s" >&2
   sleep 5
 done &

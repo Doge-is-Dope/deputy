@@ -25,6 +25,8 @@ Compose starts the web page at <http://localhost:8080>, the runtime's API at <ht
 
 Everything listens on 127.0.0.1. To open the page from other machines, set `CU_BIND`, `CU_TURN_URL` and `CU_WEB_URL` in `.env` with `CU_AUTH=token`; the API stays on this machine and other machines reach it through the page's `/api`. A sign-in proxy (`CU_AUTH=proxy`) must front the runtime directly, since behind the web service every request comes from it.
 
+The runtime keeps one RDP session open and reconnects every 5 seconds when it drops or the PC is not up yet. When Windows refuses the sign-in (wrong `RDP_USER` or `RDP_PASSWORD`, a locked or disabled account) it stops after that one attempt, so retries cannot lock the account, and the desktop status says so. Fix `.env`, then run `docker compose up -d runtime` to try again.
+
 The runtime trusts the PC's RDP certificate on first use. After a legitimate certificate change, run `docker compose down` and `docker volume rm computer-use_rdp-certs`.
 
 ## Layout

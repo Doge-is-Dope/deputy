@@ -314,3 +314,10 @@ async def test_screen_watcher_removes_its_reader_and_closes_partial_initializati
             os.fstat(reader)
     finally:
         os.close(writer)
+
+
+async def test_status_says_the_sign_in_failed_once_the_launcher_stopped_retrying(tmp_path):
+    (tmp_path / "rdp-signin-failed").write_text("134\n")
+    status = await RdpComputer(":1", tmp_path / "rdp-keyboard").status()
+    assert not status.connected
+    assert "SIGN-IN FAILED (xfreerdp exit 134)" in status.detail and "RDP_PASSWORD" in status.detail

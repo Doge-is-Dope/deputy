@@ -30,6 +30,7 @@ def launch(tmp_path):
     executable("xfreerdp3", '''
 printf "%s\\n" "$@" > "$CAPTURE/rdp.args"
 echo attempt >> "$CAPTURE/attempts"
+[ -z "${RDP_ERROR:-}" ] || echo "[ERROR][com.freerdp.core] - [nla_recv_pdu]: $RDP_ERROR" >&2
 [ -z "${RDP_EXIT:-}" ] || exit "$RDP_EXIT"
 exec sleep 30
 ''')
@@ -90,17 +91,20 @@ def test_rdp_launcher_prepares_the_shared_session_then_execs_the_common_entrypoi
     assert f"/kbd:layout:0x00000409,lang:0x0409,pipe:{captured / 'keyboard'},unicode:on" in args
 
 
-@pytest.mark.parametrize(("exit_code", "line", "attempts"), [
-    (134, "RDP sign-in failed (xfreerdp exit 134); not retrying", 1),  # wrong user or password
-    (141, "RDP session ended; reconnecting in 5s", None),  # connection refused: keeps trying
+@pytest.mark.parametrize(("exit_code", "error", "line", "attempts"), [
+    # Wrong user or password.
+    (134, "ERRCONNECT_LOGON_FAILURE [0x00020014]", "RDP sign-in failed (ERRCONNECT_LOGON_FAILURE)", 1),
+    (134, "", "RDP session ended; reconnecting in 5s", None),  # an abort exits 134 too, without the error
+    (141, "ERRCONNECT_CONNECT_FAILED [0x00020006]", "RDP session ended; reconnecting in 5s", None),  # refused
 ])
-def test_rdp_launcher_stops_only_when_windows_refuses_the_sign_in(launch, exit_code, line, attempts):
+def test_rdp_launcher_stops_only_when_windows_refuses_the_sign_in(launch, exit_code, error, line, attempts):
     run, captured = launch
     code, _, output = run("rdp-entrypoint.sh", RDP_HOST="test-host", RDP_USER="test-user", RDP_PASSWORD="wrong",
-                          RDP_KEYBOARD_PIPE=str(captured / "keyboard"), RDP_EXIT=str(exit_code), EXPECT_LOG=line)
-    assert code == 7 and line in output
+                          RDP_KEYBOARD_PIPE=str(captured / "keyboard"), RDP_EXIT=str(exit_code), RDP_ERROR=error,
+                          EXPECT_LOG=line)
+    assert code == 7 and line in output and error in output  # FreeRDP's own lines stay in the log
     if attempts:
         assert (captured / "attempts").read_text().count("attempt") == attempts
-        assert (captured / "rdp-signin-failed").read_text().strip() == str(exit_code)
+        assert (captured / "rdp-signin-failed").read_text().strip() == "ERRCONNECT_LOGON_FAILURE"
     else:
         assert not (captured / "rdp-signin-failed").exists()

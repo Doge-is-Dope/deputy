@@ -35,21 +35,21 @@ rdp_args=(
 )
 rdp_args+=(/kbd:"layout:0x00000409,lang:0x0409,pipe:$RDP_KEYBOARD_PIPE,unicode:on")
 [[ -n "${RDP_DOMAIN:-}" ]] && rdp_args+=(/d:"$RDP_DOMAIN")
-# Beside the keyboard pipe; computers/rdp.py reports it as the desktop's status.
+# Beside the keyboard pipe; computers/rdp.py reports the first as the desktop's status.
 signin_failed="$(dirname "$RDP_KEYBOARD_PIPE")/rdp-signin-failed"
+rdp_log="$(dirname "$RDP_KEYBOARD_PIPE")/rdp-attempt.log"
 rm -f "$signin_failed"
 while true; do
   # FreeRDP creates the keyboard pipe and fails if it exists, as after a kept /tmp or a killed xfreerdp.
   rm -f "$RDP_KEYBOARD_PIPE"
-  code=0
-  xfreerdp3 "${rdp_args[@]}" || code=$?
-  # Windows refused the sign-in (xfreerdp's exit codes for credentials that do not work, a locked, disabled or
-  # expired account): every retry is another failed sign-in, and enough of them lock the account.
-  case $code in 134 | 135 | 151 | 153 | 154 | 155 | 156 | 157 | 159)
-    echo "RDP sign-in failed (xfreerdp exit $code); not retrying: check RDP_USER and RDP_PASSWORD" >&2
-    echo "$code" >"$signin_failed"
-    break ;;
-  esac
+  xfreerdp3 "${rdp_args[@]}" 2>&1 | tee "$rdp_log" >&2 || true
+  # Windows refused the sign-in: every retry is another failed sign-in, and enough of them lock the account. The
+  # log names the refusal; the exit code does not tell it from a crash (134 is also an abort).
+  if error=$(grep -oEm1 "ERRCONNECT_(LOGON_FAILURE|WRONG_PASSWORD|ACCOUNT_(LOCKED_OUT|DISABLED))" "$rdp_log"); then
+    echo "RDP sign-in failed ($error); not retrying: check RDP_USER and RDP_PASSWORD" >&2
+    echo "$error" >"$signin_failed"
+    break
+  fi
   echo "RDP session ended; reconnecting in 5s" >&2
   sleep 5
 done &

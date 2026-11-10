@@ -205,11 +205,11 @@ class RdpComputer:
             raise ComputerError(f"{args[0]} failed: {detail}")
 
     async def status(self) -> Status:
-        # rdp-entrypoint.sh stops reconnecting after a refused sign-in and leaves xfreerdp's exit code here.
+        # rdp-entrypoint.sh stops reconnecting after a refused sign-in and leaves FreeRDP's error here.
         with contextlib.suppress(OSError):
-            code = self.keyboard_pipe.with_name("rdp-signin-failed").read_text().strip()
-            return Status(False, f"RDP session: SIGN-IN FAILED (xfreerdp exit {code}), not retrying: check RDP_USER "
-                          "and RDP_PASSWORD, then run `docker compose up -d runtime`")
+            error = self.keyboard_pipe.with_name("rdp-signin-failed").read_text().strip()
+            return Status(False, f"RDP session: SIGN-IN FAILED ({error}), not retrying: check RDP_USER and "
+                          "RDP_PASSWORD, then run `docker compose up -d runtime`")
         # xfreerdp maps its window (WM_CLASS set by the entrypoint) only once the session is up.
         proc = await asyncio.create_subprocess_exec(
             "xdotool", "search", "--onlyvisible", "--class", "rdp-session",

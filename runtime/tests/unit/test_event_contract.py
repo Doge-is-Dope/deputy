@@ -5,6 +5,9 @@ import json
 from pathlib import Path
 from typing import get_args
 
+from langchain_core.messages import AIMessage, HumanMessage
+
+from computer_use.tools.common import MEDIA_TYPES
 from computer_use.tools.desktop import desktop_tools, reply
 from computer_use.storage import FORMAT, TASK
 from computer_use.computers import Frame
@@ -66,10 +69,30 @@ async def written_as_in(settings, log, events: list[dict]) -> None:
             for field in ("version", "steps"):
                 assert written[field] == event[field], field
         elif event["type"] == "end":
-            log.end(event["stop_reason"], event["summary"], event["computer"])
+            log.end(event["stop_reason"], event["summary"], agent_stop_reason=event.get("agent_stop_reason"))
             written = read_events(run_dir(settings, log.run))[-1]
-            for field in ("stop_reason", "summary", "computer"):
+            for field in ("stop_reason", "summary", "agent_stop_reason"):
+                assert written.get(field) == event.get(field), field
+        elif event["type"] == "model":
+            calls = [{**call, "id": f"call-{n}"} for n, call in enumerate(event["tool_calls"])]
+            await log.model(AIMessage(content=event["text"], tool_calls=calls), event.get("agent"))
+            written = read_events(run_dir(settings, log.run))[-1]
+            assert written.get("agent") == event.get("agent")
+            for field in ("text", "tool_calls"):
                 assert written[field] == event[field], field
+        elif event["type"] == "input":  # the user's message, with what they attached
+            types = {extension: media_type for media_type, extension in MEDIA_TYPES.items()}
+            attached = [
+                {"type": "image" if each["file"].endswith(".png") else "file", "base64": "AAAA",
+                 "mime_type": types[each["file"].rsplit(".", 1)[1]], "filename": each["name"]}
+                for each in event["attachments"]
+            ]
+            await log.input(HumanMessage(content=[{"type": "text", "text": "See these."}, *attached]), "message",
+                            event.get("agent"))
+            written = read_events(run_dir(settings, log.run))[-1]
+            assert (written.get("agent"), written["attachments"]) == (event.get("agent"), event["attachments"])
+        else:
+            raise AssertionError(f"no writer checked for {event['type']} events")
 
 
 def test_action_classification_covers_the_actual_tools_and_dispatch(executor):

@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
 import {
+  agentName,
+  describeAction,
   describeActions,
   effortName,
+  formatDollars,
   formatDuration,
   greeting,
   modelName,
@@ -23,6 +26,29 @@ describe("formatDuration", () => {
       "1h",
       "1h 1m",
     ])
+  })
+})
+
+describe("describeAction", () => {
+  it("leaves screen coordinates out", () => {
+    expect(
+      [
+        describeAction("left_click", { coordinate: [850, 250] }),
+        describeAction("double_click", {}),
+        describeAction("zoom", { region: [152, 236, 1096, 612] }),
+        describeAction("left_click_drag", {
+          start_coordinate: [1, 2],
+          coordinate: [3, 4],
+        }),
+        describeAction("mouse_move", { coordinate: [5, 6] }),
+      ].map((action) => action.label)
+    ).toEqual(["Click", "Double-click", "Zoom in", "Drag", "Move the pointer"])
+  })
+
+  it("marks where typed text goes on to a new line", () => {
+    expect(describeAction("type", { text: "a\nb\r\nc" }).label).toBe(
+      "Type “a ↵ b ↵ c”"
+    )
   })
 })
 
@@ -79,6 +105,21 @@ describe("names", () => {
   it("names a reasoning effort, or by its id", () => {
     expect(effortName("xhigh")).toBe("Extra High")
     expect(effortName("ultra")).toBe("ultra")
+  })
+
+  it("names an agent as the settings do, or by its own name", () => {
+    expect(agentName("main")).toBe("Main agent")
+    expect(agentName("computer")).toBe("Computer-use agent")
+    expect(agentName("review")).toBe("review")
+  })
+})
+
+describe("formatDollars", () => {
+  it("shows an amount too small to round to a hundredth of a cent as under one, and nothing as zero", () => {
+    expect(formatDollars(0.00003)).toBe("<$0.0001")
+    expect(formatDollars(0.00007)).toBe("$0.0001")
+    expect(formatDollars(0)).toBe("$0.0000")
+    expect(formatDollars(12.345)).toBe("$12.35")
   })
 })
 

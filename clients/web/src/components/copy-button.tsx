@@ -29,7 +29,8 @@ export function CopyButton({
             size="icon-xs"
             aria-label={label}
             disabled={disabled}
-            className="text-muted-foreground"
+            // Its neighbours under a message are 34px away.
+            className="touch-target text-muted-foreground [--touch-w:2.125rem]"
             onClick={() => copy(text)}
           />
         }

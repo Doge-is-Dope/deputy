@@ -3,6 +3,7 @@ erasing a prefix runs in a worker thread."""
 
 import asyncio
 import shutil
+import uuid
 from pathlib import Path, PurePosixPath
 
 
@@ -19,7 +20,13 @@ class LocalFileStore:
     async def put(self, key: str, data: bytes) -> None:
         path = self._path(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        # Written beside it and renamed over it, so a write cut short leaves no partial file under the key.
+        part = path.with_name(f".{path.name}.{uuid.uuid4().hex}")
+        try:
+            part.write_bytes(data)
+            part.replace(path)
+        finally:
+            part.unlink(missing_ok=True)
 
     async def get(self, key: str) -> bytes:
         try:

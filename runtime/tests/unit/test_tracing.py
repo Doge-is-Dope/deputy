@@ -4,12 +4,12 @@ from unittest.mock import MagicMock
 import langsmith
 from langchain.agents.middleware.types import ModelResponse
 from langchain_core.language_models.fake_chat_models import GenericFakeChatModel
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage, convert_to_openai_messages
 from langchain_core.tools import tool
 from langchain_core.tracers import LangChainTracer
 
 from computer_use.tools.common import image_block
-from computer_use.agent.tracing import SCREENSHOT_NOT_TRACED, for_trace
+from computer_use.agent.tracing import MEDIA_NOT_TRACED, for_trace
 from conftest import fixture_png
 
 SCREENS = ("FIRST", "NEWEST")
@@ -38,9 +38,19 @@ def test_graph_state_is_traced_with_its_newest_message_only():
 
     note, newest = traced["messages"]
     assert note == "[2 earlier messages not traced]"
-    assert newest.content == [{"type": "text", "text": "Pressed ctrl+s."}, SCREENSHOT_NOT_TRACED]
+    assert newest.content == [{"type": "text", "text": "Pressed ctrl+s."}, MEDIA_NOT_TRACED]
     assert traced["goals"] == ["save"]
     assert screenshots_in(messages) == list(SCREENS) and ENCRYPTED in str(messages)  # the agent's own keep theirs
+
+
+def test_attached_files_are_not_traced_in_either_form():
+    pdf = {"type": "file", "base64": "JVBERi0=", "mime_type": "application/pdf", "filename": "quote.pdf"}
+    message = HumanMessage(content=[{"type": "text", "text": "The total?"}, pdf])
+
+    assert for_trace(message).content == [{"type": "text", "text": "The total?"}, MEDIA_NOT_TRACED]
+    assert for_trace(convert_to_openai_messages([message])[0]["content"]) == [
+        {"type": "text", "text": "The total?"}, MEDIA_NOT_TRACED,
+    ]
 
 
 def test_node_traces_tools_by_name():

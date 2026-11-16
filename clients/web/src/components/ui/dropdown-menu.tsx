@@ -2,7 +2,7 @@ import type { ComponentProps } from "react"
 import { Menu as MenuPrimitive } from "@base-ui/react/menu"
 import { cn } from "cn"
 
-import { CheckIcon, ChevronRightIcon } from "@/components/icons"
+import { ChevronRightIcon } from "@/components/icons"
 
 const DropdownMenu = MenuPrimitive.Root
 
@@ -35,7 +35,7 @@ function DropdownMenuContent({
         <MenuPrimitive.Popup
           data-slot="dropdown-menu-content"
           className={cn(
-            "max-h-(--available-height) min-w-36 origin-(--transform-origin) overflow-y-auto rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-150 ease-(--ease-out) outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 motion-reduce:data-open:zoom-in-100 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:data-closed:zoom-out-100",
+            "max-h-(--available-height) min-w-36 origin-(--transform-origin) overflow-y-auto rounded-popup bg-popover p-popup text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-150 ease-(--ease-out) outline-none data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 motion-reduce:data-open:zoom-in-100 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:data-closed:zoom-out-100",
             className
           )}
           {...props}
@@ -61,37 +61,13 @@ function DropdownMenuItem({
       data-slot="dropdown-menu-item"
       data-variant={variant}
       className={cn(
-        "flex cursor-default items-center gap-2 rounded-md px-2 py-1.5 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
+        "flex cursor-default items-center gap-2 rounded-row px-2 py-1.5 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50 [&_svg]:size-4 [&_svg]:shrink-0",
         variant === "destructive" &&
           "text-destructive data-highlighted:bg-destructive/10 data-highlighted:text-destructive",
         className
       )}
       {...props}
     />
-  )
-}
-
-const DropdownMenuRadioGroup = MenuPrimitive.RadioGroup
-
-/** One of a few values, the one in effect checked at its end, as the select's items are (select.tsx). */
-function DropdownMenuRadioItem({
-  className,
-  children,
-  ...props
-}: MenuPrimitive.RadioItem.Props) {
-  return (
-    <MenuPrimitive.RadioItem
-      className={cn(
-        "relative flex cursor-default items-center rounded-md py-1.5 pr-8 pl-2 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50",
-        className
-      )}
-      {...props}
-    >
-      {children}
-      <MenuPrimitive.RadioItemIndicator className="absolute right-2 flex size-4 items-center justify-center">
-        <CheckIcon className="size-4" />
-      </MenuPrimitive.RadioItemIndicator>
-    </MenuPrimitive.RadioItem>
   )
 }
 
@@ -107,7 +83,7 @@ function DropdownMenuSubTrigger({
     <MenuPrimitive.SubmenuTrigger
       data-slot="dropdown-menu-sub-trigger"
       className={cn(
-        "flex cursor-default items-center gap-2 rounded-md py-1.5 pr-2 pl-2 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-popup-open:bg-accent data-popup-open:text-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0",
+        "flex cursor-default items-center gap-2 rounded-row py-1.5 pr-2 pl-2 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-popup-open:bg-accent data-popup-open:text-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0",
         className
       )}
       {...props}
@@ -135,8 +111,6 @@ export {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuSub,
   DropdownMenuSubTrigger,

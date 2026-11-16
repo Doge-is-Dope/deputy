@@ -1,7 +1,6 @@
-// The themes to choose from, each
-// as the three colors it takes from its editor theme: the background (surface), the text (ink) and the accent, for
-// the modes it has. Every other color is worked out from these three (index.css). The default is the first;
-// index.css and index.html start from its colors too.
+// Each theme as the three colors it takes from its editor theme: the background (surface), the text (ink) and the
+// accent, for the modes it has. Every other color is worked out from these three (index.css). The default is the
+// first; index.css starts from its colors too.
 
 export type Variant = "light" | "dark"
 

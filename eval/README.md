@@ -68,7 +68,7 @@ Before each task, `run` checks that the desktop is connected, available and matc
 
 Close unrelated windows yourself before testing. If only the wallpaper changed, update the baseline with `eval/ev reset --accept`.
 
-Steps the agent asks approval for are approved automatically; add `--ask` to answer them yourself.
+Steps the agent asks approval for are approved automatically, and a run whose agent asks the user a question ends there, its question in the output; add `--ask` to answer both yourself. A run still going after 30 minutes is stopped.
 
 Results go to `results/<version>/<NN-task>/<attempt>/` (`result.json`, `start.png`, the run's log and screenshots
 as `computer-use export` writes them). See [versions and prompts](#versions-and-prompts) for how a version is named.
@@ -98,7 +98,7 @@ The report's thumbnails link to the screenshots next to it, so keep it in `resul
 
 `result.json` records requested agents in `settings.requested_agents` and effective models and efforts in `settings.agents`. The HTML report also uses the readable `model` field. Screenshot pruning settings (`settings.screenshots`, `keep`/`every`) are read from constants in the saved source without executing it. Missing constants are recorded as unknown; runtime defaults stay unchanged.
 
-The terminal report groups **all trials** by source, effective models and efforts, pruning settings, language, step limit and approval mode. Each group shows:
+The terminal report groups **all trials** by source, effective models and efforts, pruning settings, step limit and approval mode. Each group shows:
 
 - Pass/graded, ungraded and not-started counts, plus task endings.
 - Main/subagent calls (`M/S`) and agent cost across all started trials.
@@ -108,7 +108,7 @@ Infeasible tasks are graded separately. Use terminal groups for repeated A/B com
 
 Usage totals come from the exported end event, counted once per agent and model. Reasoning tokens are included in output; cache-read ratios are weighted by input tokens. Title costs are shown separately.
 
-Missing usage and interrupted calls stay unknown: `?` means unknown, and `0.01200+?1` means a known subtotal plus one unknown trial. Older records use available export metrics and mark missing settings as `legacy` or `unknown`. Generating a report never rewrites exports or results.
+Missing usage and interrupted calls stay unknown: `?` means unknown, and `0.01200+?1` means a known subtotal plus one unknown trial. Generating a report never rewrites exports or results.
 
 Reports read each result and trajectory once, then share compact summaries between the grading sheet and HTML. Statistics skip screenshot decoding and do not cache full conversations. Run offline regression checks in the runtime test environment:
 

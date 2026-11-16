@@ -37,7 +37,7 @@ export function MemoryPage({ onClose }: { onClose?: () => void }) {
             return (
               <label
                 key={mode}
-                className="flex min-h-14 cursor-pointer items-center gap-6 py-3"
+                className="flex min-h-14 cursor-pointer items-center gap-6 py-2.5"
               >
                 <span className="flex-1">
                   <span id={`${id}-${mode}`} className="block">
@@ -62,20 +62,20 @@ export function MemoryPage({ onClose }: { onClose?: () => void }) {
         </Card>
 
         {list === null ? (
-          <p className="px-1 text-sm text-muted-foreground">
+          <p className="px-5 text-sm text-muted-foreground">
             {failed ? t.settings.memoryLoadFailed : t.common.loading}
           </p>
         ) : rows.length === 0 ? (
-          <p className="px-1 text-sm text-muted-foreground">
+          <p className="px-5 text-sm text-muted-foreground">
             {t.settings.memoryEmpty}
           </p>
         ) : (
           <>
             <ResetMemory />
             <MemoryList
+              className="px-5"
               memories={rows}
               item={opened.item}
-              editing={opened.editing}
               onClose={onClose}
             />
           </>
@@ -102,7 +102,7 @@ function ResetMemory() {
     <>
       <Button
         variant="ghost"
-        className="-ml-[9px] self-start text-destructive hover:bg-destructive/10 hover:text-destructive"
+        className="ml-2 self-start text-destructive hover:bg-destructive/10 hover:text-destructive"
         onClick={() => setAsking(true)}
       >
         {t.settings.resetMemory}

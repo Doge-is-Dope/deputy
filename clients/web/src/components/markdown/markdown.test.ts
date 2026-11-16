@@ -2,24 +2,55 @@ import { createElement } from "react"
 import { renderToStaticMarkup } from "react-dom/server"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-beforeEach(() => vi.resetModules())
+// A reply's pictures open in the viewer, whose language is the page's: neither needs a page here.
+beforeEach(() => {
+  vi.resetModules()
+  vi.doMock("@/components/screenshot-viewer", () => ({
+    ScreenshotViewer: () => null,
+  }))
+  vi.doMock("@/lib/i18n", async () => {
+    const { en } = await import("@/locales/en")
+    return { t: () => en, useT: () => en, locale: () => "en" }
+  })
+})
 afterEach(() => {
   vi.doUnmock("./markdown-content")
   vi.doUnmock("./copy-button")
+  vi.doUnmock("@/components/screenshot-viewer")
+  vi.doUnmock("@/lib/i18n")
 })
 
 describe("deferred Markdown", () => {
+  it("shows a picture the coding agent made where it is linked, with the link to download it", async () => {
+    vi.doMock("@/components/copy-button", () => ({ CopyButton: () => null }))
+    const { Markdown } = await import("./markdown-content")
+    const html = renderToStaticMarkup(
+      createElement(Markdown, {
+        text: "[圖](sandbox:/workspace/abc123/out/chart.png) [表](sandbox:/workspace/abc123/logo.svg)",
+      })
+    )
+    expect(html).toContain(
+      'src="/api/conversations/abc123/files/out/chart.png"'
+    )
+    expect(html).toMatch(
+      /<a [^>]*href="\/api\/conversations\/abc123\/files\/out\/chart.png"[^>]*download="">圖<\/a>/
+    )
+    // Only the pictures a page shows safely; any other file is a link.
+    expect(html).not.toContain('src="/api/conversations/abc123/files/logo.svg"')
+  })
+
   it("downloads workspace links through the API while preserving ordinary links", async () => {
     vi.doMock("@/components/copy-button", () => ({ CopyButton: () => null }))
     const { Markdown } = await import("./markdown-content")
     const html = renderToStaticMarkup(
       createElement(Markdown, {
-        text: "[CSV](/workspace/abc123/reports/budget.csv) [網站](https://example.com/workspace/abc123/a.csv)",
+        text: "[CSV](/workspace/abc123/reports/budget.csv) [表](sandbox:/workspace/abc123/table.txt) [網站](https://example.com/workspace/abc123/a.csv)",
       })
     )
     expect(html).toContain(
       'href="/api/conversations/abc123/files/reports/budget.csv"'
     )
+    expect(html).toContain('href="/api/conversations/abc123/files/table.txt"')
     expect(html).toContain('download=""')
     expect(html).toContain('target="_self"')
     expect(html).toContain('href="https://example.com/workspace/abc123/a.csv"')

@@ -115,8 +115,8 @@ export function useConversations(changed: string | null, running: string[]) {
 }
 
 /**
- * Loads a conversation's runs, oldest first, as it opens and whenever `changed` does. Accepts a conversation ID or a
- * legacy run ID. `listed` means the request has settled, including failure. Runs are null until available.
+ * Loads a conversation's runs, oldest first, as it opens and whenever `changed` does. Accepts a conversation ID or any
+ * of its runs' IDs. `listed` means the request has settled, including failure. Runs are null until available.
  * Failed refreshes keep previously loaded runs.
  */
 export function useThreadRuns(opened: string | null, changed: string | null) {

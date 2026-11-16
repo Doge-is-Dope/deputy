@@ -44,7 +44,7 @@ export function CreateProjectDialog({
       finalFocus={finalFocus}
       className="sm:max-w-md"
     >
-      {/* A 38px field with a folder in its own cell at the start, divided from the name, a thin ring as it
+      {/* A 36px field with a folder in its own cell at the start, divided from the name, a thin ring as it
           focuses. The divider stands inside the field's border, and
           the folder in the middle of the space the borders leave (pl-px for the field's own on the left). */}
       <div className="relative">
@@ -61,7 +61,7 @@ export function CreateProjectDialog({
             if (isComposing(event.nativeEvent)) return
             if (event.key === "Enter") create()
           }}
-          className="h-9.5 pl-12 focus-visible:ring-0"
+          className="h-9 pl-12 focus-visible:ring-0"
         />
       </div>
     </ActionDialog>

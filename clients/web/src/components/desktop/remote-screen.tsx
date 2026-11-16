@@ -342,8 +342,8 @@ export function RemoteScreen({
       >
         <div ref={sway} className="relative origin-top-left">
           {!interactive && pointer !== null && <AgentCursorGlow />}
-          {/* The favicon's pointer at 0.8 its size, rounded the same way (a stroke of its own color), black with a 2 px
-              white edge and a soft glow; the black tip (3, 3) sits on the point. */}
+          {/* Rounded by a stroke of its own color, black with a 2 px white edge and a soft glow; the black tip (3, 3)
+              sits on the point. */}
           <svg
             width="24"
             height="24"

@@ -18,12 +18,12 @@ import {
   TraceLine,
   TraceTitle,
 } from "@/components/ui/trace"
+import { useDoingNow } from "@/hooks/use-doing-now"
 import { useTaskClock } from "@/hooks/use-task-clock"
 import { describeAction, formatDuration } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import {
   awaitingDesktop,
-  doingNow,
   isPlanLine,
   phasesOf,
   stepTool,
@@ -38,7 +38,6 @@ import {
   MonitorIcon,
   OfflineIcon,
   PauseCircleIcon,
-  SpinnerIcon,
   ToolIcon,
 } from "@/components/icons"
 import { Markdown } from "@/components/markdown/markdown"
@@ -57,7 +56,6 @@ const AGENT_ICONS: Record<string, ComponentType<SVGProps<SVGSVGElement>>> = {
   coding: CodeIcon,
 }
 
-// What an agent reported: in markdown as a reply is, without a mark.
 const REPORT = "arrive-line space-y-1.5 pt-1 text-sm leading-6"
 
 /** Collapsible delegated work with steps and results. Duration excludes user waits;
@@ -75,7 +73,6 @@ export function TaskGroup({
   onFull,
   onOpenShot,
   onOpenLive,
-  agent = false,
 }: {
   task: Task
   run: string
@@ -89,24 +86,23 @@ export function TaskGroup({
   onFull: (full: boolean) => void
   onOpenShot: (name: string) => void
   onOpenLive: () => void
-  agent?: boolean // one of the run's agents: its title, what it does now, for how long
 }) {
   const t = useT()
   const running = task.outcome === "running" && active
-  // The desktop is the user's: since when, by the status, which knows at once; or by the log.
   // The user's turns at the desktop in the task under way: of a run's tasks shown as one, the last one's, whose keys
   // alone are by their place (thread.ts mergeTasks).
   const controls = task.entries.filter(
     (entry) => entry.kind === "control" && entry.key.startsWith("control-")
   )
+  // The desktop is the user's: since when, by the status, which knows at once (`took`); or by the log (`logged`).
   const logged = awaitingDesktop(task)
   const { took, worked: elapsed } = useTaskClock(task, userSince, running, last)
+  const doingLabel = useDoingNow(task)
   const paused = running && (took !== null || logged)
   // Waiting for the user (a step to approve, the desktop to take or hand back) or for the desktop: not moving.
   const moving =
     running && !paused && !takingOver && !disconnected && approving === null
-  // What it waits for, which the summary says in place of working, folded or not; the last of it stays, so its words
-  // can leave as the others come.
+  // What it waits for, which its line says in place of what it does.
   const held =
     !running || moving
       ? null
@@ -117,8 +113,6 @@ export function TaskGroup({
           : takingOver
             ? t.run.work.waiting.takeover
             : t.run.work.waiting.approval
-  const [lastHeld, setLastHeld] = useState(held)
-  if (held !== null && held !== lastHeld) setLastHeld(held)
   const stopped =
     task.outcome === "stopped" || (!running && task.outcome === "running")
   const failed = task.outcome === "failed"
@@ -131,7 +125,7 @@ export function TaskGroup({
   const liveShot = shots.at(-1) ?? null
   const underWay = running ? stepUnderWay(task) : null
   const ended = !active
-  const doing = moving ? doingNow(task) : t.run.work.working
+  const doing = moving ? doingLabel : t.run.work.working
   // What an agent's line says after its title: what it does or waits for, while folded (opened, its steps say it);
   // once it ended, nothing, unless it fell short.
   const now = full
@@ -282,78 +276,28 @@ export function TaskGroup({
               status={failed ? "error" : undefined}
               className="min-h-7"
             >
-              {agent ? (
-                <>
-                  <TraceIcon>
-                    <AgentIcon
-                      className={cn(
-                        "size-4",
-                        !running && "text-muted-foreground"
-                      )}
-                    />
-                  </TraceIcon>
-                  <TraceTitle
-                    className={cn(
-                      "max-w-80 shrink-0",
-                      !running && "text-muted-foreground"
-                    )}
-                  >
-                    {task.title}
-                  </TraceTitle>
-                  {/* What it does now, or what came of it, its words swapping in place; then for how long. */}
-                  {/* Its own space before it, in place of the line's gap, so the box closes up once nothing is left. */}
-                  <span className="-ml-2 min-w-0 truncate text-muted-foreground">
-                    <SwapText
-                      text={now && `\u2002${now}`}
-                      className={cn(moving && "shimmer")}
-                    />
-                  </span>
-                  <TraceDescription>{formatDuration(elapsed)}</TraceDescription>
-                </>
-              ) : (
-                <>
-                  {/* Spinning while it works, what it works with while it waits; done, the words alone. */}
-                  {running && (
-                    <TraceIcon>
-                      <span className="swap">
-                        <SpinnerIcon
-                          className="size-4"
-                          data-hidden={moving ? undefined : ""}
-                        />
-                        <Kind
-                          className="size-4"
-                          data-hidden={moving ? "" : undefined}
-                        />
-                      </span>
-                    </TraceIcon>
-                  )}
-                  <TraceTitle className="swap">
-                    {/* Shimmering on its own: a shimmer on both would show the hidden words through it. */}
-                    <span
-                      data-hidden={running && !held ? undefined : "before"}
-                      className="truncate"
-                    >
-                      <SwapText
-                        text={doing}
-                        className={cn(moving && "shimmer")}
-                      />
-                    </span>
-                    <span
-                      data-hidden={held ? undefined : running ? "" : "before"}
-                    >
-                      {held ?? lastHeld}
-                    </span>
-                    <span data-hidden={running ? "" : undefined}>
-                      {failed
-                        ? t.run.work.failed
-                        : stopped
-                          ? t.run.work.stopped
-                          : t.run.work.worked}
-                    </span>
-                  </TraceTitle>
-                  <TraceDescription>{formatDuration(elapsed)}</TraceDescription>
-                </>
-              )}
+              <TraceIcon>
+                <AgentIcon
+                  className={cn("size-4", !running && "text-muted-foreground")}
+                />
+              </TraceIcon>
+              <TraceTitle
+                className={cn(
+                  "max-w-80 shrink-0",
+                  !running && "text-muted-foreground"
+                )}
+              >
+                {task.title}
+              </TraceTitle>
+              {/* What it does now, or what came of it, its words swapping in place; then for how long. */}
+              {/* Its own space before it, in place of the line's gap, so the box closes up once nothing is left. */}
+              <span className="-ml-2 min-w-0 truncate text-muted-foreground">
+                <SwapText
+                  text={now && `\u2002${now}`}
+                  className={cn(moving && "shimmer")}
+                />
+              </span>
+              <TraceDescription>{formatDuration(elapsed)}</TraceDescription>
             </TraceLine>
           </TraceCollapsibleTrigger>
           {running && !disconnected && liveShot && (
@@ -380,7 +324,7 @@ export function TaskGroup({
   )
 }
 
-// How long the old words take to leave (index.css swap-text), after which they are gone.
+// Old words are dropped once their 150ms leave (index.css swap-text) has run.
 const SWAP_MS = 200
 
 /** Words that change in place: the old ones leave upward as the new come up from below, the box easing to the new

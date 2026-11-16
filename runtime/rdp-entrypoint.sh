@@ -8,7 +8,7 @@ export RDP_KEYBOARD_PIPE="${RDP_KEYBOARD_PIPE:-/tmp/rdp-keyboard}"
 width="${RDP_SCREEN_WIDTH:-1280}"
 height="${RDP_SCREEN_HEIGHT:-800}"
 
-# Note: Xvfb only moves the pointer once a window is mapped; xfreerdp's window always is while connected.
+# Xvfb only moves the pointer once a window is mapped; xfreerdp's window always is while connected.
 # `docker compose restart` keeps /tmp, so clear the lock a previous Xvfb left behind.
 rm -f "/tmp/.X${DISPLAY#:}-lock" "/tmp/.X11-unix/X${DISPLAY#:}"
 # -noreset: Xvfb would otherwise reset the keymap below once its last client disconnects.

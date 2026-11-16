@@ -80,7 +80,7 @@ class Executor:
         self.unchanged = 0  # input actions in a row that left that screen as it was
         self.repeats = 0  # of those, the latest action and its repeats right before it
         self._last_unchanged: str | None = None  # that action, as JSON
-        self.approved = False  # the next action was approved on the screen it was decided from (execution.approvals)
+        self.approved = False  # the next action was approved on the screen it was decided from (middleware.approvals)
         self._actions: dict[str, Callable[..., Awaitable[ActionResult]]] = {
             "screenshot": self._screenshot,
             "zoom": self._zoom,
@@ -137,18 +137,22 @@ class Executor:
         finally:  # an approval covers the one action it was given for
             self.approved = False
 
-    async def _run(self, name: str, args: dict, *, in_batch: bool = False) -> ActionResult:
-        action = self._actions.get(name)
-        if action is None:
-            return ActionResult(False, f"Unknown action {name!r}")
+    async def held(self) -> ActionResult | None:
+        """Why the agent may not act now, as the result of what it tried; None if it may."""
         control = self.control.read()
         if blocked := self._control_blocked(control):
             return blocked
         if not (await self.computer.status()).connected:
             # Input would reach no desktop, and a screenshot would show none.
             return ActionResult(False, "Not executed: the desktop is disconnected.", reason="disconnected")
-        if held_back := await self._held_back(control):
-            return held_back
+        return await self._held_back(control)
+
+    async def _run(self, name: str, args: dict, *, in_batch: bool = False) -> ActionResult:
+        action = self._actions.get(name)
+        if action is None:
+            return ActionResult(False, f"Unknown action {name!r}")
+        if held := await self.held():
+            return held
         try:
             action_args = {**args, "no_change_seconds": None} if in_batch and name == "key" else args
             result = await action(**action_args)
@@ -204,12 +208,13 @@ class Executor:
 
     async def _send(
         self, send: Callable[[], Awaitable[None]], note: str, points: Sequence[Point] = (), expect_change: bool = True,
-        *, no_change_seconds: float | None = None, condition: str | None = None,
+        *, no_change_seconds: float | None = None, condition: str | None = None, judged_now: bool = False,
     ) -> ActionResult:
         """Send input if the screen still looks as the model saw it (around `points`, where a pointer action lands,
-        or anywhere for keys); return the screen once it is still."""
+        or anywhere for keys), or if `judged_now`, the condition was just found on the current screen; return the
+        screen once it is still."""
         seen, now = self._seen, await gray(self.computer)
-        if seen is not None and await self._stale(seen, now, points):
+        if seen is not None and not judged_now and await self._stale(seen, now, points):
             # The model takes seconds to decide; an app that finished loading meanwhile can put something else under
             # the click, or in front of the window keys would go to.
             self.clear_unchanged()
@@ -244,8 +249,7 @@ class Executor:
     def _control_blocked(self, control: ControlState) -> ActionResult | None:
         if control.allows_input("agent"):
             return None
-        message = "the user has control of the desktop." if control.ready else "desktop control is being synchronized."
-        return ActionResult(False, f"Not executed: {message}", reason="userControl")
+        return ActionResult(False, "Not executed: the user has control of the desktop.", reason="userControl")
 
     async def _held_back(self, control: ControlState) -> ActionResult | None:
         """Why no input may be sent now, with the screen to decide again from when there is one; None if it may."""
@@ -369,16 +373,19 @@ class Executor:
         key = '+'.join(combo)
         why = f"it reached {max_presses} presses"
         while pressed < max_presses:
+            first = result is None
             if result and result.judged is not None:
                 held = result.judged  # judged while the screen settled after the last press
             else:
-                shown = result.frame if result else self.shown
-                held = shown is not None and await self.judge.holds(shown.png, condition)
+                # Before the first press, judge the screen as it is now, not as the model saw it: text that printed
+                # on while the model decided is what the condition is for, as on every later press.
+                shown = await self.computer.screenshot() if first else result.frame
+                held = await self.judge.holds(shown.png, condition)
             if not held:
                 why = "the condition no longer held"
                 break
             press = partial(self.computer.hold, combo, PRESS_HOLD_SECONDS)
-            sent = await self._send(press, f"Held {key}.", condition=condition)
+            sent = await self._send(press, f"Held {key}.", condition=condition, judged_now=first)
             if not sent.ok and not (pressed and sent.reason == "screenChanged"):
                 return sent
             if not sent.ok:  # still moving after the last press, e.g. a scene's animation: wait for it, then judge

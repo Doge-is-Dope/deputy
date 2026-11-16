@@ -5,6 +5,7 @@ import importlib.util
 import json
 import re
 import sys
+import threading
 from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
@@ -25,10 +26,10 @@ def usage(input=100, cached=20, write=10, output=8, reasoning=3):
 def events(cost=None):
     tokens = usage()
     return [
-        {"type": "start", "time": 0, "goal": "Draw a box"},
+        {"type": "start", "kind": "turn", "time": 0, "goal": "Draw a box"},
         {"type": "model", "time": 1, "model": MODEL, "text": "Draw.", "tool_calls": [{"name": "left_click"}],
          "usage": tokens},
-        {"type": "end", "time": 10, "stop_reason": "replied", "computer": "replied", "summary": "Done.",
+        {"type": "end", "time": 10, "stop_reason": "replied", "summary": "Done.",
          "usage": tokens, "cost": cost,
          "agents": [{"agent": "computer", "model": MODEL, "usage": tokens, "cost": cost}]},
         {"type": "title", "time": 11, "model": MODEL, "cost": {"input": .001, "output": .002}},
@@ -71,7 +72,7 @@ def trial(evaluator, attempt=1, effort="medium", **changes):
     agents = {"main": {"model": MODEL, "effort": "medium"}, "computer": {"model": MODEL, "effort": effort}}
     return {
         "no": 3, "task": "paint-canvas", "attempt": attempt, "started": f"2026-10-27T12:{attempt:02d}:00",
-        "lang": "zh", "goal": "Draw a box", "expect": "A box", "source": "offline fixture", "start": "Empty canvas",
+        "goal": "Draw a box", "expect": "A box", "source": "offline fixture", "start": "Empty canvas",
         "max_steps": 60, "feasible": True, "model": evaluator.model_names(agents), "setup": "ok",
         "version": version(), "approve": True, "run": f"run-{attempt}", "stop_reason": "replied", "computer": "replied",
         "calls": 2, "main_calls": 1, "seconds": 10, "agent_cost": .01, "title_cost": .003, "unknown_calls": 0,
@@ -94,9 +95,9 @@ def save_trial(folder, row, log=None):
     where.mkdir(parents=True)
     (where / "result.json").write_text(json.dumps(row))
     if row.get("run"):
-        run = where / "run"
-        run.mkdir()
-        (run / "steps.jsonl").write_text("".join(json.dumps(event) + "\n" for event in (log or events())))
+        turn = where / "run" / "turn-1"
+        turn.mkdir(parents=True)
+        (turn / "steps.jsonl").write_text("".join(json.dumps(event) + "\n" for event in (log or events())))
     return where
 
 
@@ -206,7 +207,7 @@ def test_a_busy_desktop_stops_the_eval_instead_of_failing_the_setup(evaluator, m
 
 def test_pruning_metadata_comes_from_the_snapshot_without_executing_it(evaluator, tmp_path):
     source = tmp_path / "src"
-    file = source / "computer_use/agent/middleware.py"
+    file = source / "computer_use/middleware/common.py"
     file.parent.mkdir(parents=True)
     file.write_text("raise RuntimeError('must never execute')\nKEEP_SCREENSHOTS = 7\nPRUNE_EVERY = 25\n")
     assert evaluator.screenshot_settings(source) == {"keep": 7, "every": 25}
@@ -220,7 +221,7 @@ def test_pruning_metadata_comes_from_the_snapshot_without_executing_it(evaluator
 def test_run_records_requested_and_resolved_settings_and_exported_usage(evaluator, monkeypatch, tmp_path):
     folder = save_version(evaluator)
     source = tmp_path / "src"
-    file = source / "computer_use/agent/middleware.py"
+    file = source / "computer_use/middleware/common.py"
     file.parent.mkdir(parents=True)
     file.write_text("KEEP_SCREENSHOTS = 3\nPRUNE_EVERY = 5\n")
     screen = tmp_path / "start.png"
@@ -236,11 +237,11 @@ def test_run_records_requested_and_resolved_settings_and_exported_usage(evaluato
 
     def exported(run, into):
         assert run == "offline-run"
-        into.mkdir()
-        (into / "steps.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events({"input": .01})))
+        (into / "turn-1").mkdir(parents=True)
+        (into / "turn-1" / "steps.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events({"input": .01})))
 
     monkeypatch.setattr(evaluator.api, "export_session", exported)
-    evaluator.run_tasks(SimpleNamespace(trials=1, ask=True, lang="zh"), ["paint-canvas"], version(), source, requested)
+    evaluator.run_tasks(SimpleNamespace(trials=1, ask=True), ["paint-canvas"], version(), source, requested)
     row = json.loads((folder / "03-paint-canvas/1/result.json").read_text())
     assert sent[0][-1] == requested and sent[0][-2] is False
     assert row["settings"]["requested_agents"] == requested
@@ -271,14 +272,11 @@ def test_grouping_uses_effective_settings_not_the_requested_spelling(evaluator):
     b["settings"]["requested_agents"] = {"main": {"model": "follow"}, "computer": {"effort": "medium"}}
     b["settings"]["agents"] = dict(reversed(list(b["settings"]["agents"].items())))
     assert evaluator.experiment(a) == evaluator.experiment(b)
-    for field, value in (("lang", "en"), ("max_steps", 20), ("approve", False)):
+    for field, value in (("max_steps", 20), ("approve", False)):
         assert evaluator.experiment(a) != evaluator.experiment(a | {field: value})
     for change in (trial(evaluator, effort="low"), a | {"version": version(source="other-source")},
                    a | {"settings": a["settings"] | {"screenshots": {"keep": 3, "every": 25}}}):
         assert evaluator.experiment(a) != evaluator.experiment(change)
-    legacy = a.copy()
-    legacy.pop("settings")
-    assert evaluator.experiment(a) != evaluator.experiment(legacy)
 
 
 def test_summary_includes_all_trials_and_unknown_cost_without_reading_logs(evaluator, monkeypatch):
@@ -306,28 +304,22 @@ def test_summary_includes_all_trials_and_unknown_cost_without_reading_logs(evalu
     assert evaluator.known_total([None, None], 5) == "?"
 
 
-def test_legacy_missing_data_and_infeasible_results_are_explicit(evaluator):
+def test_missing_usage_and_infeasible_results_are_explicit(evaluator):
     folder = save_version(evaluator)
     row = trial(evaluator, feasible=False)
-    for key in ("settings", "agent_cost", "agents", "title_cost", "unknown_calls"):
+    for key in ("agent_cost", "agents", "title_cost", "unknown_calls"):
         row.pop(key)
     text = evaluator.summary(folder, [row], {row["run"]: "pass"})
-    assert "screenshots=unknown; settings=legacy" in text
     assert "[infeasible]" in text and "usage unavailable in 1 trial(s)" in text
     assert "0.00000" not in text
 
 
-@pytest.mark.parametrize("legacy", [False, True])
-def test_report_loads_each_result_and_trajectory_once_and_preserves_grades(evaluator, monkeypatch, capsys, legacy):
+def test_report_loads_each_result_and_trajectory_once_and_preserves_grades(evaluator, monkeypatch, capsys):
     folder = save_version(evaluator)
     originals = {}
     grades = {}
     for n in range(1, 31):
         row = trial(evaluator, attempt=n, effort="low" if n % 2 else "medium")
-        # Legacy records get usage from their export once, without modifying result.json.
-        if legacy:
-            row.pop("agent_cost")
-            row.pop("agents")
         path = save_trial(folder, row, events({"input": .01}))
         originals[path / "result.json"] = (path / "result.json").read_text()
         grades[row["run"]] = "pass retained reason" if n % 2 else "fail retained reason"
@@ -360,7 +352,7 @@ def test_report_loads_each_result_and_trajectory_once_and_preserves_grades(evalu
     sheet.write_text(read_text(sheet).replace("Grade: pass retained reason", "Grade: fail revised", 1))
     evaluator.cmd_report(SimpleNamespace(versions=[]))
     assert set(reads.values()) == {2}  # cache lifetime is one report, so a regrade is visible on the next call
-    assert len(calculated) == (60 if legacy else 0)  # new records reuse their saved metrics
+    assert not calculated  # records keep their metrics: the report does not work them out again
     assert evaluator.read_grades(folder)["run-1"] == "fail revised"
 
 
@@ -374,7 +366,7 @@ def test_build_sheet_merges_new_grades_without_losing_existing_ones(evaluator):
 
 
 def save_session(where, logs):
-    """A run as `computer-use export` writes it: {log: {name: colour}}, each log in its folder, or in `where` for ""."""
+    """A run as `computer-use export` writes it: {log: {name: colour}}, each log in its folder."""
     clock = 0
     for log, screens in logs.items():
         folder = where / log
@@ -395,13 +387,13 @@ def save_session(where, logs):
     ({"a-turn": {}, "b-task": {"000-observe.png": "red", "001-key.png": "red"},
       "c-task": {"000-observe.png": "red", "001-key.png": "blue"},
       "d-turn": {"main-000-task-ended.png": "red", "main-000-task-ended-2.png": "red"}}, "c-task/001-key.png"),
-    ({"": {"000-observe.png": "red", "001-key.png": "blue", "main-001-task-ended.png": "red"}}, "001-key.png"),  # one log
-], ids=["a log per folder", "one log"])
+])
 def test_a_rebuilt_sheet_and_the_report_show_the_runs_end_screen_and_keep_its_grade(evaluator, logs, end):
     folder = save_version(evaluator)
     row = trial(evaluator, start_screen="start.png")
     where = save_trial(folder, row)
-    (where / "run" / "steps.jsonl").unlink()
+    (where / "run" / "turn-1" / "steps.jsonl").unlink()
+    (where / "run" / "turn-1").rmdir()
     Image.new("RGB", (8, 8), "white").save(where / "start.png")
     save_session(where / "run", logs)
     row |= evaluator.summarize(evaluator.read_events(where / "run"))
@@ -458,3 +450,47 @@ def test_a_sessions_logs_read_back_in_order_and_summed(evaluator, tmp_path):
     assert [event["time"] for event in events] == [1, 2, 2.5, 3, 4, 5, 6, 7]
     assert (result["stop_reason"], result["summary"], result["actions"]) == ("replied", "Start is open.", 1)
     assert result["agent_cost"] == pytest.approx(.06) and result["seconds"] == 6
+
+
+class WaitingSession:
+    """A session whose task waits for an answer: after `logged`, nothing more comes until it is stopped."""
+
+    def __init__(self, logged):
+        self.logged, self.stopped, self.thread = logged, threading.Event(), "thread"
+
+    def follow(self, api, run):
+        return self
+
+    def lines(self):
+        yield from (("turn", event) for event in self.logged)
+        assert self.stopped.wait(5), "the eval kept waiting on a session nobody will answer"
+        yield "task", {"type": "end", "stop_reason": "cancelled", "summary": "Stopped."}
+
+
+def waiting(evaluator, monkeypatch, logged):
+    session = WaitingSession(logged)
+    monkeypatch.setattr(evaluator, "Follow", session.follow)
+    monkeypatch.setattr(evaluator, "approve_steps", lambda stop: None)
+    monkeypatch.setattr(evaluator.api, "start", lambda *args, **kwargs: {"id": "run"})
+    monkeypatch.setattr(evaluator.api, "stop", lambda thread: session.stopped.set())
+    return session
+
+
+def test_an_unattended_run_ends_the_session_when_the_agent_asks_the_user(evaluator, monkeypatch):
+    question = {"type": "action", "agent": "main", "n": 1, "tool": "ask_user", "status": "success", "reason": None,
+                "args": {"question": "Which account?", "options": [], "multiple": False},
+                "result": "Shown to the user. Their next message answers it."}
+    session = waiting(evaluator, monkeypatch, [{"type": "start", "kind": "turn"}, question])
+
+    run, output, stopped = evaluator.run_agent("Book the receipts", 60)
+
+    assert session.stopped.is_set() and (run, stopped) == ("run", False) and "Which account?" in output
+
+
+def test_a_quiet_session_is_stopped_at_the_run_timeout(evaluator, monkeypatch):
+    session = waiting(evaluator, monkeypatch, [{"type": "start", "kind": "turn"}])
+    monkeypatch.setattr(evaluator, "RUN_TIMEOUT", 0.05)
+
+    run, output, stopped = evaluator.run_agent("Book the receipts", 60)
+
+    assert session.stopped.is_set() and stopped and "Stopped after 0.05 s." in output

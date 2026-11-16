@@ -28,21 +28,21 @@ import {
 import { runHref } from "@/lib/route"
 
 /** Rules as a plain list, no card: a line between them, each one line until opened (MemoryRow); `item` opened at,
- * from the conversation. Their source conversations named as the sidebar names them, their ids until known. */
+ * from the conversation. Their source conversations named as the sidebar names them, generically until known. */
 export function MemoryList({
   memories,
   item,
-  editing,
   onClose,
+  className,
 }: {
   memories: Memory[]
   item: string | null
-  editing: boolean
   onClose?: () => void
+  className?: string
 }) {
   const [titles, setTitles] = useState(new Map<string, string>())
   useEffect(() => {
-    // The latest, a full page: a rule's source older than those is listed by its id.
+    // The latest, a full page: a rule's source older than those goes unnamed.
     api.conversations({ limit: MAX_PAGE }).then(
       (page) =>
         setTitles(new Map(page.items.map((each) => [each.id, nameOf(each)]))),
@@ -50,14 +50,13 @@ export function MemoryList({
     )
   }, [])
   return (
-    <div className="divide-y px-1">
+    <div className={cn("divide-y px-1", className)}>
       {memories.map((memory) => (
         <MemoryRow
           key={memory.id}
           memory={memory}
           source={titles.get(memory.source.thread)}
           focused={item === memory.id}
-          editing={item === memory.id && editing}
           onClose={onClose}
         />
       ))}
@@ -72,19 +71,17 @@ function MemoryRow({
   memory,
   source,
   focused,
-  editing: editingFirst,
   onClose,
 }: {
   memory: Memory
   source?: string // its conversation's name
   focused: boolean
-  editing: boolean
   onClose?: () => void
 }) {
   const t = useT()
   const row = useRef<HTMLDivElement>(null)
   const [open, setOpen] = useState(focused)
-  const [editing, setEditing] = useState(editingFirst)
+  const [editing, setEditing] = useState(false)
   const [draft, setDraft] = useState<Required<MemoryEdit>>(memory)
   const [busy, setBusy] = useState(false)
   const [lit, setLit] = useState(focused)
@@ -126,7 +123,7 @@ function MemoryRow({
     <div ref={row} data-memory={memory.id} className="py-1">
       <div
         className={cn(
-          "-mx-3 rounded-lg px-3 py-3 transition-colors duration-500 ease-(--ease-out) motion-reduce:transition-none",
+          "-mx-2 rounded-lg px-2 py-3 transition-colors duration-500 ease-(--ease-out) motion-reduce:transition-none",
           lit && "bg-muted"
         )}
       >

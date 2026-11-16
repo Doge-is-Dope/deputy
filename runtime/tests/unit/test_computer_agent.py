@@ -8,11 +8,12 @@ import pytest
 from langchain_core.messages import AIMessage
 
 import computer_use.agent.main_agent as main_agent
-from computer_use.prompts.computer import DESKTOP_BUSY, SYSTEM_PROMPT, system_prompt
+from computer_use.prompts import notes
+from computer_use.prompts.computer import DESKTOP_BUSY, SYSTEM_PROMPT
 import computer_use.desktop.executor
 from computer_use.agent.inbox import Inbox
 from computer_use.agent.history import tasks
-from conftest import run_turn, runs_dir
+from conftest import desktop_ended, run_turn, runs_dir
 from conftest import events_of, first_run, run_file, task_folder
 from computer_use.computers import ComputerError
 from computer_use.desktop.control import ControlFile, DesktopBusy, RunLock
@@ -53,7 +54,7 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
 
     result = await run_turn(settings, "type a note", max_steps=10, computer=computer)
 
-    assert (result.reply, result.computer) == ("Done.", "replied")
+    assert (result.reply, desktop_ended(result)) == ("Done.", "replied")
     assert handed_back(result)["reply"] == "Typed the note."
     # A model may ignore the request for one call per turn; its calls then run at once, in no promised order.
     assert computer.calls[0] == ("press", [["win"]]) and computer.calls[3] == ("type_text", "會議紀錄")
@@ -94,7 +95,7 @@ async def test_loop_runs_a_batch_as_one_tool_call(settings, computer, monkeypatc
 
     result = await run_turn(settings, "fill in the form", max_steps=10, computer=computer)
 
-    assert result.computer == "replied"
+    assert desktop_ended(result) == "replied"
     assert computer.calls == [
         ("click", (100, 100), "left", 1, []), ("type_text", "Ada"), ("press", [["tab"]]), ("type_text", "Lovelace"),
     ]
@@ -145,15 +146,35 @@ async def test_loop_ends_at_the_step_limit_instead_of_crashing(settings, compute
 
     assert len(computer.calls) == 20
     assert len(logged(result, "action")) == 20
-    assert result.computer == "step_limit"
-    ends = [(event["stop_reason"], event["computer"]) for event in logged(result, "end")]
-    assert ends == [("replied", None), ("ended", "step_limit"), ("replied", "step_limit")]  # turn, task, last turn
+    assert desktop_ended(result) == "step_limit"
+    ends = [(event["stop_reason"], event.get("agent_stop_reason")) for event in logged(result, "end")]
+    assert ends == [("replied", None), ("ended", "step_limit"), ("replied", None)]  # turn, task, last turn
     handback = computer_use_result(result)["result"]
     assert "the runtime stopped it after 20 model calls" in handback
-    # The model call limit closes the transcript with its own message, which is not the agent's reply.
+    # The hand-over call wrote nothing, and the model call limit's closing message is not the agent's reply.
     assert handed_back(result)["reply"] == ""
     assert "Its final message (a claim, not evidence): (none)" in handback
     assert "Model call limits exceeded" not in handback
+
+
+async def test_a_task_at_the_step_limit_hands_over_in_words(settings, computer, monkeypatch, the_log_is_the_whole_record):
+    computer_model, _ = use_script(monkeypatch, [
+        *[AIMessage(content="", tool_calls=[tool_call(f"c{n}", "key", text="a")]) for n in range(3)],
+        # It writes the hand-over but still asks for a step: the step does not run.
+        AIMessage(content="Named the rival BLUE; next, leave the lab.", tool_calls=[tool_call("c9", "key", text="b")]),
+    ])
+    computer.screen = lambda: fixture_png(str(len(computer.calls)))
+
+    result = await run_turn(settings, "keep going", max_steps=3, computer=computer)
+
+    assert len(computer.calls) == 3 and len(logged(result, "action")) == 3
+    assert desktop_ended(result) == "step_limit"
+    asked = computer_model.received[-1][-1]
+    assert asked.content == notes.HAND_OVER
+    assert handed_back(result)["reply"] == "Named the rival BLUE; next, leave the lab."
+    handback = computer_use_result(result)["result"]
+    assert "the runtime stopped it after 3 model calls" in handback
+    assert "Its final message (a claim, not evidence): Named the rival BLUE; next, leave the lab." in handback
 
 
 async def test_a_reply_on_the_last_allowed_call_is_a_reply_not_the_step_limit(settings, computer, monkeypatch):
@@ -164,7 +185,7 @@ async def test_a_reply_on_the_last_allowed_call_is_a_reply_not_the_step_limit(se
 
     result = await run_turn(settings, "press a", max_steps=2, computer=computer)
 
-    assert (handed_back(result)["reply"], result.computer) == ("Pressed a.", "replied")
+    assert (handed_back(result)["reply"], desktop_ended(result)) == ("Pressed a.", "replied")
     assert "the runtime stopped it" not in computer_use_result(result)["result"]
 
 
@@ -178,7 +199,7 @@ async def test_loop_asks_for_another_way_then_stops_when_actions_change_nothing(
 
     # The runtime stopped it, so it has no reply: the runtime's own words are not passed off as the agent's.
     assert handed_back(result)["reply"] == ""
-    assert result.computer == "stuck"
+    assert desktop_ended(result) == "stuck"
     assert "its last actions did not change the screen" in computer_use_result(result)["result"]
     assert len(computer.calls) == 6
     results = [event["result"] for event in logged(result, "action")]
@@ -196,7 +217,7 @@ async def test_only_the_same_action_repeating_without_effect_stops_a_run(setting
 
     result = await run_turn(settings, "try things", max_steps=20, computer=computer)
 
-    assert len(computer.calls) == 8 and result.computer != "stuck"
+    assert len(computer.calls) == 8 and desktop_ended(result) != "stuck"
     results = [event["result"] for event in logged(result, "action")]
     assert "Your last 3 actions did not change the screen" in results[2]
 
@@ -263,9 +284,12 @@ async def test_loop_waits_while_the_user_has_control(settings, computer, monkeyp
     result = await asyncio.wait_for(run_turn(settings, "save", max_steps=10, computer=computer), timeout=20)
     await user
 
-    assert (handed_back(result)["reply"], result.computer) == ("Saved after the user signed in.", "replied")
+    assert (handed_back(result)["reply"], desktop_ended(result)) == ("Saved after the user signed in.", "replied")
     assert computer.calls == [("press", [["ctrl", "s"]])]
     assert any("Control returned" in note["text"] for note in logged(result, "note"))
+    assert [note["text"] for note in logged(result, "note") if note["code"] == "takeoverRequested"] == [
+        f"Agent requests a takeover: sign in\nOpen {settings.web_url}"
+    ]
 
 
 async def test_what_the_main_agent_tells_a_task_while_the_user_has_the_desktop_comes_with_the_fresh_screen(
@@ -362,14 +386,14 @@ async def test_other_messages_go_on_while_another_run_has_the_desktop(settings, 
         refused = await run_turn(settings, "open start", max_steps=10, computer=computer)
         assert RunLock(settings.run_lock_path).holder()["run"] == "20261007-120000"
 
-    assert (answered.reply, answered.computer) == ("Paris.", None)
-    assert refused.computer is None and computer_model.received == []
+    assert (answered.reply, desktop_ended(answered)) == ("Paris.", None)
+    assert desktop_ended(refused) is None and computer_model.received == []
     assert computer.calls == [] and computer.releases == 0
     handed = computer_use_result(refused)
     assert handed["status"] == "error" and handed["result"] == "Not executed: " + DESKTOP_BUSY
     assert tasks(events_of(settings, refused.run)) == []
     ends = logged(refused, "end")
-    assert [(end["stop_reason"], end["computer"]) for end in ends] == [("replied", None)]
+    assert [(end["stop_reason"], end.get("agent_stop_reason")) for end in ends] == [("replied", None)]
 
 
 async def test_a_run_takes_the_desktop_when_it_first_uses_it_and_lets_go_at_the_end(settings, computer, monkeypatch):
@@ -408,10 +432,10 @@ async def test_a_message_for_the_desktop_gets_it_from_the_user_once_the_run_has_
     control.write("user", "taken over by user")
 
     result = await run_turn(
-        settings, "@Computer open start", max_steps=10, computer=computer, force_computer=True, take_control=True
+        settings, "open start", max_steps=10, computer=computer, force_computer=True, take_control=True
     )
 
-    assert (result.computer, control.read().owner) == ("replied", "agent")
+    assert (desktop_ended(result), control.read().owner) == ("replied", "agent")
     assert not [note for note in logged(result, "note") if "The user has control" in note["text"]]
 
 
@@ -432,7 +456,9 @@ async def test_a_stopped_run_still_ends_its_log_and_frees_the_desktop(settings, 
 
     ends = [event for event in events_of(settings, first_run(settings)) if event["type"] == "end"]
     # The turn that handed it over had ended; the task ends stopped.
-    assert [(end["stop_reason"], end["summary"], end["computer"]) for end in ends] == [("replied", "", None), ("stopped", "", None)]
+    assert [(end["stop_reason"], end["summary"], end.get("agent_stop_reason")) for end in ends] == [
+        ("replied", "", None), ("stopped", "", None),
+    ]
     assert "error" not in ends[1] and "usage" in ends[1]
     assert RunLock(settings.run_lock_path).holder() is None
 
@@ -449,7 +475,7 @@ async def test_a_desktop_that_cannot_be_used_is_told_to_the_main_agent_which_rep
     computer.screen = gone
     result = await run_turn(settings, "open start", max_steps=10, computer=computer)
 
-    assert (result.reply, result.computer) == ("The desktop can't be reached right now.", "error")
+    assert (result.reply, desktop_ended(result)) == ("The desktop can't be reached right now.", "error")
     assert computer_model.received == []
     handback = computer_use_result(result)
     assert handback["status"] == "success" and "the desktop could not be seen or used" in handback["result"]
@@ -457,7 +483,7 @@ async def test_a_desktop_that_cannot_be_used_is_told_to_the_main_agent_which_rep
     assert "Stopped: the desktop could not be used: the display is gone" in [n["text"] for n in logged(result, "note")]
     ends = logged(result, "end")
     (task,), last = [end for end in ends if end["stop_reason"] == "ended"], ends[-1]
-    assert (task["stop_reason"], task["computer"], last["stop_reason"], last["computer"]) == ("ended", "error", "replied", "error")
+    assert (task["stop_reason"], task["agent_stop_reason"], last["stop_reason"]) == ("ended", "error", "replied")
     assert "error" not in task and "error" not in last
 
 
@@ -526,7 +552,7 @@ async def test_a_run_stops_when_the_desktop_does_not_reconnect(settings, compute
     monkeypatch.setattr(computer, "press", press_then_drop)
     result = await run_turn(settings, "select all", max_steps=10, computer=computer)
 
-    assert result.computer == "disconnected"
+    assert desktop_ended(result) == "disconnected"
     assert handed_back(result)["reply"] == ""
     assert "the desktop did not reconnect in time" in computer_use_result(result)["result"]
     assert "Stopped: the desktop did not reconnect within 0.05 seconds." in [n["text"] for n in logged(result, "note")]
@@ -554,7 +580,7 @@ async def test_a_desktop_that_is_gone_ends_the_task_even_while_the_user_has_cont
     # Times out if the task waits for the user to hand back a desktop that is gone.
     result = await asyncio.wait_for(run_turn(settings, "save", max_steps=10, computer=computer), timeout=5)
 
-    assert result.computer == "disconnected" and computer.calls == []
+    assert desktop_ended(result) == "disconnected" and computer.calls == []
     codes = [note["code"] for note in logged(result, "note")]
     assert "userControl" not in codes and codes.index("disconnected") < codes.index("gone")
     assert control.read().owner == "user"
@@ -566,10 +592,10 @@ async def test_a_desktop_task_is_refused_at_once_while_the_desktop_is_down(setti
     ])
     computer.connected = False
 
-    # Times out if the task waits the minute it gives a desktop that drops while it works.
+    # Times out if the task waits the RECONNECT_LIMIT_SECONDS it gives a desktop that drops while it works.
     result = await asyncio.wait_for(run_turn(settings, "open start", max_steps=10, computer=computer), 5)
 
-    assert result.reply == "The desktop is not connected." and result.computer is None
+    assert result.reply == "The desktop is not connected." and desktop_ended(result) is None
     assert computer_model.received == [] and computer.calls == []
     refused = computer_use_result(result)
     assert refused["status"] == "error" and refused["reason"] == "disconnected"
@@ -577,20 +603,9 @@ async def test_a_desktop_task_is_refused_at_once_while_the_desktop_is_down(setti
     assert RunLock(settings.run_lock_path).holder() is None
 
 
-@pytest.mark.parametrize(
-    ("locale", "language"), [("zh-Hant", "Traditional Chinese"), ("en", "English"), ("ja", "ja")]
-)
-def test_the_prompt_names_the_language_the_user_reads(locale, language):
-    assert system_prompt(locale) == (
-        f"{SYSTEM_PROMPT}\nThe user reads {language}: write anything you say to them in {language}."
-    )
-
-
 def test_the_prompt_asks_for_updates_only_as_its_phases_change():
-    """OpenAI's wording for updates in long tool-heavy tasks (Prompting guidance for GPT-5.6 Sol), less the update at the
-    start, which the main agent gives as it hands the task over; without it the agent said nothing in 60 of 60 steps
-    (2026-10-19)."""
+    """Updates in long tool-heavy tasks come only as a phase begins, not at the start, which the main agent gives as it
+    hands the task over; without the rule the agent said nothing in 60 of 60 steps (2026-10-19)."""
     assert "user-visible update only when a major phase begins" in SYSTEM_PROMPT
     assert "states the first step" not in SYSTEM_PROMPT
     assert "routine steps need no narration" not in SYSTEM_PROMPT
-    assert system_prompt(None) == SYSTEM_PROMPT

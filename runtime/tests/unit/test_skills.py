@@ -1,5 +1,4 @@
-"""Skills: the list in each agent's system prompt, the shared ones and its own, and read_skill reading one only from its
-folder."""
+"""Skills: the list in each agent's system prompt, from its own folder, and read_skill reading one only from there."""
 
 import pytest
 from langchain_core.messages import AIMessage, SystemMessage, ToolMessage
@@ -47,8 +46,8 @@ def skill_text(name):
     return f"---\nname: {name}\ndescription: About {name}.\n---\n\nHow to {name}.\n"
 
 
-def test_an_agent_is_told_the_shared_skills_and_its_own_by_name_not_another_agents(tmp_path):
-    write_skill(tmp_path / "shared", "office", "---\nname: office\ndescription: Excel and Word.\n---\n\nThe Name Box.\n")
+def test_an_agent_is_told_its_own_skills_by_name_not_another_agents(tmp_path):
+    write_skill(tmp_path / "computer", "office", "---\nname: office\ndescription: Excel and Word.\n---\n\nThe Name Box.\n")
     write_skill(tmp_path / "computer", "file-dialogs", skill_text("file-dialogs"))
     write_skill(tmp_path / "coding", "python", skill_text("python"))
 
@@ -59,15 +58,6 @@ def test_an_agent_is_told_the_shared_skills_and_its_own_by_name_not_another_agen
     )
     (tool,) = SkillsMiddleware("computer", tmp_path).tools
     assert read(tool, name="python").status == "error"
-
-
-def test_an_agents_skill_named_as_a_shared_one_stops_the_runtime(tmp_path):
-    write_skill(tmp_path / "shared", "office", skill_text("office"))
-    write_skill(tmp_path / "computer", "office", skill_text("office"))
-
-    with pytest.raises(ValueError, match="must not share a name"):
-        SkillsMiddleware("computer", tmp_path)
-    assert SkillsMiddleware("coding", tmp_path).section  # the other agents have only the shared one
 
 
 def test_without_skills_an_agent_gets_no_list_and_no_tool(tmp_path):

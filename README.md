@@ -6,6 +6,8 @@ Desktop control and takeover have been tested; full web-flow acceptance testing 
 
 ![Architecture](diagrams/architecture.svg)
 
+Inside the runtime, the API server and the agents reach every backend through a swappable interface: see the [runtime design](runtime/README.md#design).
+
 ## Repository structure
 
 ```text
@@ -45,7 +47,7 @@ uv run --project clients/cli computer-use run "<goal>"
 
 ## Documentation
 
-- [Runtime](runtime/README.md): setup, agents, API and tests
+- [Runtime](runtime/README.md): design, setup, agents, API and tests
 - [CLI](clients/cli/README.md): the command line
 - [Web](clients/web/README.md): front-end development
 - [Evaluation](eval/README.md): Windows tasks and result comparisons

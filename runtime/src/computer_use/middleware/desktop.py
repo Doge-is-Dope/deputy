@@ -11,7 +11,7 @@ from computer_use.agent.trajectory import Trajectory
 from computer_use.desktop.control import Control
 from computer_use.desktop.executor import Disconnected, Executor
 from computer_use.events import NoteCode
-from computer_use.execution.approvals import Confirmations
+from computer_use.middleware.approvals import Confirmations
 from computer_use.middleware.common import prune_screenshots
 from computer_use.middleware.subagent import SubagentMiddleware
 from computer_use.prompts import notes
@@ -19,7 +19,7 @@ from computer_use.prompts.computer import DECIDE_AGAIN, disconnected_for, user_h
 from computer_use.tools.desktop import content
 
 # Why this guard ended a task: its actions kept leaving the screen as it was, the desktop did not reconnect, or the user
-# declined MAX_DECLINES of its steps (execution.approvals).
+# declined MAX_DECLINES of its steps (middleware.approvals).
 Stop = Literal["stuck", "disconnected", "declined"]
 
 

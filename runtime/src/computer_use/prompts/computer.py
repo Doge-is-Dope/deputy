@@ -39,22 +39,10 @@ message alone does not prove completion. Once the result is verified, finish wit
 be verified, say what remains uncertain. Unless a rule above requires stopping, try reasonable permitted alternatives \
 before reporting a blocker.
 """
-# The interface languages the page sends (clients/web/src/lib/i18n.ts), named as the model is told them.
-LANGUAGES = {"zh-Hant": "Traditional Chinese", "en": "English"}
-
-
-def system_prompt(locale: str | None) -> str:
-    """Set the output language from the UI locale, or from the user message when the client sends none."""
-    if not locale:
-        return SYSTEM_PROMPT
-    language = LANGUAGES.get(locale, locale)
-    return f"{SYSTEM_PROMPT}\nThe user reads {language}: write anything you say to them in {language}."
-
-
 # Its line in start_task's description.
 ABOUT = (
     "operates the Windows desktop you and the user share, with screenshots, mouse and keyboard: to inspect the screen "
-    "or work in its apps, files or browser. A message mentioning @Computer is for it. Do not work out answers it "
+    "or work in its apps, files or browser. Do not work out answers it "
     "should read off the screen. Brief it with outcomes, not clicks, and name an app only if the user did. When it "
     "ends, the runtime reports how it stopped, its final message, its actions and a screenshot taken after it "
     "stopped: check the work from these, and say you cannot tell what they do not show."
@@ -146,7 +134,7 @@ DESKTOP_BUSY = (
 # and Opus and Sonnet 5.5 take no forced tool. If the main agent still does not hand the message over, the runtime
 # does.
 DESKTOP_ASKED = (
-    "The user sent this message to the desktop (@Computer): in this reply, hand its desktop work to the computer "
+    "The user sent this message to the desktop: in this reply, hand its desktop work to the computer "
     "agent, along with any other work it asks for."
 )
 DESKTOP_HANDED = (

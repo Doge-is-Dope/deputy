@@ -2,21 +2,32 @@
 
 Each task runs one command at a time, in its conversation's folder, which the
 conversation's tasks share; tasks of one conversation run side by side. Commands
-use bash with only PATH, HOME and LANG, in a process group that can be stopped
-as a unit. Files persist until the container restarts. The runtime uses HTTP
-over SOCKET in a shared volume; without SOCKET, the server listens on PORT.
+use bash with only PATH, HOME, TMPDIR, LANG and PYTHONSAFEPATH, confined to their
+folder (sandbox.py), in a process group stopped as a unit when the command returns.
+The socket answers only callers outside this container, so a command cannot use
+it. Files persist until the conversation is deleted or the container restarts.
+The runtime uses HTTP over SOCKET in a shared volume; without SOCKET, the server
+listens on PORT.
 
 POST /run   {thread, task, script, seconds} -> {code, output, cut}; code null on timeout
 POST /write {thread, path, content}         -> {path, bytes}
+PUT /files?thread=&path=[&source=], the file -> {path, bytes, written}; keeps the same or a newer source run
+HEAD /files?thread=&path=[&source=]         -> 200 when that revision or newer is there, else 404
 POST /stop  {task}                          -> {stopped}
+POST /delete {thread}                       -> {deleted}; false when it had no folder
 GET /status                                -> {ok: true}
 
 Invalid ids and paths outside the working folder return 400 with {error}."""
 
+import contextlib
 import json
 import os
 import re
+import shutil
 import signal
+import socket
+import struct
+import sys
 import stat
 import socketserver
 import subprocess
@@ -26,8 +37,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
-WORKSPACE = Path(os.environ.get("WORKSPACE", "/workspace"))
+WORKSPACE = Path("/workspace")
 SOCKET = os.environ.get("SOCKET")
+SANDBOX = Path(__file__).with_name("sandbox.py")
 PORT = int(os.environ.get("PORT", "8080"))
 # What a command's output keeps: this many bytes from its start and as many from its end.
 KEEP = 8000
@@ -35,12 +47,15 @@ KEEP = 8000
 MAX_SECONDS = 600
 # The largest request body: a script or a file to write.
 MAX_BODY = 8 * 1024 * 1024
-# Downloads are bounded independently of command output and uploads.
+# The largest file a download reads or a PUT writes.
 MAX_FILE = 32 * 1024 * 1024
 ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,99}")  # a conversation's or a task's
 
 running: dict[str, subprocess.Popen] = {}  # each task's command in progress
 lock = threading.Lock()
+files_lock = threading.Lock()  # a conditional PUT's check and write belong to the same operation
+# The originating run of each attachment. Like the workspace, this lasts until the runner restarts.
+sources: dict[str, dict[str, str]] = {}
 
 
 class Refused(ValueError):
@@ -54,6 +69,23 @@ def folder(thread: str) -> Path:
     path = WORKSPACE / thread
     path.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def delete(thread: str) -> bool:
+    """Remove the conversation's folder and everything in it; False when it has none. Something a command put in its
+    place, such as a symlink, is removed, not followed."""
+    if not isinstance(thread, str) or not ID.fullmatch(thread):
+        raise Refused("thread must be a conversation id")
+    with files_lock:
+        sources.pop(thread, None)
+        path = WORKSPACE / thread
+        if path.is_symlink() or path.is_file():
+            path.unlink()
+            return True
+        if not path.exists():
+            return False
+        shutil.rmtree(path)
+        return True
 
 
 def inside(base: Path, name: str) -> Path:
@@ -88,24 +120,31 @@ def run(thread: str, task: str, script: str, seconds: float) -> dict:
         raise Refused("task must be a task id")
     cwd = folder(thread)
     seconds = min(max(float(seconds), 1.0), MAX_SECONDS)
-    env = {"PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(cwd), "LANG": "C.UTF-8"}
+    # /tmp is every conversation's, so a command's temporary files go in its own folder.
+    # PYTHONSAFEPATH keeps a script's own folder off the import path: a script named inspect.py hides no module.
+    env = {
+        "PATH": "/usr/local/bin:/usr/bin:/bin", "HOME": str(cwd), "TMPDIR": str(cwd), "LANG": "C.UTF-8",
+        "PYTHONSAFEPATH": "1",
+    }
     # Output goes to a file, not memory, so a command that prints without end cannot take the runner down with it.
     with tempfile.TemporaryFile() as output:
         with lock:
             if task in running:
                 raise Refused("a command of this task is still running")
             process = subprocess.Popen(
-                ["bash", "-c", script], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=output,
+                [sys.executable, "-I", str(SANDBOX), str(cwd), "bash", "-c", script], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=output,
                 stderr=subprocess.STDOUT, start_new_session=True,
             )
             running[task] = process
         try:
             code = process.wait(timeout=seconds)
         except subprocess.TimeoutExpired:
-            stop(task)
-            process.wait()
             code = None
         finally:
+            # On time or not, what it started goes with it: a command leaves nothing running once it returns.
+            with contextlib.suppress(ProcessLookupError):
+                os.killpg(process.pid, signal.SIGKILL)
+            process.wait()
             with lock:
                 running.pop(task, None)
         text, cut = clipped(output)
@@ -116,12 +155,28 @@ def write(thread: str, path: str, content: str) -> dict:
     """Write a text file in the conversation's folder, replacing any there."""
     if not isinstance(content, str):
         raise Refused("content must be text")
-    base = folder(thread)
-    target = inside(base, path)
-    target.parent.mkdir(parents=True, exist_ok=True)
-    data = content.encode("utf-8")
-    target.write_bytes(data)
-    return {"path": str(target.relative_to(base.resolve())), "bytes": len(data)}
+    written = put(thread, path, content.encode("utf-8"))
+    return {"path": written["path"], "bytes": written["bytes"]}
+
+
+def current(thread: str, target: Path, source: str | None) -> bool:
+    """An existing file from this source run or a later one (run ids sort by time), including the agent's edits."""
+    return target.is_file() and (source is None or sources.get(thread, {}).get(str(target), "") >= source)
+
+
+def put(thread: str, path: str, data: bytes, source: str | None = None) -> dict:
+    """Put a file, preserving edits to one already supplied by this source run or a later one."""
+    with files_lock:
+        base = folder(thread)
+        target = inside(base, path)
+        shown = str(target.relative_to(base.resolve()))
+        if source is not None and current(thread, target, source):
+            return {"path": shown, "bytes": target.stat().st_size, "written": False}
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        if source is not None:
+            sources.setdefault(thread, {})[str(target)] = source
+        return {"path": shown, "bytes": len(data), "written": True}
 
 
 def stop(task: str) -> bool:
@@ -145,6 +200,8 @@ def read(thread: str, path: str) -> bytes:
     """
     if not isinstance(thread, str) or not ID.fullmatch(thread):
         raise Refused("thread must be a conversation id")
+    if isinstance(path, str):
+        path = path.removeprefix(f"{WORKSPACE / thread}/")
     parts = path.split("/") if isinstance(path, str) else []
     if not parts or any(part in ("", ".", "..") or "\x00" in part for part in parts):
         raise Refused("path must be a file name in the working folder")
@@ -207,6 +264,7 @@ class Handler(BaseHTTPRequestHandler):
             "/run": lambda body: run(body.get("thread"), body.get("task"), body.get("script"), body.get("seconds", 120)),
             "/write": lambda body: write(body.get("thread"), body.get("path"), body.get("content")),
             "/stop": lambda body: {"stopped": stop(body.get("task"))},
+            "/delete": lambda body: {"deleted": delete(body.get("thread"))},
         }
         handler = handlers.get(self.path)
         if handler is None:
@@ -221,6 +279,41 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, handler(body))
         except (Refused, ValueError) as error:
             self._send(400, {"error": str(error)})
+        except OSError as error:  # a name too long, a folder where a file goes
+            self._send(400, {"error": error.strerror or str(error)})
+
+    def do_HEAD(self) -> None:
+        url = urlsplit(self.path)
+        query = parse_qs(url.query)
+        try:
+            thread = query.get("thread", [None])[0]
+            with files_lock:
+                there = url.path == "/files" and current(thread, inside(
+                    folder(thread), query.get("path", [None])[0]
+                ), query.get("source", [None])[0])
+        except (Refused, ValueError):
+            there = False
+        self.send_response(200 if there else 404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def do_PUT(self) -> None:
+        url = urlsplit(self.path)
+        if url.path != "/files":
+            return self._send(404, {"error": "not found"})
+        length = int(self.headers.get("Content-Length") or 0)
+        if length > MAX_FILE:
+            return self._send(413, {"error": f"the file is over {MAX_FILE} bytes"})
+        query = parse_qs(url.query)
+        try:
+            self._send(200, put(
+                query.get("thread", [None])[0], query.get("path", [None])[0], self.rfile.read(length),
+                source=query.get("source", [None])[0],
+            ))
+        except (Refused, ValueError) as error:
+            self._send(400, {"error": str(error)})
+        except OSError as error:  # a name too long, a folder where the file goes
+            self._send(400, {"error": f"the file cannot be written: {error.strerror}"})
 
     def log_message(self, format, *args) -> None:  # requests are the runtime's to log
         pass
@@ -228,6 +321,12 @@ class Handler(BaseHTTPRequestHandler):
 
 class UnixHTTPServer(socketserver.ThreadingMixIn, socketserver.UnixStreamServer):
     daemon_threads = True
+
+    def verify_request(self, request, client_address) -> bool:
+        """Only a caller in another container, the runtime: its pid is not in this one's namespace, so it reads as 0.
+        A command, which can reach the socket's file, is turned away."""
+        pid, _, _ = struct.unpack("3i", request.getsockopt(socket.SOL_SOCKET, socket.SO_PEERCRED, 12))
+        return pid == 0
 
 
 if __name__ == "__main__":

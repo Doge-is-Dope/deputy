@@ -30,7 +30,7 @@ def test_a_run_goes_to_the_desktop_shows_its_steps_and_says_how_its_task_ended(a
     api.on("GET", "/api/runs/r2/events", raw=sse(
         (0, {"type": "start", "kind": "task", "thread": "r1", "agent": "computer", "goal": "Open Start."}), (1, ACTION),
         (2, {"type": "end", **({"stop_reason": "stopped"} if computer == "stopped" else
-                                {"stop_reason": "ended", "computer": computer})}), ("done", {}),
+                                {"stop_reason": "ended", "agent_stop_reason": computer})}), ("done", {}),
     ))
     quiet(api, logs=[{"id": "r1", "session": "r1"}, *([{"id": "r2", "session": "r1"}] if computer else [])])
 
@@ -71,6 +71,55 @@ def test_a_message_turned_away_says_why_and_starts_nothing(api, client, capsys, 
     api.on("POST", "/api/runs", 409, answer)
     assert cli.main(["run", "open start"], client) == 2
     assert said in capsys.readouterr().err and not api.sent("GET", "/api/runs/r9/events")
+
+
+def test_a_run_uploads_its_files_first_and_names_them_in_the_message(api, client, tmp_path):
+    (tmp_path / "bill.pdf").write_bytes(b"%PDF-1.7")
+    (tmp_path / "shot.png").write_bytes(b"png")
+    api.on("POST", "/api/uploads?name=bill.pdf", 201, {"id": "u1"})
+    api.on("POST", "/api/uploads?name=shot.png", 201, {"id": "u2"})
+    api.on("POST", "/api/runs", 201, {"id": "r1", "thread": "r1"})
+    api.on("GET", "/api/runs/r1/events", raw=sse((0, START), (1, end()), ("done", {})))
+    quiet(api)
+
+    cli.main(["run", "what is the total", "--attach", str(tmp_path / "bill.pdf"), "--attach",
+              str(tmp_path / "shot.png")], client)
+
+    assert [request["path"] for request in api.requests[:3]] == [
+        "/api/uploads?name=bill.pdf", "/api/uploads?name=shot.png", "/api/runs"
+    ]
+    assert api.sent("POST", "/api/runs")[0]["body"]["attachments"] == ["u1", "u2"]
+
+
+@pytest.mark.parametrize("size, uploaded, said", [
+    (None, None, "cannot read"),
+    (3, (400, {"error": "big.png is over 2048 pixels on its long side"}), "big.png is over 2048 pixels"),
+    (20 * 2**20 + 1, None, "big.png is over 20 MB"),  # said before any of it is sent
+])
+def test_a_file_that_cannot_go_says_why_and_starts_nothing(api, client, capsys, tmp_path, size, uploaded, said):
+    if size:
+        with open(tmp_path / "big.png", "wb") as file:
+            file.truncate(size)
+    if uploaded:
+        api.on("POST", "/api/uploads?name=big.png", *uploaded)
+    assert cli.main(["run", "look", "--attach", str(tmp_path / "big.png")], client) == 2
+    assert said in capsys.readouterr().err and not api.sent("POST", "/api/runs")
+    assert bool(api.requests) == bool(uploaded)
+
+
+def test_more_files_than_a_message_takes_are_said_before_any_goes(api, client, capsys, tmp_path):
+    (tmp_path / "a.txt").write_text("a")
+    assert cli.main(["run", "look", *["--attach", str(tmp_path / "a.txt")] * 6], client) == 2
+    assert "at most 5 files" in capsys.readouterr().err and not api.requests
+
+
+def test_a_path_from_home_is_found_when_the_shell_left_its_tilde(api, client, monkeypatch, tmp_path):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    (tmp_path / "a.txt").write_text("a")
+    api.on("POST", "/api/uploads?name=a.txt", 201, {"id": "u1"})
+    api.on("POST", "/api/runs", 409, {"error": "busy", "reason": "conversation", "run": "r9"})
+    cli.main(["run", "look", "--attach", "~/a.txt"], client)
+    assert api.sent("POST", "/api/uploads?name=a.txt")[0]["body"] == b"a"
 
 
 def test_a_conversation_that_cannot_be_continued_says_so(api, client, capsys):
@@ -133,14 +182,14 @@ def test_observe_saves_the_screen_where_asked(api, client, capsys, tmp_path):
 
 
 def test_status_idle_fails_while_a_run_is_going_or_the_user_has_control(api, client, capsys):
-    def status(active=None, running=(), owner="agent", ready=True):
-        return {"computer": {"detail": "RDP session: connected"}, "control": {"owner": owner, "ready": ready}, "active": active,
+    def status(active=None, running=(), owner="agent"):
+        return {"computer": {"detail": "RDP session: connected"}, "control": {"owner": owner}, "active": active,
                 "running": [{"run": run, "thread": run} for run in running], "approval": None}
 
-    for answer in (status(), status(running=["r1"]), status(active="r2", running=["r2"]), status(owner="user"), status(ready=False)):
+    for answer in (status(), status(running=["r1"]), status(active="r2", running=["r2"]), status(owner="user")):
         api.on("GET", "/api/status", json_body=answer)
 
-    assert [cli.main(["status", "--idle"], client) for _ in range(5)] == [0, 1, 1, 1, 1]
+    assert [cli.main(["status", "--idle"], client) for _ in range(4)] == [0, 1, 1, 1]
     assert "Running: r1 in conversation r1." in capsys.readouterr().out
 
 
@@ -177,7 +226,7 @@ def test_a_run_shows_its_tasks_and_later_turns_and_ends_with_the_last_turns_repl
                                                 ("done", {})))
     api.on("GET", "/api/runs/r2/events", raw=sse(
         (0, {"type": "start", "kind": "task", "thread": "r1", "agent": "computer", "goal": "Open Start."}), (1, ACTION),
-        (2, {"type": "end", "stop_reason": "ended", "computer": "replied"}), ("done", {}),
+        (2, {"type": "end", "stop_reason": "ended", "agent_stop_reason": "replied"}), ("done", {}),
     ))
     api.on("GET", "/api/runs/r3/events", raw=sse((0, {"type": "start", "kind": "turn", "thread": "r1", "goal": ""}),
                                                 (1, end()), ("done", {})))

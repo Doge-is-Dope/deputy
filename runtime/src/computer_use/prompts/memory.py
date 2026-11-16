@@ -14,8 +14,9 @@ You can remember rules for this user with remember, and drop one with forget.
 - Remember when the user corrects how you or an agent worked ("not that, use X", a declined step's reason, taking \
 over to do it another way), or confirms that an approach that was not obvious was right. Remember it only if it \
 should hold beyond this one time; a one-off choice for this task is not a rule.
-- Write the rule as one short instruction, why as the user gave it (their words, or the declined step's note), and \
-when it applies (the kind of task, app or site).
+- Write the rule as one short instruction, why (what the user said, or the declined step's note), and when it \
+applies (the kind of task, app or site). Write all three in English, about the user in the third person, and \
+paraphrase rather than quote: they are notes for you, not the user's words.
 - Before adding one, check what you remember: if a rule covers the same thing, replace it rather than adding \
 another, and replace one the user now contradicts.
 - Do not remember what the screen or the conversation already shows, passwords, codes or other personal data, or \

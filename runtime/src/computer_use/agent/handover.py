@@ -81,8 +81,7 @@ def task_tool(
                 ending, by = STOPPED, next(iter(stop.args), None)
                 raise
             finally:
-                background.latest[kind.agent] = worker.stop_reason  # for the turn's end
-                log.end(ending, reply, worker.stop_reason, by=by)
+                log.end(ending, reply, by=by, agent_stop_reason=worker.stop_reason)
                 with contextlib.suppress(Exception):  # the stop or error is what to tell; the store logs its own
                     await log.store.flush(log.run)
                 if resource is not None:

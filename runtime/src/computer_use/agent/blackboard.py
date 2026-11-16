@@ -1,15 +1,15 @@
 """The conversation as the agents of its tasks read it: the plan, the tasks at work and what was done so far."""
 
-from collections.abc import Sequence
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from computer_use.agent.history import tasks, user_messages
+from computer_use.agent.history import Log, tasks, user_messages
 from computer_use.agent.plan import Plan
 from computer_use.agent.trajectory import Trajectory
 from computer_use.events import PlanStep
 from computer_use.prompts import notes
-from computer_use.storage import TURN, RunSummary, Runs
+from computer_use.storage import TURN, Event, RunSummary, Runs
 
 
 class Tasks(Protocol):
@@ -60,12 +60,21 @@ class Blackboard:
         return Board(reader, requests, ended, self.plan.view(self.tasks.on_steps()), self.tasks.at_work())
 
     async def turn(self, summary: RunSummary) -> tuple[list[str], list[dict]]:
-        events = await self.store.events(summary.id)
-        other_session = bool(events) and events[0]["type"] == "start" and events[0]["session"] != self.session
-        read = user_messages(events) if other_session else [], tasks(events)
+        read = self.parts(await self.store.events(summary.id))
         if summary.ended is not None:
             self.finished[summary.id] = read
         return read
+
+    def add_turns(self, logs: Iterable[Log]) -> None:
+        """Keep the ended turns of logs read already, so the board does not read them again."""
+        for log in logs:
+            if log.summary.kind == TURN and log.summary.ended is not None:
+                self.finished[log.summary.id] = self.parts(log.events)
+
+    def parts(self, events: list[Event]) -> tuple[list[str], list[dict]]:
+        """A turn's part of the board: the user's messages, when another session's, and the tasks that ended in it."""
+        other_session = bool(events) and events[0]["type"] == "start" and events[0]["session"] != self.session
+        return user_messages(events) if other_session else [], tasks(events)
 
     def show(self, log: Trajectory) -> None:
         """Log the plan as it stands, for the page; a conversation without one logs nothing."""

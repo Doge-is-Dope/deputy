@@ -1,6 +1,6 @@
 ---
 name: design-system
-description: The web app's design system - the type scale (which font size each role uses) and the icon system (clients/web/src/components/icons.tsx; rules in references/icons.md). Use when adding or changing text sizes, adding, redrawing, resizing or reviewing an icon, or when text or an icon looks too big, too small or too heavy next to its neighbours.
+description: The web app's design system - the type scale (which font size each role uses) and the icon system (clients/web/src/components/icons.tsx; rules in references/icons.md) and layout (alignment columns, row heights, the radius scale, concentric corners, even numbers; references/layout.md). Use when adding or changing text sizes, adding, redrawing, resizing or reviewing an icon, when text or an icon looks too big, too small or too heavy next to its neighbours, or when adding or changing a row, popup, dialog, card, padding or corner radius, or checking that they line up.
 ---
 
 # Design system
@@ -10,6 +10,8 @@ Claude and Apple. Do not introduce a size, shape or pattern absent from those re
 
 - **Type**: below.
 - **Icons**: [references/icons.md](references/icons.md).
+- **Layout and corners**: [references/layout.md](references/layout.md): the columns things line up on, row heights, the
+  radius scale, concentric corners and the even-numbers rule.
 
 ## Type
 
@@ -41,11 +43,13 @@ drawing, not text to read.
   cannot give, and goes into this table.
 - Keep a role's size the same everywhere it appears (the conversation is 14 in a message, a reply and the status line).
 - Muted color, not a smaller size, sets text apart: a step's details from its title, a sidebar heading from its rows.
-- The @Computer logo is 1em with `em` offsets (`mentions.tsx`, `composer.tsx`), so it follows the text it sits in;
-  check it after changing that text's font.
 
 ## Measuring
 
 - [scripts/measure-type.js](scripts/measure-type.js): paste it into the Browser pane's JavaScript tool on the Vite dev
   server. It lists every rendered font size with examples and flags one off the scale.
 - [scripts/measure-icons.js](scripts/measure-icons.js): see references/icons.md.
+- [scripts/draw-guides.js](scripts/draw-guides.js): draws the columns of the open popup, dialog or page as dashed
+  lines, red on a shared column, blue on an edge that misses one. Judge spacing and alignment from a screenshot with
+  these lines on, not from numbers alone; see references/layout.md.
+- [scripts/measure-corners.js](scripts/measure-corners.js): see references/layout.md.

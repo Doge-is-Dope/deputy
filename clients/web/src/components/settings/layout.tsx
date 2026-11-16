@@ -14,7 +14,8 @@ export function Card({ children }: { children: ReactNode }) {
   )
 }
 
-/** A setting's name on the left, its value or control on the right; on a narrow screen a wide one goes under it. */
+/** A setting's name on the left, its value or control on the right; on a narrow screen a wide one goes under it. 56
+ * tall, a 36 control's too (py-2.5), so a card's rows are one height whatever they hold. */
 export function Row({
   label,
   children,
@@ -23,7 +24,7 @@ export function Row({
   children: ReactNode
 }) {
   return (
-    <div className="flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-3 py-3">
+    <div className="flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-3 py-2.5">
       <div>{label}</div>
       <div className="ml-auto min-w-0 text-right break-words text-muted-foreground">
         {children}

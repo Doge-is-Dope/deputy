@@ -7,7 +7,7 @@ import computer_use.agent.computer_agent as computer_agent
 import computer_use.desktop.executor
 from computer_use.agent.inbox import Inbox
 from computer_use.agent.review import Verdict
-from conftest import run_turn, runner_of
+from conftest import desktop_ended, run_turn, runner_of
 from conftest import events_of, first_run, run_file, task_states
 from computer_use.config import RunChoices
 from computer_use.desktop.control import ApprovalFile, ControlFile
@@ -82,7 +82,7 @@ async def test_a_declined_step_never_runs_and_the_agent_hears_why(settings, comp
     assert "What the user said: 寄給 Alice，不是 Bob" in action["result"]
     (decision,) = logged(result, "decision")
     assert (decision["outcome"], decision["note"]) == ("declined", "寄給 Alice，不是 Bob")
-    assert result.computer == "replied"
+    assert desktop_ended(result) == "replied"
 
 
 async def test_taking_the_desktop_answers_a_step_awaiting_approval(settings, computer, monkeypatch):
@@ -117,7 +117,7 @@ async def test_three_declined_steps_end_the_task(settings, computer, monkeypatch
     result = await asyncio.wait_for(run_turn(settings, "寄出週報", max_steps=10, computer=computer), timeout=20)
     await user
 
-    assert computer.calls == [] and result.computer == "declined"
+    assert computer.calls == [] and desktop_ended(result) == "declined"
     assert "the user declined 3 of its steps" in computer_use_result(result)["result"]
     assert handed_back(result)["reply"] == ""
 

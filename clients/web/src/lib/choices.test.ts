@@ -64,11 +64,22 @@ describe("choices", () => {
       },
       approvals: "auto",
       memory: { learn: true, use: true },
+      commands: true,
     })
     expect(localStorage.getItem("approvals")).toBe("auto")
     resetModels()
     expect(currentChoices()).toMatchObject({ agents: {}, approvals: "auto" })
     expect(localStorage.getItem("agents")).toBeNull()
+  })
+
+  it("lets the agent run commands unless turned off, and stores only that it is off", () => {
+    const { currentChoices, setCommands } = choices
+    expect(currentChoices().commands).toBe(true)
+    setCommands(false)
+    expect(currentChoices().commands).toBe(false)
+    expect(localStorage.getItem("windows-commands")).toBe("off")
+    setCommands(true)
+    expect(localStorage.getItem("windows-commands")).toBeNull()
   })
 
   it("keeps memory on unless turned off, and stores only what is off", () => {

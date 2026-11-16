@@ -10,7 +10,7 @@ from computer_use.memory import EDITABLE, NAME, Memory, Source
 
 NO_ID = {"_id": 0}
 # Unique keys first; storage.mongo.connect makes them.
-INDEXES = {"memories": [(["user", "id"], True), (["user", "created"], False)]}
+INDEXES = {"memories": [(["user", "id"], {"unique": True}), (["user", "created"], {})]}
 
 
 class MongoMemoryStore:

@@ -1,13 +1,14 @@
 import asyncio
 import json
 import threading
+from pathlib import Path
 
 import pytest
 
 from computer_use.config import Settings
 from computer_use.files.local import LocalFileStore
 from computer_use.adapters import build_stores
-from computer_use.storage import ALL, FORMAT, TASK, TURN
+from computer_use.storage import ALL, FORMAT, TASK, TURN, cursor_of
 from computer_use.storage.files import FileRunStore, FileRuns
 from conftest import MemoryFileStore, file_runs, runs_dir
 
@@ -41,6 +42,19 @@ async def test_appends_keep_their_order_and_read_back_from_any_index(store):
     assert await store.events("nope") == []
     await store.flush(run)
     await store.flush("nope")
+
+
+async def test_a_run_names_its_conversation_and_reads_without_the_model_messages_when_asked(store, stores):
+    first, later, old, empty = [await store.create() for _ in range(4)]
+    store.append(first, start(first))
+    store.append(later, start(first))
+    store.append(later, {"type": "input", "agent": "main", "message": {"data": {"content": "hi"}}})
+    store.append(old, start(old, version=FORMAT - 1))
+
+    assert [await store.thread(run) for run in (first, later, old, empty, "nope")] == [first, first, None, None, None]
+    assert await stores.of("bob").thread(first) is None
+    assert ["message" in event for event in await store.events(later)] == [False, True]
+    assert ["message" in event for event in await store.events(later, messages=False)] == [False, False]
 
 
 async def test_runs_are_unique_and_sort_by_when_they_started(store):
@@ -252,7 +266,7 @@ async def test_rebuilding_from_the_events_makes_the_documents_the_appends_made(m
     await every_kind_of_run(runs)
     appended, revision = await projections(store), await runs.revision()
     assert [len(each) for each in appended] == [3, 2]
-    assert await store.rebuild("local") == (3, 2)
+    assert await store.rebuild("local") == (3, 2, 1)
     assert await projections(store) == appended and await runs.revision() > revision
 
 
@@ -291,6 +305,24 @@ async def test_rebuilding_repairs_one_users_documents_and_leaves_the_others(mong
 
 
 @pytest.mark.mongo
+async def test_rebuilding_erases_the_runs_of_an_older_format_with_their_files(mongo_store):
+    runs, bobs = mongo_store.of("local"), mongo_store.of("bob")
+    kept, old, bobs_old = await runs.create(), await runs.create(), await bobs.create()
+    runs.append(kept, start(kept, at=1))
+    runs.append(old, start(old, version=FORMAT - 1, at=2))
+    bobs.append(bobs_old, start(bobs_old, version=FORMAT - 1, at=3))
+    for view, run in ((runs, kept), (runs, old), (bobs, bobs_old)):
+        await view.put_file(run, "001-key.png", b"png")
+        await view.flush(run)
+    assert await mongo_store.rebuild("local") == (1, 1, 1)
+    assert await runs.events(old) == [] and len(await runs.events(kept)) == 1
+    assert await runs.get_file(kept, "001-key.png") == b"png"
+    with pytest.raises(FileNotFoundError):
+        await runs.get_file(old, "001-key.png")
+    assert len(await bobs.events(bobs_old)) == 1 and await bobs.get_file(bobs_old, "001-key.png") == b"png"
+
+
+@pytest.mark.mongo
 def test_rebuilding_one_user_from_the_command_line(tmp_path, mongo_url, capsys):
     from computer_use.storage.rebuild import main
 
@@ -305,7 +337,7 @@ def test_rebuilding_one_user_from_the_command_line(tmp_path, mongo_url, capsys):
     asyncio.run(broken("alice"))
     asyncio.run(broken("bob"))
     assert main(["--user", "alice"], settings) == 0
-    assert capsys.readouterr().out == "alice: 3 runs, 2 conversations\n"
+    assert capsys.readouterr().out == "alice: 3 runs, 2 conversations, 1 older-format runs erased\n"
 
     async def listed(user):
         store, _, _ = build_stores(settings)
@@ -317,11 +349,22 @@ def test_rebuilding_one_user_from_the_command_line(tmp_path, mongo_url, capsys):
     assert asyncio.run(listed("alice")) == 2 and asyncio.run(listed("bob")) == 0
 
 
-def test_a_files_store_has_nothing_to_rebuild(tmp_path, capsys):
+def test_rebuilding_a_files_store_erases_older_format_runs_and_leaves_folders_without_a_record(tmp_path, capsys):
     from computer_use.storage.rebuild import main
 
+    async def written():
+        runs = file_runs(tmp_path).of("local")
+        kept, old, files_only = await runs.create(), await runs.create(), await runs.create()
+        runs.append(kept, start(kept, at=1))
+        runs.append(old, start(old, version=FORMAT - 1, at=2))
+        for run in (kept, old, files_only):  # files_only: a database's run, whose record is not here
+            await runs.put_file(run, "001-key.png", b"png")
+        return kept, files_only
+
+    kept, files_only = asyncio.run(written())
     assert main([], Settings(_env_file=None, data_dir=tmp_path, database_url="")) == 0
-    assert "nothing to rebuild" in capsys.readouterr().out
+    assert capsys.readouterr().out == "local: 1 runs, 1 conversations, 1 older-format runs erased\n"
+    assert sorted(path.name for path in runs_dir(tmp_path).iterdir()) == sorted([kept, files_only])
 
 
 async def test_the_file_store_parses_records_off_the_event_loop(tmp_path, monkeypatch):
@@ -418,6 +461,28 @@ async def test_a_search_finds_conversations_by_what_the_user_and_the_main_agent_
     assert await store.search("記事本") == []
 
 
+async def test_a_search_goes_on_after_a_hit_through_more_conversations_than_it_walks_at_once(store):
+    """Every third conversation matches, by its words or by its name alone; each page goes on after the last hit."""
+    threads = []
+    for n in range(130):
+        run = await store.create()
+        threads.append(run)
+        store.append(run, start(run, f"open the ledger {n}" if n % 3 == 0 else f"tidy up {n}", at=n + 1))
+        if n % 6 == 3:
+            store.append(run, {"type": "title", "text": f"Ledger notes {n}"})
+    wanted = [thread for n, thread in enumerate(threads) if n % 3 == 0][::-1]
+    seen, before = [], None
+    while True:
+        hits = await store.search("LEDGER", 10, before)
+        seen += [hit.conversation.id for hit in hits]
+        if len(hits) < 10:
+            break
+        before = cursor_of(hits[-1].conversation)
+    assert seen == wanted
+    with pytest.raises(ValueError):
+        await store.search("ledger", 10, "not a cursor")
+
+
 async def test_a_search_finds_a_conversation_once_by_its_latest_match_and_not_once_deleted(store):
     first, second = await store.create(), await store.create()
     store.append(first, start(first, "打開記事本", at=1))
@@ -485,6 +550,23 @@ async def test_a_files_store_erases_a_prefix_and_nothing_beside_it(files):
     with pytest.raises(FileNotFoundError):
         await files.get("users/a/runs/r1/thumbs/160/001-key.png.webp")
     assert await files.get("users/a/runs/r10/001-key.png") == await files.get("users/b/runs/r1/001-key.png") == b"png"
+
+
+async def test_a_local_write_cut_short_leaves_no_partial_file(tmp_path, monkeypatch):
+    files = LocalFileStore(tmp_path)
+    await files.put("users/a/runs/r1/001-key.png", b"earlier")
+
+    def cut_short(path, data):
+        with path.open("wb") as file:
+            file.write(data[: len(data) // 2])
+        raise OSError("no space left on device")
+
+    monkeypatch.setattr(Path, "write_bytes", cut_short)
+    for key in ("users/a/runs/r1/001-key.png", "users/a/runs/r1/002-key.png"):
+        with pytest.raises(OSError):
+            await files.put(key, b"a whole screenshot")
+    assert await files.get("users/a/runs/r1/001-key.png") == b"earlier"
+    assert [path.name for path in (tmp_path / "users/a/runs/r1").iterdir()] == ["001-key.png"]
 
 
 async def test_the_local_files_store_takes_no_key_out_of_its_folder(tmp_path):

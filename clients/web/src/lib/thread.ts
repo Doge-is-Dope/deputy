@@ -19,7 +19,7 @@ export type Step = {
   call?: ModelEvent["tool_calls"][number] // what the model asked for, before its result arrives
   action?: ActionEvent
   finished?: string[] // for a step of the plan reported done: what the plan calls each
-  // It needed approval first (the composer asks: agent/confirm.py): whether auto review looks at it first, as the
+  // It needed approval first (the composer asks: middleware/approvals.py): whether auto review looks at it first, as the
   // user had it when the step came up, and whether it has yet; how it was answered, by whom ("auto": auto review,
   // with its reason as the note), once it was.
   approval?: {
@@ -57,7 +57,8 @@ export type Task = {
   outcome: "running" | "done" | "stopped" | "failed"
   entries: TaskEntry[]
   result: string // what the agent doing it said last, once it ended
-  // The time it waited for the user rather than worked: for a step's answer, for the desktop back. Since when it waits now, by the log, if it does.
+  // The time it waited for the user rather than worked: for a step's answer, for the desktop back. `waitingSince`:
+  // since when it waits now, by the log, if it does.
   waited: number
   waitingSince: number | null
 }
@@ -103,7 +104,7 @@ export type Item =
       question: string
       options: QuestionOption[]
       multiple: boolean // several options may be chosen
-      placeholder: string
+      suggestion: string // the answer the agent expects typed, if any
       time: number // when it was asked: only what is sent later answers it
       answered: boolean
       answer: { id: string; text: string } | null // the message that answered it, drawn with it
@@ -138,6 +139,8 @@ export type Shot = { name: string; label: string }
 
 export type Thread = {
   goal: string | null
+  // What the user attached to the message that began it: files of its first log.
+  attachments: { file: string; name: string }[]
   // In the order to show them: each where it happened, a task where it was handed over, done or not.
   items: Item[]
   end: EndEvent | null
@@ -147,8 +150,6 @@ export type Thread = {
   screenshots: Shot[]
   // The main agent is working out what to say: since the user's latest message or a task's end, it has not answered.
   thinking: boolean
-  // Whether the computer agent has the run: from its task's start until its end.
-  usingComputer: boolean
   // The steps the main agent listed for the work, if it listed any: each call writes the whole list again.
   plan: Plan | null
   // Each task the run handed over, by its key, shown alone or among its agents.
@@ -229,6 +230,7 @@ function optionsOf(value: unknown): QuestionOption[] {
 export function buildThread(events: RunEvent[]): Thread {
   const thread: Thread = {
     goal: null,
+    attachments: [],
     items: [],
     end: null,
     started: events[0]?.time ?? null,
@@ -236,7 +238,6 @@ export function buildThread(events: RunEvent[]): Thread {
     last: events.at(-1)?.time ?? null,
     screenshots: [],
     thinking: false,
-    usingComputer: false,
     plan: null,
     tasks: new Map(),
   }
@@ -353,7 +354,7 @@ export function buildThread(events: RunEvent[]): Thread {
           )
           if (at < 0) {
             // Handed over by the runtime, as a message for the desktop the main agent's reply did not hand over
-            // (agent/main_agent.py DESKTOP_HANDED): its own line, where it started.
+            // (middleware/chat.py's Mention): its own line, where it started.
             const handed = task(
               `task-${index}`,
               event.time,
@@ -381,14 +382,8 @@ export function buildThread(events: RunEvent[]): Thread {
       }
       case "note": {
         const work = workOf(event)
-        if (
-          event.code === "goal" ||
-          event.code === "runFinished" ||
-          event.code === "runStopped" ||
-          event.code === "runFailed" ||
-          event.code === "takeoverRequested"
-        ) {
-          // The goal, run outcome and takeover request already have dedicated UI.
+        if (event.code === "goal" || event.code === "takeoverRequested") {
+          // The goal and takeover request already have dedicated UI.
         } else if (work && event.code === "userControl") {
           wait(work, event.time)
           control(work, null)
@@ -518,7 +513,7 @@ export function buildThread(events: RunEvent[]): Thread {
       }
       case "action": {
         if (event.agent === "main") {
-          // Telling a task something or asking the user ends the main agent's turn too (agent.main_agent).
+          // Telling a task something or asking the user ends the main agent's turn too (middleware/chat.py).
           if (
             (event.tool === TELL_TASK || event.tool === ASK_USER) &&
             event.status === "success"
@@ -537,7 +532,7 @@ export function buildThread(events: RunEvent[]): Thread {
                 question: String(event.args.question ?? ""),
                 options,
                 multiple: event.args.multiple === true && options.length > 0,
-                placeholder: String(event.args.placeholder ?? ""),
+                suggestion: String(event.args.suggestion ?? ""),
                 time: event.time,
                 answered: false,
                 answer: null,
@@ -593,8 +588,8 @@ export function buildThread(events: RunEvent[]): Thread {
               )
             }
           } else {
-            // A turn that has handed work over ends there (agent.main_agent): nothing asks the main agent for more until the
-            // task ends or the user writes.
+            // A turn that has handed work over ends there (middleware/chat.py): nothing asks the main agent for more
+            // until the task ends or the user writes.
             thread.thinking = false
           }
           break
@@ -683,14 +678,11 @@ export function buildThread(events: RunEvent[]): Thread {
       case "input":
         // A message the runtime gave the main agent (a task's result, its status): it is the main agent's turn.
         if (event.agent === "main") thread.thinking = true
+        if (event.attachments && thread.attachments.length === 0)
+          thread.attachments = event.attachments
         break
     }
   })
-  // The computer agent has the run from its task's start till its end.
-  thread.usingComputer = [...running.values()].some(
-    (each) => each.agent === "computer"
-  )
-
   thread.items = thread.items
     .map((item, index) => ({ item, index }))
     .sort(
@@ -750,10 +742,6 @@ export type Phase = {
   entries: TaskEntry[]
 }
 
-/**
- * A task's entries in groups of steps, a new one wherever the agent says something; notes before any step stay as
- * they are.
- */
 /** A step of the plan reported done, or a question to the main agent: lines of their own, not folded with the actions. */
 export function isPlanLine(step: Step): boolean {
   const { tool } = stepTool(step)
@@ -762,6 +750,10 @@ export function isPlanLine(step: Step): boolean {
   )
 }
 
+/**
+ * A task's entries in groups of steps, a new one wherever the agent says something; notes before any step stay as
+ * they are.
+ */
 export function phasesOf(entries: TaskEntry[]): (TaskEntry | Phase)[] {
   const out: (TaskEntry | Phase)[] = []
   let phase: Phase | null = null
@@ -804,11 +796,28 @@ export function stepUnderWay(task: Task): Step | null {
     : null
 }
 
-/** What the agent working on a task does now: the step under way, or that it thinks about its next. */
-export function doingNow(task: Task): string {
+/** The last step a task asked for, by its key: under way or done. */
+export function lastAsked(task: Task): string | null {
+  const last = task.entries.findLast((entry) => entry.kind === "step")
+  return last?.kind === "step" && last.step.call ? last.key : null
+}
+
+/**
+ * What the agent working on a task does now: the step under way, or that it thinks about its next. A step done
+ * within its shortest time on show (`lately`, its key) is still said, so one over at once doesn't only flicker by.
+ */
+export function doingNow(task: Task, lately: string | null = null): string {
   const call = stepUnderWay(task)?.call
   if (call?.name === ASK) return t().run.work.waiting.answer
-  return call ? describeAction(call.name, call.args).label : t().run.busy.model
+  if (call) return describeAction(call.name, call.args).label
+  const last = task.entries.findLast((entry) => entry.kind === "step")
+  const done =
+    lately !== null && last?.kind === "step" && last.key === lately
+      ? last.step.call
+      : null
+  return done && done.name !== ASK
+    ? describeAction(done.name, done.args).label
+    : t().run.busy.model
 }
 
 /** Whether the log has the agent waiting for the desktop the user has: its last line for their turn still open. */

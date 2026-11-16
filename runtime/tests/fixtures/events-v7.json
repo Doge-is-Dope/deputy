@@ -19,6 +19,15 @@
         "time": 100
       },
       {
+        "type": "input",
+        "agent": "main",
+        "attachments": [
+          { "file": "main-000-message.png", "name": "報表.png" },
+          { "file": "main-000-message-2.pdf", "name": "報表.pdf" }
+        ],
+        "time": 100
+      },
+      {
         "type": "model",
         "agent": "main",
         "text": "I will open it.",
@@ -88,7 +97,6 @@
       {
         "type": "end",
         "stop_reason": "replied",
-        "computer": null,
         "summary": "I will open it.",
         "time": 102
       }
@@ -165,9 +173,9 @@
       {
         "type": "end",
         "stop_reason": "ended",
-        "computer": "replied",
         "summary": "The report is open.",
-        "time": 110
+        "time": 110,
+        "agent_stop_reason": "replied"
       }
     ],
     [
@@ -193,8 +201,7 @@
         "type": "end",
         "stop_reason": "replied",
         "summary": "The report is open.",
-        "time": 111,
-        "computer": "replied"
+        "time": 111
       }
     ]
   ]

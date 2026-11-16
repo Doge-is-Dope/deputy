@@ -10,11 +10,16 @@ services:
     # Settings pass through from .env by name; an unset one keeps its default in config.py. Only what this container
     # decides is set here.
     environment:
-      # The RDP launcher validates these; a deployment with another backend need not provide them.
+      # rdp-entrypoint.sh requires these; a deployment with another backend need not provide them.
       - RDP_HOST
       - RDP_USER
       - RDP_PASSWORD
       - RDP_DOMAIN
+      # Commands on the Windows machine (README: Windows Tools); off with neither a path nor a token.
+      - WINDOWS_TOOLS_PATH
+      - WINDOWS_TOOLS_TOKEN
+      - WINDOWS_TOOLS_HOST
+      - WINDOWS_TOOLS_PORT
       # Runs, projects and memories go to the mongo service (files under data/ are for running outside compose).
       - CU_DATABASE_URL=mongodb://runtime:${MONGO_RUNTIME_PASSWORD}@mongo/computer_use?replicaSet=rs0
       - CU_AUTH=${CU_AUTH:-none}  # said outright: none is safe only while CU_BIND is 127.0.0.1
@@ -78,7 +83,7 @@ services:
     restart: unless-stopped
 
   # One-member replica set, reachable only inside this network; the runtime's user can use only its database. A replica
-  # set, not a lone server: appends wait for the journal on a majority, and change streams need one.
+  # set, not a lone server: appends wait for the journal on a majority.
   mongo:
     image: mongo:8.3.13  # the same tag as the CI job and runtime/README.md
     entrypoint: /mongo/entrypoint.sh

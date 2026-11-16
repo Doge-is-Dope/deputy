@@ -121,7 +121,7 @@ function ThemeName({
         aria-hidden
         data-mode={mode}
         style={seedStyle(seed)}
-        className="flex size-5 items-center justify-center rounded-[5px] bg-background text-[0.625rem] font-semibold text-link ring-1 ring-foreground/15"
+        className="flex size-5 items-center justify-center rounded-xs bg-background text-[0.625rem] font-semibold text-link ring-1 ring-foreground/15"
       >
         Aa
       </span>
@@ -161,7 +161,7 @@ export function Appearance() {
                     <Radio.Root
                       value={value}
                       aria-label={t.settings.modes[value]}
-                      className="rounded-[11px] p-[3px] ring-2 ring-transparent transition-[box-shadow,scale] duration-150 ease-(--ease-out) outline-none not-data-checked:hover:ring-foreground/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-[0.97] data-checked:ring-link"
+                      className="rounded-xl p-1 ring-2 ring-transparent transition-[box-shadow,scale] duration-150 ease-(--ease-out) outline-none not-data-checked:hover:ring-foreground/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-[0.97] data-checked:ring-link"
                     />
                   }
                 >

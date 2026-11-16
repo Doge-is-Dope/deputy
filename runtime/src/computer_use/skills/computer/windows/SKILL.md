@@ -1,6 +1,6 @@
 ---
 name: windows
-description: Using Windows. Read before looking for an app or file on this computer, before opening a file in an app, before reporting that something is not on this computer, and when an animated screen refuses your keys.
+description: Using Windows. Read before looking for an app or file on this computer, before opening a file in an app, before changing a document that is open in an app with a command, before reporting that something is not on this computer, and when an animated screen refuses your keys.
 ---
 
 ## Finding what is on this computer
@@ -19,6 +19,10 @@ A README or web page says what its author suggests, not what this computer has. 
 
 - Double-clicking a file with no associated app opens a prompt to choose one. Close it, start the app, and load the file from the app's own Open command.
 - An app left open may hold another file. Load the file you were asked for, even when the app looks ready, and do not report it as open until the app shows it.
+
+## Changing an open document with a command
+
+A document open on the screen belongs to the app showing it. To change it with a command, attach to that running app and save it there: `[Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application')`, or `'Word.Application'`, then find the document among its open ones by name. A new instance (`New-Object -ComObject Excel.Application`) gets only a read-only copy of a file another instance holds, so what it writes never reaches the file. Check the change on the screen afterwards.
 
 ## Screens that keep moving
 

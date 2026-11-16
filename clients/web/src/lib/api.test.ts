@@ -9,9 +9,8 @@ import {
   type Status,
 } from "@/lib/api"
 
-// The API's requests carry the browser's choices and language, which these selectors don't touch.
+// The API's requests carry the browser's choices, which these selectors don't touch.
 vi.mock("@/lib/choices", () => ({ currentChoices: () => ({}) }))
-vi.mock("@/lib/i18n", () => ({ locale: () => "en" }))
 
 const status = (part: Partial<Status>) =>
   ({
@@ -47,12 +46,20 @@ describe("status selectors", () => {
       run: "r2",
       thread: "t2",
       turn: "r2",
-      tasks: [],
+      tasks: [] as string[],
     } as Status["running"][number]
     const approval = { id: "a", run: "task-1" } as Status["approval"]
     expect(waitingSession(status({ running: [other, asking], approval }))).toBe(
       asking
     )
+    // A task asking the user to take over is the active log, not the session's.
+    const takeover = status({
+      running: [other, asking],
+      active: "task-1",
+      control: { owner: "user", since: 100, reason: "a password" },
+    })
+    expect(waitingOf(takeover)?.run).toBe("task-1")
+    expect(waitingSession(takeover)).toBe(asking)
     expect(waitingSession(status({ running: [other], approval }))).toBeNull()
     expect(waitingSession(status({ running: [asking] }))).toBeNull()
     expect(waitingSession(null)).toBeNull()
@@ -85,7 +92,10 @@ describe("waitingOf", () => {
     )
 
   it("waits for the user only when the agent asked them to take over", () => {
-    expect(taken("Please sign in.")).toMatchObject({ for: "takeover", reason: "Please sign in." })
+    expect(taken("Please sign in.")).toMatchObject({
+      for: "takeover",
+      reason: "Please sign in.",
+    })
     expect(taken("taken over from web")).toBeNull()
     expect(taken("taken over from cli")).toBeNull()
   })

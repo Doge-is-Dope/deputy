@@ -42,8 +42,7 @@ export function applyEventBatch(
  * Reads the server-sent events of a response (server.py's: an id and a line of data each, a "done" event at the end and
  * comments that keep the connection open), handing on each event and its id. The reply the main agent is writing comes
  * between them, without an id: all of it so far, and whether it is the final reply ("draft"), then what it adds
- * ("delta"). True once "done" arrives;
- * false if the stream ends before it.
+ * ("delta"). True once "done" arrives; false if the stream ends before it.
  */
 export async function readEvents(
   body: ReadableStream<Uint8Array>,

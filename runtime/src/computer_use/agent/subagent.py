@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 
 from computer_use.agent.inbox import Inbox
 from computer_use.middleware.common import raise_if_stopped, retrying_failed_streams
-from computer_use.middleware.subagent import SubagentMiddleware
+from computer_use.middleware.subagent import HandOverAtLimit, SubagentMiddleware
 from computer_use.agent.trajectory import Trajectory
 from computer_use.config import RunChoices, Settings
 from computer_use.agent.blackboard import Blackboard, Board
@@ -21,7 +21,7 @@ from computer_use.tools.plan import task_tools
 
 # How a task ended. "replied": its own last turn called no tool. The runtime stopped the others: "step_limit" when its
 # last allowed model call still asked for a tool, "error" when what it works on could not be used at all, or a reason of
-# its agent's own. Only a task that replied has a reply.
+# its agent's own. A task that replied has a reply, and one the limit ended has its hand-over.
 StopReason = str
 
 # A task's result as the main agent reads it, and what the log keeps of it for later tasks' blackboard.
@@ -85,11 +85,14 @@ class Subagent:
         self, model, tools: list, prompt: str, guard: SubagentMiddleware, start: HumanMessage,
         middleware: Sequence[AgentMiddleware] = (),
     ) -> str:
-        """Run the task's agent until it replies or the runtime stops it; its reply, and how it stopped in
-        `stop_reason`. The middleware runs in order: `guard`, the agent's own, the model call limit, then retries of
-        failed streams. Middleware every subagent needs goes in this list."""
+        """Run the task's agent until it replies or the runtime stops it; its reply, or its hand-over at the model call
+        limit, and how it stopped in `stop_reason`. The middleware runs in order: `guard`, the agent's own, the
+        hand-over, the model call limit (one call past the task's, for the hand-over), then retries of failed streams.
+        Middleware every subagent needs goes in this list."""
+        handover = HandOverAtLimit(self.context.max_steps, self.log)
         stack = [
-            guard, *middleware, ModelCallLimitMiddleware(run_limit=self.context.max_steps, exit_behavior="end"),
+            guard, *middleware, handover,
+            ModelCallLimitMiddleware(run_limit=self.context.max_steps + 1, exit_behavior="end"),
             retrying_failed_streams(),
         ]
         shared = task_tools(self.context.blackboard, self.task_id, guard.inbox, self.log)
@@ -97,7 +100,7 @@ class Subagent:
         config = {
             # Each model call passes through every graph node once; only a backstop: the model call limit ends the
             # task first.
-            "recursion_limit": self.context.max_steps * len(agent.get_graph().nodes) + 10,
+            "recursion_limit": (self.context.max_steps + 1) * len(agent.get_graph().nodes) + 10,
             # A LangSmith trace carries this run's id as metadata.
             "metadata": {"run": self.log.run},
         }
@@ -109,17 +112,21 @@ class Subagent:
                 await self.log.input(message, "end")
         # The transcript's last message may be the runtime's (the model call limit's, or the guard's), not the agent's.
         own = guard.last
-        if guard.stopped is not None:
-            self.stop_reason = guard.stopped
-        elif own is not None and not own.tool_calls:
-            self.stop_reason = "replied"
-        else:
+        if handover.asked:
             self.stop_reason = "step_limit"
-        return own.text.strip() if self.stop_reason == "replied" else ""
+        elif guard.stopped is not None:
+            self.stop_reason = guard.stopped
+        else:
+            self.stop_reason = "replied"
+        return own.text.strip() if own is not None and self.stop_reason in ("replied", "step_limit") else ""
 
     def how(self) -> str:
         """How the task ended, in the main agent's words."""
         raise NotImplementedError
 
-    def report(self, reply: str, actions: list[str], after: str = "") -> str:
-        return notes.report(self.name, self.how(), reply, actions, after)
+    async def result(self, reply: str, after: str = "", content: Sequence[dict] = ()) -> Result:
+        """The task's result: its report, with `after` and then `content` for the main agent to read, and the artifact,
+        which the model does not see, keeping the task's parts for the blackboard of later tasks."""
+        actions = await self.steps()
+        report = {"type": "text", "text": notes.report(self.name, self.how(), reply, actions, after)}
+        return [report, *content], {"stop_reason": self.stop_reason, "reply": reply, "actions": actions}

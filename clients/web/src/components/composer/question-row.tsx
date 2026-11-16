@@ -1,18 +1,18 @@
 import { cn } from "cn"
 
-import { CursorEnterIcon, HandIcon } from "@/components/icons"
+import { HandIcon } from "@/components/icons"
 import { ScreenshotPeek } from "@/components/screenshot-viewer"
 import { screenshotUrl } from "@/lib/api"
 import { useT } from "@/lib/i18n"
 
 /** What was asked last, kept while its row folds away so it does not go blank as it closes. */
 export type Asked = {
-  handover: boolean
   question: string | null
   shot: { run: string; name: string } | null // the screen the step was decided from
 }
 
-/** The row over the composer's text that says what it asks, with the screen a step was decided from. */
+/** The row over the composer's text that says what it asks, with a small copy of the screen a step was decided from,
+ * which opens full size. */
 export function QuestionRow({
   question,
   asked,
@@ -46,20 +46,16 @@ export function QuestionRow({
       <div className="flex min-h-0 flex-col justify-end overflow-hidden">
         <div
           className={cn(
-            "flex shrink-0 items-center gap-2.5 px-4 pt-3.5 transition-[opacity,translate] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
+            "flex shrink-0 items-center gap-2.5 pt-3.5 pr-4 pl-4.5 transition-[opacity,translate] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
             // Closing, its words fade in half the fold, so the shrinking row never cuts through them.
             !question &&
               "translate-y-2 opacity-0 [transition-duration:150ms,300ms]"
           )}
         >
-          {/* The agent's pointer coming into the screen, as the return-control button shows it; or a hand held up, as
-            the conversation shows a step waiting. */}
-          {asked.handover ? (
-            <CursorEnterIcon className="size-5 shrink-0 text-takeover" />
-          ) : (
-            <HandIcon className="size-5 shrink-0 text-warning" />
-          )}
-          <p className="min-w-0 text-sm text-pretty">{asked.question}</p>
+          {/* A hand held up, as the conversation shows a step waiting or a takeover asked. In the column of the plus
+            button's icon. */}
+          <HandIcon className="size-5 shrink-0 text-warning" />
+          <p className="min-w-0 py-0.5 text-sm text-pretty">{asked.question}</p>
           {asked.shot && (
             <ScreenshotPeek run={asked.shot.run} name={asked.shot.name}>
               <button
@@ -71,9 +67,9 @@ export function QuestionRow({
                 <img
                   src={screenshotUrl(asked.shot.run, asked.shot.name, 192)}
                   alt=""
-                  width={96}
-                  height={60}
-                  className="aspect-[16/10] w-24 rounded-lg border bg-muted object-cover transition-opacity hover:opacity-85 max-sm:w-18"
+                  width={48}
+                  height={30}
+                  className="aspect-[16/10] w-12 rounded-xs border bg-muted object-cover transition-opacity hover:opacity-85"
                 />
               </button>
             </ScreenshotPeek>

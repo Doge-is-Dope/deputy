@@ -12,7 +12,6 @@ import io
 import json
 import re
 import shutil
-import statistics
 import subprocess
 import sys
 import tarfile
@@ -52,7 +51,7 @@ SERVER_SECONDS = 60  # for it to answer once started
 MAX_STEPS = 60
 RUN_TIMEOUT = 1800
 SETUP_TIMEOUT = 300
-# How long a desktop that dropped may take to come back before the eval stops, as long as a run waits for one.
+# How long a desktop that dropped may take to come back before the eval stops.
 RECONNECT_SECONDS = 60
 RESET_GOAL = (
     "Close every open window and dialog, and the Start menu. If asked whether to save, choose not to save. "
@@ -264,7 +263,8 @@ def run_agent(goal: str, max_steps: int, approve: bool = True, agents: dict | No
     """Send the desktop a goal and follow its session to the end, every log of it: its first turn's id, the end of
     what it showed, as the command line shows it, and whether it was stopped. With `approve`, the steps it asks
     approval for are approved; without, they wait for a person, as in any run. `agents` chooses the agents' models
-    (`choices`). A session past RUN_TIMEOUT is stopped."""
+    (`choices`). A session past RUN_TIMEOUT is stopped, and so is one whose agent asks the user while no one is here
+    to answer (`approve`)."""
     stop = threading.Event()
     if approve:
         threading.Thread(target=approve_steps, args=(stop,), daemon=True).start()
@@ -275,25 +275,38 @@ def run_agent(goal: str, max_steps: int, approve: bool = True, agents: dict | No
             run = api.start(goal, project="eval", max_steps=max_steps, computer=True, agents=agents)["id"]
         except ApiError as error:
             return None, f"Not started: {error}", False
-        feed, deadline, stopped, reply = Follow(api, run), time.monotonic() + RUN_TIMEOUT, False, None
+        feed, reply, expired = Follow(api, run), None, threading.Event()
+        threading.Thread(target=stop_at_timeout, args=(feed, run, stop, expired), daemon=True).start()
         kinds: dict[str, str] = {}
         for log, event in feed.lines():
             if event["type"] == "start":
-                kinds[log] = event.get("kind", "turn")
+                kinds[log] = event["kind"]
             if (text := shown(event)) is not None:
                 lines.append(text)
             if event["type"] == "end" and kinds.get(log) == "turn":
                 reply = event.get("summary", "")
-            if not stopped and time.monotonic() > deadline:
-                lines.append(f"Stopped after {RUN_TIMEOUT} s.")
-                with contextlib.suppress(ApiError):  # it ended meanwhile
-                    api.stop(feed.thread or run)
-                stopped = True  # and wait for it to end
+            if approve and event["type"] == "action" and event.get("tool") == "ask_user":
+                end_session(feed, run)  # nobody is here to answer it, so the run ends on its question
+        if expired.is_set():
+            lines.append(f"Stopped after {RUN_TIMEOUT} s.")
         if reply is not None:
             lines.append(f"Agent: {reply}")
     finally:
         stop.set()
-    return run, "\n".join(lines)[-1500:], stopped
+    return run, "\n".join(lines)[-1500:], expired.is_set()
+
+
+def stop_at_timeout(feed: Follow, run: str, done: threading.Event, expired: threading.Event) -> None:
+    """Stop the session once RUN_TIMEOUT has passed, unless it is `done`. On a clock: a session waiting for an answer
+    logs nothing, so a check between its events would never come."""
+    if not done.wait(RUN_TIMEOUT):
+        expired.set()
+        end_session(feed, run)
+
+
+def end_session(feed: Follow, run: str) -> None:
+    with contextlib.suppress(ApiError):  # it ended meanwhile
+        api.stop(feed.thread or run)
 
 
 def disconnected() -> str:
@@ -353,12 +366,10 @@ def model_names(agents: dict) -> str:
 
 
 def screenshot_settings(source: Path) -> dict | None:
-    """Read literal pruning constants from the tested snapshot, never import or execute that version's code.
-    An older/different implementation is unknown, rather than silently assigned the evaluator's defaults."""
-    # Where the constants live, then where older versions kept them.
-    paths = (source / "computer_use/middleware/common.py", source / "computer_use/agent/middleware.py")
-    path = next((path for path in paths if path.is_file()), None)
-    if path is None:
+    """Read literal pruning constants from the tested snapshot, never import or execute that version's code. A version
+    that keeps them elsewhere is unknown, rather than silently assigned the evaluator's defaults."""
+    path = source / "computer_use/middleware/common.py"
+    if not path.is_file():
         return None
     found = {}
     names = {"KEEP_SCREENSHOTS": "keep", "PRUNE_EVERY": "every"}
@@ -449,7 +460,7 @@ def run_setup(steps: list[dict]) -> dict:
 
 def prepare(task: Task, after_run: bool) -> tuple[Path | None, str]:
     """A clean desktop with the task's starting state built on it: the screen the agent starts from, or None.
-    A failed setup is retried once: WAA lost 10-30% of tasks to setups that failed, WAA-V2 retries them."""
+    A failed setup is retried once: other Windows benchmarks lost 10-30% of tasks to setups that failed."""
     screen = reset(after_run)
     if screen is None:
         return None, CLUTTERED
@@ -461,17 +472,19 @@ def prepare(task: Task, after_run: bool) -> tuple[Path | None, str]:
     return (observe() if result["ok"] else None), result["detail"]
 
 
-# Notes every run has: the goal it starts with, and, before turns and tasks had logs of their own, how it finished.
-ROUTINE_NOTES = {"goal", "runFinished"}
+# Notes every run has: the goal it starts with.
+ROUTINE_NOTES = {"goal"}
 
 
 def summarize(events: list[dict]) -> dict:
     """What the run's logs say: how it ended (its last turn's end), the desktop tasks the main agent handed over, what
     else the runtime noted (notes such as gone or stuck, and why actions were held back, such as taskLimit), and what
     it cost, every log's."""
-    kinds = {e.get("log"): e.get("kind", "turn") for e in events if e["type"] == "start"}
+    kinds = {e.get("log"): e["kind"] for e in events if e["type"] == "start"}
+    agents = {e.get("log"): e.get("agent") for e in events if e["type"] == "start" and e["kind"] == "task"}
     ends = [e for e in events if e["type"] == "end"]
-    end = next((e for e in reversed(ends) if kinds.get(e.get("log"), "turn") == "turn"), {})
+    end = next((e for e in reversed(ends) if kinds.get(e.get("log")) == "turn"), {})
+    last_desktop = next((e for e in reversed(ends) if agents.get(e.get("log")) == "computer"), None)
     desktop = [task for task in tasks(events) if task["agent"] == "computer"]
     codes = Counter(e["code"] for e in events if e["type"] == "note" and e.get("code") not in ROUTINE_NOTES | {None})
     codes.update(e["reason"] for e in events if e["type"] == "action" and e.get("reason"))
@@ -486,7 +499,8 @@ def summarize(events: list[dict]) -> dict:
 
     return {
         "stop_reason": end.get("stop_reason", "crashed"),  # the run's: replied, cancelled or error
-        "computer": end.get("computer"),  # how the last desktop task ended; None when the desktop was not used
+        # How the last desktop task ended, as its agent says or else its log; None when the desktop was not used.
+        "computer": last_desktop and (last_desktop.get("agent_stop_reason") or last_desktop["stop_reason"]),
         "summary": end.get("summary", ""),  # the main agent's reply
         "tasks": [{"brief": task["task"], "stop_reason": task.get("stop_reason")} for task in desktop],
         "codes": dict(codes),
@@ -560,10 +574,9 @@ def run_tasks(args, names: list[str], version: dict, source: Path, agents: dict 
         out = task_dir / str(attempt)
         out.mkdir(parents=True)  # the version's folder with it, so an eval stopped before any task leaves none
         keep(folder, version, source)
-        # Every goal is in English; older results asked most in Chinese, and their "lang" keeps them apart.
         row = {
             "no": task.no, "task": name, "attempt": attempt, "started": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "lang": "en", "goal": task.goal, "expect": task.expect, "source": task.source, "start": task.start,
+            "goal": task.goal, "expect": task.expect, "source": task.source, "start": task.start,
             "max_steps": task.max_steps, "feasible": task.feasible, "model": model, "setup": setup, "version": version,
             "settings": settings,
             "approve": not args.ask, "run": None,
@@ -676,14 +689,13 @@ def build_sheet(folder: Path, grades: dict[str, str] | None = None, rows: list[d
 
 
 def experiment(row: dict) -> tuple:
-    """Effective settings identify a cohort; equivalent requested overrides do not split it.
-    Missing legacy metadata stays unknown, never inferred from today's runtime defaults."""
-    settings, version = row.get("settings") or {}, row.get("version") or {}
+    """Effective settings identify a cohort; equivalent requested overrides do not split it."""
+    settings = row["settings"]
     return (
-        version.get("source") or version.get("commit") or "unknown",
-        json.dumps(settings.get("agents", row.get("model")), sort_keys=True),
-        json.dumps(settings.get("screenshots"), sort_keys=True),
-        row.get("lang"), row.get("max_steps"), row.get("approve"),
+        row["version"]["source"],
+        json.dumps(settings["agents"], sort_keys=True),
+        json.dumps(settings["screenshots"], sort_keys=True),
+        row.get("max_steps"), row.get("approve"),
     )
 
 
@@ -715,13 +727,11 @@ def summary(folder: Path, rows: list[dict], grades: dict[str, str]) -> str:
     lines = [f"== {folder.name}: {version_title(version)}", "   All trials; pass/graded; ? = unknown; p95 is descriptive for small samples."]
     for key, trials in groups.items():
         first = trials[0]
-        settings = first.get("settings") or {}
-        screenshots = settings.get("screenshots")
+        screenshots = first["settings"]["screenshots"]
         pruning = f"{screenshots['keep']}/{screenshots['every']}" if screenshots else "unknown"
         approval = {True: "auto-approve", False: "ask", None: "unknown"}[key[-1]]
         lines += ["", f"   {first.get('model') or 'models unknown'}",
-                  f"   source={key[0]}; lang={key[3] or '?'}; max_steps={key[4]}; approval={approval}; "
-                  f"screenshots={pruning}; settings={'recorded' if settings else 'legacy'}"]
+                  f"   source={key[0]}; max_steps={key[3]}; approval={approval}; screenshots={pruning}"]
         started = [row for row in trials if row.get("run")]
         ungraded = sum(verdict(grades.get(row["run"])) is None for row in started)
         not_run = Counter(row.get("stop_reason", "not_started") for row in trials if not row.get("run"))
@@ -782,8 +792,6 @@ def cmd_report(args) -> None:
         for row in datasets[folder]:
             if row.get("run"):
                 events = read_events(row["dir"] / "run")
-                if events and not all(key in row for key in ("usage", "agents", "agent_cost", "title_cost", "unknown_calls")):
-                    row = summarize(events) | row
                 row = row | {"steps": action_lines(events), "words": said(events)}
             trials.append(row | {"grade": grades.get(row.get("run"), ""), "verdict": verdict(grades.get(row.get("run")))})
         if folder in selected:

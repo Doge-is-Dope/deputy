@@ -5,6 +5,7 @@ library is enough, so any Python can run it."""
 
 import http.client
 import json
+import mimetypes
 import os
 import time
 import urllib.error
@@ -16,6 +17,11 @@ from pathlib import Path
 from typing import BinaryIO
 
 DEFAULT_URL = "http://127.0.0.1:8000"
+# A file whose type its name does not say goes as any file: only the coding agent opens it.
+ANY = "application/octet-stream"
+# The runtime's limits on what a message attaches. It answers a larger file before taking it, which a sender still
+# writing it sees as a broken pipe, so the size is checked here first.
+MAX_FILES, MAX_KEPT = 5, 20 * 1024 * 1024
 # A stream sends a keepalive every 15 s, so a read that waits this long means the server is gone.
 READ_SECONDS = 60
 # How often a session in progress is looked at for its next log, while none of its logs streams.
@@ -100,9 +106,12 @@ class Client:
         # A runtime that takes a token (CU_AUTH=token) is sent it with every request, from the variable it reads too.
         self.token = token if token is not None else os.environ.get("CU_AUTH_TOKEN") or None
 
-    def _open(self, method: str, path: str, body: dict | None = None, headers: dict[str, str] | None = None):
-        data = None if body is None else json.dumps(body, ensure_ascii=False).encode("utf-8")
-        sent = ({"Content-Type": "application/json"} if data is not None else {}) | (headers or {})
+    def _open(self, method: str, path: str, body: dict | None = None, headers: dict[str, str] | None = None,
+              data: bytes | None = None):
+        if body is not None:
+            data = json.dumps(body, ensure_ascii=False).encode("utf-8")
+            headers = {"Content-Type": "application/json"} | (headers or {})
+        sent = dict(headers or {})
         if self.token:
             sent["Authorization"] = f"Bearer {self.token}"
         status, stream = self._send(method, self.url + path, data, sent)
@@ -117,8 +126,9 @@ class Client:
             raise ApiError(status, answer, (answer or {}).get("error") or f"HTTP {status}")
         return stream
 
-    def _json(self, method: str, path: str, body: dict | None = None):
-        stream = self._open(method, path, body)
+    def _json(self, method: str, path: str, body: dict | None = None, headers: dict[str, str] | None = None,
+              data: bytes | None = None):
+        stream = self._open(method, path, body, headers, data)
         try:
             text = stream.read()
         finally:
@@ -141,16 +151,32 @@ class Client:
 
     def start(
         self, goal: str, *, thread: str | None = None, project: str | None = None, max_steps: int | None = None,
-        computer: bool = False, agents: dict[str, dict[str, str]] | None = None,
+        computer: bool = False, agents: dict[str, dict[str, str]] | None = None, commands: bool = True,
+        attachments: list[str] | None = None,
     ) -> dict:
         """Send a message: a new run ({"id", "thread"}), or one handed to its conversation's run in progress (with
         "message"). `computer` sends it to the desktop; `agents` chooses each agent's model and effort; `project` names
-        the project a new conversation is begun in, which the runtime makes if there is none by that name."""
+        the project a new conversation is begun in, which the runtime makes if there is none by that name. Without
+        `commands` the desktop agent runs none on Windows, only the mouse and keyboard. `attachments` are ids `upload`
+        gave; a message with them only starts a run, so one sent while its conversation works is turned away (409)."""
         body = {"goal": goal, "computer": computer}
-        for key, value in (("thread", thread), ("project_name", project), ("max_steps", max_steps), ("agents", agents)):
+        if not commands:
+            body["commands"] = False
+        for key, value in (("thread", thread), ("project_name", project), ("max_steps", max_steps), ("agents", agents),
+                           ("attachments", attachments)):
             if value is not None:
                 body[key] = value
         return self._json("POST", "/api/runs", body)
+
+    def upload(self, file: Path) -> str:
+        """Keep a file for a message to attach, typed by its name: its id. ApiError 400 or 413 says why it cannot go,
+        such as a picture over 2048 pixels on its long side, which the runtime does not shrink."""
+        if file.stat().st_size > MAX_KEPT:
+            raise ApiError(413, None, f"{file.name} is over {MAX_KEPT // 2**20} MB")
+        mime_type = mimetypes.guess_type(file.name)[0] or ANY
+        query = urllib.parse.urlencode({"name": file.name})
+        return self._json("POST", f"/api/uploads?{query}", headers={"Content-Type": mime_type},
+                          data=file.read_bytes())["id"]
 
     def events(self, run: str, after: int = -1, full: bool = False) -> Iterator[Event]:
         """The run's events after index `after`, as they come, until it ends ("done"); `full` keeps the model messages

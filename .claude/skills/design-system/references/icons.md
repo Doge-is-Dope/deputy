@@ -10,7 +10,7 @@ drawn locally rather than copied from an icon library. Provider logos are the ex
   pixels at 20px (ChatGPT's line), 1.25 at 16px and under (the `[data-icon]:is(.size-4, .size-3.5)` rule, plus trace
   and menu icons by their slot). Never set a stroke width on a drawn path; only a mask's cut has one (`OfflineIcon`).
 - Fill only where it carries meaning: the agent's solid pointer (`CursorEnterIcon`, as on the favicon), the stop
-  square, the ellipsis dots (dots, so they stay round at 16px), the provider marks and `ComputerLogo`. No filled status
+  square, the ellipsis dots (dots, so they stay round at 16px), and the provider marks. No filled status
   icons: a filled glyph among line icons reads as wrong.
 - Use a `useId()` mask for slashes and cutouts. Keep a flat cut along the slash with equal spacing on both sides,
   as in SF Symbols (`OfflineIcon`). Do not build cutouts from separate round-capped strokes. A badge on a corner is the
@@ -22,11 +22,10 @@ drawn locally rather than copied from an icon library. Provider logos are the ex
 | Size | Where |
 |---|---|
 | 24px | The composer's send arrow, in its 32px button. |
-| 20px | Toolbar and header buttons, the composer's stop (a 10px square in its 32px button), the live view's corners and take-over pill, the sidebar's menu buttons, banners. The default for a `Button` icon with no size class (`button.tsx`), for `Spinner` and for `Icon`. |
+| 20px | Toolbar and header buttons, the composer's stop (a 10px square in its 32px button), the live view's corners and take-over pill, the sidebar's menu buttons, the settings navigation, search rows, banners. The default for a `Button` icon with no size class (`button.tsx`), for `Spinner` and for `Icon`. |
 | 18px | The sidebar row's "more" ellipsis. |
-| 16px | Step lines and status marks (`TraceIcon`), menu items, provider marks in the usage details, copy buttons, the settings navigation, select chevrons, the notice's close cross. |
+| 16px | Step lines and status marks (`TraceIcon`), menu items, provider marks in the usage details, copy buttons, select chevrons, the notice's close cross. |
 | 14px | Row chevrons that fold a step open, the stacked agent heads. |
-| 1em | The @Computer logo in a message and the composer: the size of the text around it. |
 
 Set a size with a `size-*` class on the icon, or let the container's rule size it; do not pass `width`/`height`.
 
@@ -39,7 +38,7 @@ at 1.33 px for 20px) in grid units:
 - Circles are r 8.75 everywhere (status marks, `ClockIcon`, `InfoIcon`, `SpinnerIcon`), ink 19.5: the spinner swaps in
   place with the plan's status circles.
 - Smaller by nature, and left so: chevrons, the close cross, arrows, the check, the stop square, the ellipsis, the
-  mouse (`ScrollIcon`, narrow), the keyboard (flat). The provider marks and `ComputerLogo` fill all 24, as their makers
+  mouse (`ScrollIcon`, narrow), the keyboard (flat). The provider marks fill all 24, as their makers
   draw them.
 
 ## Families

@@ -132,19 +132,60 @@ export const SidebarIcon = ({
   </Icon>
 )
 
-/** Make a panel fill the page: two arrows pointing out to the corners. */
-export const ExpandIcon = (props: IconProps) => (
+/** Make a panel fill the page: two arrows pointing out to the corners; `inward`, to put it back, each turned about
+    its own middle to point in from them (index.css), with the panel. */
+export const ExpandIcon = ({
+  inward = false,
+  ...props
+}: IconProps & { inward?: boolean }) => (
   <Icon {...props}>
-    <path d="m14 10 5.5-5.5M14.5 4.5h5v5" />
-    <path d="m10 14-5.5 5.5M9.5 19.5h-5v-5" />
+    <path
+      className="expand-icon-arrow"
+      data-inward={inward || undefined}
+      style={{ transformOrigin: "16.75px 7.25px" }}
+      d="m14 10 5.5-5.5M14.5 4.5h5v5"
+    />
+    <path
+      className="expand-icon-arrow"
+      data-inward={inward || undefined}
+      style={{ transformOrigin: "7.25px 16.75px" }}
+      d="m10 14-5.5 5.5M9.5 19.5h-5v-5"
+    />
   </Icon>
 )
 
-/** Put a filled panel back: two arrows pointing in from the corners. */
-export const ShrinkIcon = (props: IconProps) => (
+/** Adding photos and files to a message, in the composer's corner: as SF Symbols' plus. */
+export const PlusIcon = (props: IconProps) => (
   <Icon {...props}>
-    <path d="M19.5 4.5 14 10M14 5v5h5" />
-    <path d="M4.5 19.5 10 14M10 19v-5H5" />
+    <path d="M12 5v14M5 12h14" />
+  </Icon>
+)
+
+/** A file the user attached, such as a PDF: as SF Symbols' doc.text. A sheet rounded 2.5 with its top right corner
+    folded down, the page the drop overlay draws; two lines of text under the fold, the second shorter. */
+export const DocumentIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M13.5 3H8a2.5 2.5 0 0 0-2.5 2.5v13A2.5 2.5 0 0 0 8 21h8a2.5 2.5 0 0 0 2.5-2.5V8Z" />
+    <path d="M13.5 3v3.5A1.5 1.5 0 0 0 15 8h3.5M9 12.5h6M9 16h4" />
+  </Icon>
+)
+
+/** Add files (`paperclip`): three nested bends, 3 apart so they stay apart at 16px, laid at 45°; ink about 20.4 across,
+    as the other icons. */
+export const PaperclipIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path
+      transform="rotate(45 12 12)"
+      d="M16.5 7.5v9a4.5 4.5 0 0 1-9 0V6a3 3 0 0 1 6 0v9a1.5 1.5 0 0 1-3 0V9"
+    />
+  </Icon>
+)
+
+/** Try again (`arrow.clockwise`): a circle open at its top right, its end arrowed on the way round. */
+export const RetryIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M19.75 12A7.75 7.75 0 1 1 17.5 6.5" />
+    <path d="M18.25 3.25V7H14.5" />
   </Icon>
 )
 
@@ -243,7 +284,6 @@ export const CopyIcon = (props: IconProps) => (
   </Icon>
 )
 
-/** Import: an arrow down into a tray, as SF Symbols' tray.and.arrow.down; a theme taken from a line of text. */
 export const ArrowUpIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M12 19V5M6 11l6-6 6 6" />
@@ -364,7 +404,7 @@ export const PointingHandIcon = (props: IconProps) => (
   </Icon>
 )
 
-/** The agent's pointer, solid as on the favicon, coming into a screen: handing the desktop back to the agent. */
+/** The agent's pointer, solid, coming into a screen: handing the desktop back to the agent. */
 export const CursorEnterIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M19 10V7a4 4 0 0 0-4-4H7a4 4 0 0 0-4 4v8a4 4 0 0 0 4 4h2.5" />
@@ -567,8 +607,7 @@ export const CircleDashedIcon = (props: IconProps) => (
   </Icon>
 )
 
-/** The plan: two lines, each after a hollow dot. The dots are 1.4 of their own
-    width apart, and a line runs 1.3 times a dot, level with its middle. */
+/** The plan: two lines, each after a hollow dot and level with its middle. */
 export const PlanIcon = (props: IconProps) => (
   <Icon {...props}>
     <circle cx="6.5" cy="6.9" r="2.75" />
@@ -589,23 +628,4 @@ export const PauseCircleIcon = (props: IconProps) => (
     <circle cx="12" cy="12" r="8.75" />
     <path d="M10 9v6M14 9v6" />
   </Icon>
-)
-
-// The app's mark
-
-/**
- * The agent's pointer on a blue tile, as the favicon draws it (public/favicon.svg). It stands in for the @ of
- * @Computer, which sends a message to the desktop. Not an icon of the set: it is filled, and its outline scales.
- */
-export const ComputerLogo = (props: IconProps) => (
-  <svg viewBox="0 0 32 32" width={32} height={32} aria-hidden {...props}>
-    <rect width="32" height="32" rx="8" fill="#2563eb" />
-    <path
-      d="M8.75 8.75 24.75 14.75 17.55 17.55 14.75 24.75Z"
-      fill="#fff"
-      stroke="#fff"
-      strokeWidth={3}
-      strokeLinejoin="round"
-    />
-  </svg>
 )

@@ -8,7 +8,7 @@ from typing import Annotated, Literal
 from langchain_core.tools import BaseTool, tool
 from pydantic import Field
 
-from computer_use.memory import KINDS, MAX_TEXT, Kind, Memory, MemoryStore, Source
+from computer_use.memory import MAX_TEXT, Kind, Memory, MemoryStore, Source
 
 REMEMBER = "remember"
 FORGET = "forget"
@@ -19,9 +19,9 @@ def memory_tools(store: MemoryStore, user: str, project: str | None, thread: str
 
     @tool(REMEMBER)
     async def remember(
-        rule: Annotated[str, Field(description="The rule, as one short instruction in the user's language.")],
-        why: Annotated[str, Field(description="Why, as the user gave it: their words, or the declined step's note.")],
-        applies: Annotated[str, Field(description="When it applies: the kind of task, app or site.")],
+        rule: Annotated[str, Field(description="The rule, as one short instruction in English.")],
+        why: Annotated[str, Field(description="Why, paraphrased in English: what the user said, or the declined step's note.")],
+        applies: Annotated[str, Field(description="When it applies, in English: the kind of task, app or site.")],
         scope: Annotated[Literal["project", "personal"], Field(
             description="project: only this project's conversations; personal: everywhere."
         )],
@@ -34,8 +34,6 @@ def memory_tools(store: MemoryStore, user: str, project: str | None, thread: str
         """Remember a rule the user taught by correcting how the work was done, for this and later conversations."""
         if scope == "project" and project is None:
             return "Not remembered: this conversation is in no project. Remember it as personal, or not at all."
-        if learned_from not in KINDS:
-            return f"Not remembered: learned_from is one of {', '.join(KINDS)}."
         now = time.time()
         fields = {
             "text": " ".join(rule.split())[:MAX_TEXT],

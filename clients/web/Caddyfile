@@ -8,6 +8,10 @@
 	header Content-Security-Policy "frame-ancestors 'none'"
 
 	handle /api/* {
+		# Room for an upload of one 20 MB file; anything larger is turned away before the runtime.
+		request_body {
+			max_size 24MB
+		}
 		# The Host header passes through unchanged, as the runtime's sign-in check expects; run events are sent on
 		# as they arrive.
 		reverse_proxy runtime:8000 {

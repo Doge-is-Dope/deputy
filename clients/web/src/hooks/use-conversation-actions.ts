@@ -1,19 +1,21 @@
 import { useEffect, useMemo, useRef, useState } from "react"
+import { flushSync } from "react-dom"
 
-import type { Handover } from "@/components/composer/composer"
 import { showError } from "@/components/notice"
 import {
   ApiError,
   api,
   approvalFor,
-  forComputer,
   runningOf,
   waitingOf,
+  waitingSession,
   type Decision,
   type Owner,
   type Pending,
+  type Started,
   type Status,
 } from "@/lib/api"
+import { sentWith, type Attachment } from "@/lib/attachments"
 import { t, useT } from "@/lib/i18n"
 
 // What a 404 means depends on the action: one that continues a conversation, unless it says otherwise.
@@ -32,7 +34,6 @@ export function useConversationActions({
   thread,
   project,
   status,
-  isMobile,
   liveOpen,
   open,
   showLive,
@@ -43,7 +44,6 @@ export function useConversationActions({
   thread: string | null
   project: string | null // the project whose home is open: a new conversation begins in it
   status: Status | null
-  isMobile: boolean
   liveOpen: boolean
   open: (thread: string | null) => void
   showLive: (focus?: boolean) => void
@@ -53,12 +53,8 @@ export function useConversationActions({
 }) {
   const say = useT()
   const input = useRef<HTMLTextAreaElement>(null)
-  const active = status?.active ?? null
   const working = thread === null ? null : runningOf(status, { thread })
   const current = working?.run ?? null
-  // Command-line runs have no inbox, so they cannot take messages while working.
-  const takesMessages = working?.pending !== undefined
-  const userHasControl = status?.control.owner === "user"
   // The step any log of the session in progress waits to have approved: its turn's or a task's.
   const approval = approvalFor(
     status,
@@ -149,31 +145,6 @@ export function useConversationActions({
     return result
   }
 
-  // Sending @Computer asks before handing the user's desktop back, except on a phone where sending is the answer.
-  const [handover, setHandover] = useState<
-    (Handover & { thread: string | null }) | null
-  >(null)
-  function handOver(): Promise<boolean> {
-    if (!userHasControl || isMobile) return Promise.resolve(true)
-    handover?.answer(false)
-    return new Promise((resolve) =>
-      setHandover({
-        thread,
-        answer: (yes) => {
-          setHandover(null)
-          resolve(yes)
-          if (!yes) input.current?.focus()
-        },
-      })
-    )
-  }
-  // A different conversation, or control returned through the live view, cancels the pending question.
-  const owner = status?.control.owner
-  useEffect(() => {
-    if (handover && (owner === "agent" || handover.thread !== thread))
-      handover.answer(false)
-  }, [handover, owner, thread])
-
   // A new conversation opens with a composer of its own in place of the one its first message was sent from: it takes
   // the focus over, so the focus stays in the composer after sending.
   const refocus = useRef<string | null>(null)
@@ -184,32 +155,41 @@ export function useConversationActions({
   }, [thread])
 
   // `queue`: while the session works, the message waits for it to end rather than steering it.
-  async function start(goal: string, queue = false) {
-    if (current !== null && takesMessages) {
-      const sent = await act(() =>
-        api.start(goal, thread ?? undefined, false, undefined, queue)
+  async function start(
+    goal: string,
+    queue = false,
+    onAccepted?: (sent: Started) => void,
+    attachments: Attachment[] = []
+  ) {
+    const queued = current !== null && queue
+    const sent = await act(() =>
+      api.start(
+        goal,
+        thread ?? undefined,
+        project ?? undefined,
+        queued,
+        attachments.flatMap((each) => (each.id ? [each.id] : []))
       )
-      const message = sent?.message
-      if (sent && message)
+    )
+    if (!sent) return false
+    const message = sent.message
+    // Files go with a run's opening message only: shown with it at once, as its words are.
+    if (!message) sentWith(sent.id, attachments)
+    // The draft clearing and the new bubble show in the same paint.
+    flushSync(() => {
+      onAccepted?.(sent)
+      if (message) {
         setJustSent((list) => [
           ...list,
-          { run: sent.id, message: { id: message, text: goal }, queued: queue },
+          { run: sent.id, message: { id: message, text: goal }, queued },
         ])
-      return sent !== null
-    }
-    // Another run owns the desktop until it finishes. Messages to this run must never return that run's control.
-    const elsewhere = active !== null && active !== current
-    const takeControl = forComputer(goal) && !elsewhere && userHasControl
-    if (takeControl && !(await handOver())) return false
-    const created = await act(() =>
-      api.start(goal, thread ?? undefined, takeControl, project ?? undefined)
-    )
-    if (created) {
-      setStarted({ run: created.id, thread: created.thread, goal })
-      if (created.thread !== thread) refocus.current = created.thread
-      open(created.thread)
-    }
-    return created !== null
+      } else {
+        setStarted({ run: sent.id, thread: sent.thread, goal })
+        if (sent.thread !== thread) refocus.current = sent.thread
+        open(sent.thread)
+      }
+    })
+    return true
   }
 
   function stop() {
@@ -246,7 +226,7 @@ export function useConversationActions({
     })
   }
 
-  // A project's id once made (or the viewer's by that name already), renamed, or deleted; null if not.
+  // The project once made (or the viewer's by that name already), renamed, or deleted; null if not.
   async function createProject(name: string) {
     const project = await act(() => api.createProject(name))
     await refreshConversations() // listed before a conversation goes into it
@@ -263,7 +243,7 @@ export function useConversationActions({
     return act(() => api.deleteProject(project), { conversations: true })
   }
 
-  // The live view presents control failures itself; only skipping a takeover reports one in the conversation.
+  // The live view presents control failures itself; only skipping a takeover reports one, in a notice.
   async function setControl(owner: Owner) {
     if (owner === "user") showLive()
     try {
@@ -276,8 +256,11 @@ export function useConversationActions({
   }
 
   const waiting = waitingOf(status)
+  // A task asks from its own log, so the wait is matched to this conversation's session by any of its logs.
   const asked =
-    waiting?.for === "takeover" && waiting.run === current ? waiting : null
+    waiting?.for === "takeover" && waitingSession(status)?.run === current
+      ? waiting
+      : null
   const [taken, setTaken] = useState<string | null>(null)
   if (asked && liveOpen && taken !== asked.id) setTaken(asked.id)
   const asking = asked !== null && taken !== asked.id ? asked : null
@@ -305,11 +288,9 @@ export function useConversationActions({
   return {
     input,
     current,
-    takesMessages,
     approval,
     steering,
     queued,
-    handover,
     asking,
     started,
     start,

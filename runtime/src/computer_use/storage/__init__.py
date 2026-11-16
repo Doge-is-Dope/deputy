@@ -22,7 +22,8 @@ MAIN = "main"
 LOCAL_USER = "local"
 # A user id as auth makes it ("local" or 32 hex characters); stores key by it.
 USER_ID = re.compile(r"[0-9a-z]{1,64}")
-MAX_HITS = 50
+# Hits a search lists at a time.
+HITS = 10
 # Snippet characters before and after the match.
 BEFORE, AFTER = 20, 80
 # Conversations per page: default and maximum.
@@ -92,8 +93,6 @@ class Project:
 
 
 class ProjectStore(Protocol):
-    """Each user's projects."""
-
     async def list(self, user: str) -> list[Project]:
         """The user's projects, oldest first."""
 
@@ -147,6 +146,10 @@ class Runs(Protocol):
         """A file of the run; FileNotFoundError if missing or foreign."""
 
     # --- conversations ---
+    async def thread(self, run: RunId) -> Thread | None:
+        """The conversation a run belongs to, its first run's id; None for a run that is missing, foreign, not
+        started, or in an unsupported format."""
+
     async def runs(self, thread: Thread) -> list[RunSummary]:
         """A conversation's runs in the current format, oldest first; none if foreign."""
 
@@ -159,8 +162,9 @@ class Runs(Protocol):
     async def delete(self, thread: Thread) -> list[RunId]:
         """Erases a conversation's records and files for good."""
 
-    async def search(self, query: str, limit: int = MAX_HITS) -> list[Hit]:
-        """Conversations whose name or words contain the query, case-insensitive, most recent first."""
+    async def search(self, query: str, limit: int = HITS, before: Cursor | None = None) -> list[Hit]:
+        """Conversations whose name or words contain the query, case-insensitive, most recent first: up to `limit`
+        of those after cursor `before`, a hit's place (`cursor_of`). ValueError for a bad cursor."""
 
     async def revision(self) -> int:
         """Changes whenever the user's list does, in any process; 0 before the first change."""
@@ -289,7 +293,7 @@ def conversations_of(summaries: Iterable[RunSummary]) -> list[Conversation]:
 
 
 def page_of(
-    conversations: list[Conversation], project: str | None = ALL, before: Cursor | None = None, limit: int = PAGE,
+    conversations: list[Conversation], project: str | None, before: Cursor | None, limit: int,
 ) -> Page[Conversation]:
     """A page of `conversations_of`'s list, as `Runs.conversations` returns it."""
     limit = page_limit(limit)
@@ -297,21 +301,21 @@ def page_of(
     if before is not None:
         last, thread = decode_cursor(before)
         listed = [each for each in listed if (each.last, each.id) < (last, thread)]
-    return paged(listed[:limit + 1], limit)
+    items = listed[:limit]
+    return Page(items, encode_cursor(items[-1].last, items[-1].id) if len(listed) > limit else None)
 
 
 def page_limit(limit: int) -> int:
     return max(1, min(limit, MAX_PAGE))
 
 
-def paged(listed: list[Conversation], limit: int) -> Page[Conversation]:
-    """A page from `listed`, which holds one extra item when there is a next page."""
-    items = listed[:limit]
-    return Page(items, encode_cursor(items[-1].last, items[-1].id) if len(listed) > limit else None)
-
-
 def encode_cursor(last: float, thread: Thread) -> Cursor:
     return base64.urlsafe_b64encode(json.dumps([last, thread]).encode()).decode()
+
+
+def cursor_of(conversation: Conversation) -> Cursor:
+    """The conversation's place in the list: a page, or a search, goes on after it."""
+    return encode_cursor(conversation.last, conversation.id)
 
 
 def decode_cursor(cursor: Cursor) -> tuple[float, Thread]:
@@ -325,9 +329,9 @@ def decode_cursor(cursor: Cursor) -> tuple[float, Thread]:
     return last, thread
 
 
-def named(conversation: Conversation, query: str) -> bool:
+def named(title: str | None, goal: str, query: str) -> bool:
     """Whether the title, or the goal until there is one, contains the query."""
-    return query.lower() in (conversation.title or conversation.goal).lower()
+    return query.lower() in (title or goal).lower()
 
 
 def said(events: list[Event]) -> Iterator[str]:

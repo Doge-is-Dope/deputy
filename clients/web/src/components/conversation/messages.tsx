@@ -17,7 +17,9 @@ import {
 } from "@/components/ui/tooltip"
 import { useNow } from "@/hooks/use-now"
 import { type AgentUsage, type Cost } from "@/lib/api"
+import { type Shown } from "@/lib/attachments"
 import {
+  agentName,
   formatCost,
   formatDateTime,
   formatDollars,
@@ -36,10 +38,10 @@ import {
   MemoryIcon,
   ProviderIcon,
 } from "@/components/icons"
+import { MessageAttachments } from "@/components/attachments"
 import { CopyButton } from "@/components/copy-button"
 import { CitedMemoriesDialog } from "@/components/memory/lines"
 import { Markdown } from "@/components/markdown/markdown"
-import { MessageText } from "@/components/mentions"
 
 // A message's actions show while the pointer is over it, the keyboard is in it or its menu is open, as the sidebar's
 // delete button does. Where nothing can hover (a touch screen) they stay. Their tooltips open below them, off the
@@ -47,21 +49,41 @@ import { MessageText } from "@/components/mentions"
 const ON_HOVER =
   "transition-opacity duration-150 motion-reduce:transition-none [@media(hover:hover)]:opacity-0 group-hover/message:opacity-100 group-has-[:focus-visible]/message:opacity-100 group-has-[[data-popup-open]]/message:opacity-100"
 
-/** A message the user sent, its copy button and when it was sent under it. */
 export function UserMessage({
   text,
   time,
+  sentHere = false,
+  run,
+  attachments = [],
 }: {
   text: string
   time?: number // when it was sent; not yet known for one still waiting to be read
+  sentHere?: boolean
+  run?: string // whose files `attachments` are
+  attachments?: Shown[]
 }) {
   return (
-    <div className="group/message flex arrive flex-col items-end gap-1">
-      <div className="max-w-[85%] rounded-3xl bg-bubble px-4 py-2.5 text-sm leading-6 whitespace-pre-wrap">
-        <MessageText text={text} />
+    <div
+      className={cn(
+        "group/message flex flex-col items-end gap-1",
+        !sentHere && "arrive"
+      )}
+    >
+      {run && attachments.length > 0 && (
+        <MessageAttachments run={run} attachments={attachments} />
+      )}
+      <div
+        data-send-bubble={sentHere || undefined}
+        className="max-w-[85%] rounded-3xl bg-bubble px-4 py-2.5 text-sm leading-6 whitespace-pre-wrap data-sending:pointer-events-none data-sending:relative data-sending:z-10"
+      >
+        {text}
       </div>
       {/* Mirrors a reply's row, as the message sits on the other side: the buttons keep to the edge. */}
-      <MessageActions text={text} time={time} className="flex-row-reverse" />
+      <MessageActions
+        text={text}
+        time={time}
+        className="flex-row-reverse group-has-[[data-sending]]/message:invisible group-has-[[data-sending]]/message:opacity-0 group-has-[[data-sending]]/message:transition-none"
+      />
     </div>
   )
 }
@@ -139,7 +161,7 @@ function ReplyMore({ about }: { about: About }) {
                     variant="ghost"
                     size="icon-xs"
                     aria-label={t.run.usage}
-                    className="text-muted-foreground data-popup-open:bg-muted"
+                    className="touch-target text-muted-foreground [--touch-w:2.125rem] data-popup-open:bg-muted"
                   />
                 }
               />
@@ -185,6 +207,7 @@ function ReplyMore({ about }: { about: About }) {
         </DropdownMenuContent>
       </DropdownMenu>
       <UsageDialog
+        cost={about.cost}
         agents={about.agents}
         open={opened === "details"}
         onOpenChange={close}
@@ -198,13 +221,21 @@ function ReplyMore({ about }: { about: About }) {
   )
 }
 
-/** Each agent by the model it used (the main agent's first, then those it handed work to), by kind of token as each is
- * priced: the input read from and written to the cache apart from the rest, kinds not used left out. */
+// A row of the usage dialog, or an agent's group of them: on the dialog's columns, its highlight 8px from the dialog's
+// sides and rounded 12, as the close button is, so both are concentric with the dialog's corners; the words stay put.
+const ROW = "col-span-full -mx-2 grid grid-cols-subgrid rounded-lg px-2"
+
+/** Each agent by name and the model it used (the main agent's first, then those it handed work to), by kind of token as
+ * each is priced: the input read from and written to the cache apart from the rest, kinds not used left out. With more
+ * than one, the total comes first, as the menu shows it, and a line parts each from the next. Under the pointer, a
+ * kind's row is highlighted, and the agent's whole group from its own row, as its cost is theirs together. */
 function UsageDialog({
+  cost,
   agents,
   open,
   onOpenChange,
 }: {
+  cost: Cost | null
   agents: AgentUsage[]
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -212,63 +243,85 @@ function UsageDialog({
   const t = useT()
   const words = t.run.about
   const groups = agents.map((each) => {
-    const { usage, cost } = each
+    const { usage, cost: spent } = each
     const kinds: [string, number, number | undefined][] = [
       [
         words.input,
         usage.input - usage.cached - usage.cache_write,
-        cost?.input,
+        spent?.input,
       ],
-      [words.cached, usage.cached, cost?.cached],
-      [words.cacheWrite, usage.cache_write, cost?.cache_write],
-      [words.output, usage.output, cost?.output],
+      [words.cached, usage.cached, spent?.cached],
+      [words.cacheWrite, usage.cache_write, spent?.cache_write],
+      [words.output, usage.output, spent?.output],
     ]
     return {
+      agent: each.agent,
       model: each.model,
-      cost: cost ? formatCost(cost) : words.unknown,
+      cost: spent ? formatCost(spent) : words.unknown,
       kinds: kinds.filter(([, tokens]) => tokens > 0),
     }
   })
+  const several = groups.length > 1
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-3">
+      {/* The last row's highlight 8px from the bottom as from the sides, its words 14px from it as the title's are from
+          the top. */}
+      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-2.5 pb-2 sm:max-w-md">
         <DialogTitle className="flex h-8 items-center pr-8">
           {words.details}
         </DialogTitle>
-        <div className="-mx-4 min-h-0 overflow-y-auto px-4">
+        <div className="-mx-4 min-h-0 scroll-fade overflow-y-auto px-4">
           <div className="grid grid-cols-[1fr_auto_auto] gap-x-4">
+            {several && (
+              <div className={ROW}>
+                <span className="col-span-2 py-1.5 font-medium">
+                  {words.total}
+                </span>
+                <span className="py-1.5 text-right font-medium tabular-nums">
+                  {cost ? formatCost(cost) : words.unknown}
+                </span>
+              </div>
+            )}
             {groups.map((group, index) => (
               <Fragment key={index}>
-                <span
+                {several && <div className="col-span-3 my-1.5 border-t" />}
+                <div
                   className={cn(
-                    "col-span-2 flex items-center gap-2 py-1.5 font-medium",
-                    index > 0 && "mt-3"
+                    ROW,
+                    "[@media(hover:hover)]:has-[>[data-head]:hover]:bg-accent"
                   )}
                 >
-                  <ProviderIcon model={group.model} className="size-4" />
-                  {modelName(group.model)}
-                </span>
-                <span
-                  className={cn(
-                    "py-1.5 text-right font-medium tabular-nums",
-                    index > 0 && "mt-3"
-                  )}
-                >
-                  {group.cost}
-                </span>
-                {group.kinds.map(([label, tokens, dollars]) => (
-                  <Fragment key={label}>
-                    <span className="py-1.5 pl-6 text-muted-foreground">
-                      {label}
+                  <div data-head className={ROW}>
+                    <span className="col-span-2 flex min-w-0 items-center gap-2 py-1.5">
+                      <ProviderIcon
+                        model={group.model}
+                        className="size-4 shrink-0"
+                      />
+                      <span className="shrink-0 font-medium">
+                        {agentName(group.agent)}
+                      </span>
+                      <span className="truncate text-muted-foreground">
+                        {modelName(group.model)}
+                      </span>
                     </span>
-                    <span className="py-1.5 text-right tabular-nums">
-                      {formatNumber(tokens)}
+                    <span className="py-1.5 text-right font-medium tabular-nums">
+                      {group.cost}
                     </span>
-                    <span className="py-1.5 text-right text-muted-foreground tabular-nums">
-                      {dollars === undefined ? "" : formatDollars(dollars)}
-                    </span>
-                  </Fragment>
-                ))}
+                  </div>
+                  {group.kinds.map(([label, tokens, dollars]) => (
+                    <div key={label} className={cn(ROW, "hover:bg-accent")}>
+                      <span className="py-1.5 pl-6 text-muted-foreground">
+                        {label}
+                      </span>
+                      <span className="py-1.5 text-right tabular-nums">
+                        {formatNumber(tokens)}
+                      </span>
+                      <span className="py-1.5 text-right text-muted-foreground tabular-nums">
+                        {dollars === undefined ? "" : formatDollars(dollars)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </Fragment>
             ))}
           </div>
@@ -363,7 +416,7 @@ export function Reply({
           about={about}
           pinned={pinned}
           // The button's background overhangs the text, so its icon sits closer to the text's edge.
-          className="-ms-1"
+          className="-ms-1.5"
         />
       )}
     </div>
@@ -404,7 +457,7 @@ export function ThinkingRow({
     >
       <div className="min-h-0 overflow-hidden">
         <div className="flex items-center gap-2 pt-6 text-sm leading-6 text-muted-foreground">
-          <span aria-hidden className="thinking-orbs">
+          <span aria-hidden className="thinking-wave">
             <span />
             <span />
             <span />
@@ -417,19 +470,8 @@ export function ThinkingRow({
 }
 
 /** What the main agent said on the way, where it said it: its words, without a reply's actions. */
-export function Commentary({
-  text,
-  rise = true,
-}: {
-  text: string
-  rise?: boolean
-}) {
-  return (
-    <Markdown
-      text={text}
-      className={cn("text-sm leading-6", rise && "arrive")}
-    />
-  )
+export function Commentary({ text }: { text: string }) {
+  return <Markdown text={text} className="arrive text-sm leading-6" />
 }
 
 /** When a message came, as time ago, kept current; the date and the time in full in its tooltip. */

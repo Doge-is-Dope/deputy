@@ -10,7 +10,7 @@ import {
 
 type PlanRow = { key: string; step: PlanStep; gone: boolean }
 
-/** Each step by its words, and which time they come in the list, so two alike are two rows. */
+/** Keyed by a step's words and how many times they came before, so two alike are two rows. */
 function planRows(steps: PlanStep[]): PlanRow[] {
   const seen = new Map<string, number>()
   return steps.map((step) => {

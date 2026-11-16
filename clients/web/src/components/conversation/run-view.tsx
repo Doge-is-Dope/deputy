@@ -10,6 +10,11 @@ import {
 } from "react"
 import { cn } from "cn"
 
+import {
+  fadeSentMessage,
+  moveSentMessage,
+  type SentMessage,
+} from "@/components/conversation/message-send"
 import { PlanSteps } from "@/components/conversation/plan-steps"
 import { RunThread, TurnSkeleton } from "@/components/conversation/run-thread"
 import { useMarkdownReady } from "@/components/markdown/markdown"
@@ -19,6 +24,7 @@ import { Spinner } from "@/components/ui/spinner"
 import { HISTORY_PAGE, historyStart } from "@/lib/history"
 import { useSessionEvents, type StreamPhase } from "@/hooks/use-run-events"
 import { useLiquidGlass } from "@/hooks/use-liquid-glass"
+import { usePresence } from "@/hooks/use-presence"
 import { useThread } from "@/hooks/use-thread"
 import {
   approvalFor,
@@ -33,22 +39,14 @@ import { reducedMotion } from "@/lib/motion"
 import { openQuestion, samePlan, unlogged, type Plan } from "@/lib/thread"
 import { ArrowDownIcon } from "@/components/icons"
 
-// The plan's card beside the conversation: its width (w-72), its gap to the window's edge (right-3) and to the
+// The plan's card beside the conversation: its width (w-72), its gap to the window's edge (right-2.5) and to the
 // conversation; and how wide the conversation must stay to have it there rather than over it, opened from the header.
-const PLAN_SPACE = 288 + 12 + 12
+const PLAN_SPACE = 288 + 10 + 12
 const PLAN_DOCKED = PLAN_SPACE + 600
 
-/** Whether something shown is still on screen: from when it shows until its way out (`ms`) is over. */
-function usePresence(open: boolean, ms: number) {
-  const [mounted, setMounted] = useState(open)
-  if (open && !mounted) setMounted(true)
-  useEffect(() => {
-    if (open || !mounted) return
-    const timer = window.setTimeout(() => setMounted(false), ms)
-    return () => window.clearTimeout(timer)
-  }, [open, mounted, ms])
-  return [mounted, mounted && !open] as const
-}
+// Whether the run being read has a plan, room for it beside the conversation, and how many new plans were written
+// while read here.
+export type PlanReport = { has: boolean; docked: boolean; written: number }
 
 // Within this many pixels of the end, the conversation counts as read to the end and follows new events.
 const STICK_PX = 80
@@ -86,9 +84,9 @@ function overlayScrollbars() {
   return overlay
 }
 
-/** What the composer needs of the open question: what to prompt for, and the answer Enter takes. */
+/** What the composer needs of the open question: the answer it expects typed, and the answer Enter takes. */
 export type AskedQuestion = {
-  placeholder: string
+  suggestion: string
   recommended: string | null
   multiple: boolean
 }
@@ -115,13 +113,13 @@ function RunTurn({
   going,
   started,
   status,
-  continued,
   latest,
   nextAnswer,
   answersQuestion,
   visible,
   takingOver,
   steering,
+  sentMessage,
   wake,
   onStream,
   onPlan,
@@ -133,7 +131,6 @@ function RunTurn({
   going: boolean // the conversation's list says it has not ended
   started: boolean // started from this page just now
   status: Status | null
-  continued: boolean
   latest: boolean // the conversation's last run
   nextAnswer: string | null // what began the next run, if it answers the question this one left open
   answersQuestion: boolean // what began this run answers the question the last one left open
@@ -141,6 +138,7 @@ function RunTurn({
   visible: boolean // the conversation is shown
   takingOver: boolean // the composer asks the user to take over the desktop for this run
   steering: Pending[] // sent to steer this session, until its log has them
+  sentMessage?: string | null
   wake: number // changes when the runtime can be reached again, so a stream waiting to reconnect tries at once
   onStream: (run: string, stream: TurnStream) => void
   onPlan: (run: string, plan: Plan | null, active: boolean) => void
@@ -188,13 +186,14 @@ function RunTurn({
     [run, phase, shown, onStream]
   )
   const thread = useThread(events)
-  useEffect(
-    () => onPlan(run, thread.plan, active),
-    [run, thread.plan, active, onPlan]
-  )
+  // Its plan once its log has come: before, none would say it has none.
+  const logged = events.length > 0
+  useEffect(() => {
+    if (logged) onPlan(run, thread.plan, active)
+  }, [run, thread.plan, active, logged, onPlan])
   const open =
     unlogged(thread, steering).length === 0 ? openQuestion(thread) : undefined
-  const placeholder = open?.placeholder ?? null
+  const suggestion = open?.suggestion ?? null
   const multiple = open?.multiple ?? false
   const recommended = multiple ? null : (open?.options[0]?.label ?? null)
   const askedAt = openQuestion(thread)?.time ?? null
@@ -206,9 +205,9 @@ function RunTurn({
   useEffect(() => {
     if (latest)
       onAsked(
-        placeholder === null ? null : { placeholder, recommended, multiple }
+        suggestion === null ? null : { suggestion, recommended, multiple }
       )
-  }, [latest, placeholder, recommended, multiple, onAsked])
+  }, [latest, suggestion, recommended, multiple, onAsked])
   const [shot, setShot] = useState<number | null>(null)
 
   // An earlier turn read on the way up shows once it has some; one whose read fails keeps its skeleton.
@@ -221,7 +220,6 @@ function RunTurn({
         thread={thread}
         sent={early}
         dropped={phase === "retrying"}
-        continued={continued}
         latest={latest}
         visible={visible}
         // A run the runtime doesn't have has nothing more to come either.
@@ -233,6 +231,7 @@ function RunTurn({
         approving={approvalFor(status, known)?.consequence ?? null}
         takingOver={takingOver}
         steering={steering}
+        sentMessage={sentMessage}
         draft={draft}
         answering={final}
         streamed={streamed}
@@ -262,7 +261,7 @@ export function RunView({
   goals,
   going,
   started,
-  continued,
+  sentMessage,
   listed,
   status,
   asking = null,
@@ -283,7 +282,7 @@ export function RunView({
   goals: ReadonlyMap<string, string> // what the user sent each run, as far as it is known yet
   going: ReadonlySet<string> // the runs the conversation's list says have not ended
   started: string | null // the run started from this page last
-  continued: ReadonlySet<string> // runs that carry on the one before with the same goal
+  sentMessage: SentMessage | null
   listed: boolean // the list of runs has come (or failed to), so `runs` holds all the conversation's runs it knows of
   status: Status | null
   asking?: string | null // the run the composer asks the user to take over the desktop for
@@ -291,7 +290,7 @@ export function RunView({
   offline: boolean // the runtime can't be reached
   composer: ReactNode
   planShown: boolean // the header shows the plan: beside the conversation, or opened over it
-  onPlan: (plan: { has: boolean; docked: boolean }) => void // whether the run being read has a plan, and room for it beside
+  onPlan: (plan: PlanReport) => void
   onClosePlan: () => void // the plan opened over the conversation, closed from elsewhere
 }) {
   const t = useT()
@@ -375,10 +374,10 @@ export function RunView({
       ),
     []
   )
-  // Whether what began a run answers the question the run before it left open: sent once it was asked, and not that
-  // run carried on. Then it is drawn with the question.
+  // Whether what began a run answers the question the run before it left open: sent once it was asked. Then it is drawn
+  // with the question.
   const answers = (run: string | undefined) => {
-    if (run === undefined || continued.has(run)) return false
+    if (run === undefined) return false
     const asked = times[runs[runs.indexOf(run) - 1]]?.asked
     const sent = times[run]?.sent
     // Until its log comes, what was just sent counts as the answer: it must not show as a bubble first.
@@ -400,10 +399,21 @@ export function RunView({
   // The plan of the run being read: each run's own, none for a run that wrote none (or wrote it empty).
   const current = reading ? plans[reading] : undefined
   const hasPlan = (current?.plan?.steps.length ?? 0) > 0
-  // Any run's plan keeps the room beside the conversation, so the words do not reflow as the plan comes and goes.
-  const written = shownRuns.some(
+  // The conversation's newest plan. Any plan keeps the room beside the conversation, so the words do not reflow as
+  // the plan comes and goes.
+  const newest = shownRuns.findLast(
     (run) => (plans[run]?.plan?.steps.length ?? 0) > 0
   )
+  const written = newest !== undefined
+  // How many new plans were written while read here: under way, and none of their steps named as in the plan before.
+  const names = newest ? plans[newest].plan!.steps.map((s) => s.content) : []
+  const [planNames, setPlanNames] = useState<string[]>([])
+  const [newPlans, setNewPlans] = useState(0)
+  if (names.join("\n") !== planNames.join("\n")) {
+    setPlanNames(names)
+    if (plans[newest!]?.active && !names.some((n) => planNames.includes(n)))
+      setNewPlans(newPlans + 1)
+  }
   // The plan the card shows, kept on its way out once the run being read has none.
   const [kept, setKept] = useState<{
     run: string
@@ -430,7 +440,12 @@ export function RunView({
     return () => observer.disconnect()
   }, [])
   const docked = width >= PLAN_DOCKED
-  useEffect(() => onPlan({ has: hasPlan, docked }), [hasPlan, docked, onPlan])
+  // Only once the run being read has said: until then the header keeps the button as it was, so a switch between
+  // conversations with plans does not flash it.
+  const said = current !== undefined
+  useEffect(() => {
+    if (said) onPlan({ has: hasPlan, docked, written: newPlans })
+  }, [said, hasPlan, docked, newPlans, onPlan])
   const showPlan = hasPlan && planShown && width > 0
   const [planMounted, planClosing] = usePresence(showPlan, 250)
   const card = useRef<HTMLElement>(null)
@@ -493,6 +508,11 @@ export function RunView({
   const placing = useRef<number | null>(null)
   const seen = useRef(new WeakSet<Element>())
   const opened = useRef(false)
+  // The bubble moving from the composer, and what stops it; the layout below, which can leave its scroll to that move.
+  const sending = useRef<{ bubble: HTMLElement; stop: () => void } | null>(null)
+  const layoutScroll = useRef<
+    ((move?: HTMLElement) => (() => number) | null) | null
+  >(null)
   // Whether the conversation, and its last run, are still under way, by the status; the observer below reads them as
   // they were last drawn.
   const working = runs.some((run) => runningOf(status, { run }) !== null)
@@ -581,7 +601,8 @@ export function RunView({
         seen.current.add(all[index])
       return unseen ? last! : null
     }
-    const observer = new ResizeObserver(() => {
+    const layout = (move?: HTMLElement) => {
+      let scrollTo: (() => number) | null = null
       // Historical replies can keep growing after their event stream ends (markdown and images).
       // Keep the old turn in place until the user moves again, even without native scroll anchoring.
       const held = anchor.current
@@ -624,13 +645,19 @@ export function RunView({
           const smooth = !opening && !reducedMotion()
           placing.current =
             smooth && Math.abs(element.scrollTop - top) > 1 ? top : null
-          element.scrollTo({ top, behavior: smooth ? "smooth" : "instant" })
+          if (smooth && move === sent) scrollTo = () => topFor(sent)
+          else
+            element.scrollTo({ top, behavior: smooth ? "smooth" : "instant" })
         }
       }
       if (placed.current) fit()
       const shrank = element.scrollHeight < lastHeight.current
       lastHeight.current = element.scrollHeight
-      if (following.current) element.scrollTop = element.scrollHeight
+      if (following.current) {
+        if (move) scrollTo = () => element.scrollHeight - element.clientHeight
+        else if (!sending.current?.bubble.hasAttribute("data-sending"))
+          element.scrollTop = element.scrollHeight
+      }
       // Content that got shorter can leave nothing below, which scrolls nothing. Only nothing at all: a view merely
       // near the end would be pulled down to it mid-fold. Nothing else resumes following: steps the user unfolds
       // still sit near the end in their first frames.
@@ -641,7 +668,10 @@ export function RunView({
           placing.current === null &&
           below(element) - roomLeft(placed, room) >= STICK_PX
       )
-    })
+      return scrollTo
+    }
+    layoutScroll.current = layout
+    const observer = new ResizeObserver(() => layout())
     observer.observe(inner)
     // What has come, too: inside the room under a placed message it grows with the content staying as tall.
     observer.observe(list)
@@ -650,6 +680,7 @@ export function RunView({
     observer.observe(dock.current)
     return () => {
       observer.disconnect()
+      layoutScroll.current = null
       // Where it is left, read while it is still laid out: the turn at the top of the view, unless it is at the end.
       // One never opened (or set up again at once, as in development) leaves what was kept.
       if (!opened.current) return
@@ -680,9 +711,45 @@ export function RunView({
     }
   }, [thread])
 
+  useLayoutEffect(() => {
+    const element = scroller.current
+    const list = turns.current
+    const bubble = list?.querySelector<HTMLElement>("[data-send-bubble]")
+    if (!sentMessage || !element || list?.hidden || !bubble) return
+    // The view goes where the layout would take it, in step with the bubble.
+    const turn = bubble.closest<HTMLElement>("[data-turn]") ?? undefined
+    const scrollTo = layoutScroll.current?.(turn) ?? null
+    const stop = moveSentMessage(
+      bubble,
+      sentMessage.origin,
+      sentMessage.tiles,
+      element,
+      dock.current,
+      scrollTo
+    )
+    if (stop) {
+      sending.current = { bubble, stop }
+      return () => {
+        stop()
+        sending.current = null
+      }
+    }
+    if (scrollTo)
+      element.scrollTo({
+        top: scrollTo(),
+        behavior: following.current ? "instant" : "smooth",
+      })
+    return fadeSentMessage(bubble.parentElement!)
+  }, [sentMessage])
+
   // The user moving the view lets go of the turn held in place while earlier ones load.
   const release = () => {
     anchor.current = null
+  }
+  // A wheel or a swipe also lands a moving bubble before its next frame would scroll against it.
+  const releaseScroll = () => {
+    release()
+    sending.current?.stop()
   }
 
   function onScroll() {
@@ -720,8 +787,8 @@ export function RunView({
         onScroll={onScroll}
         onPointerDownCapture={release}
         onKeyDownCapture={release}
-        onWheelCapture={release}
-        onTouchMoveCapture={release}
+        onWheelCapture={releaseScroll}
+        onTouchMoveCapture={releaseScroll}
         // Beside the plan, the conversation keeps to the room left of it, moving over as the plan is shown or hidden.
         style={{
           paddingRight: docked && planShown && written ? PLAN_SPACE : 0,
@@ -787,9 +854,10 @@ export function RunView({
                 goal={goals.get(run) ?? null}
                 going={going.has(run)}
                 started={run === started}
+                sentMessage={
+                  run === sentMessage?.run ? sentMessage.message : undefined
+                }
                 status={status}
-                // Not the first one read: what it carries on from is not shown above it.
-                continued={continued.has(run) && run !== shownRuns[0]}
                 latest={run === runs.at(-1)}
                 visible={ready}
                 takingOver={asking === run}
@@ -818,16 +886,16 @@ export function RunView({
             <div ref={room} aria-hidden className="flex-1" />
           )}
         </div>
-        {/* The composer stays at the bottom while the conversation scrolls on under it, as content runs under Apple's
-        bars: nothing covers the words above it, they go on beneath it, dissolving toward the bottom edge (Apple's
-        scroll edge effect) so the edge cuts no line in half. It is part of what scrolls, so the end of the
-        conversation still clears it, and a conversation shorter than the view grows to keep it at the bottom. */}
+        {/* The composer stays at the bottom while the conversation scrolls on under it: nothing covers the words above
+        it, they go on beneath it, dissolving toward the bottom edge so the edge cuts no line in half. It is part of
+        what scrolls, so the end of the conversation still clears it, and a conversation shorter than the view grows to
+        keep it at the bottom. */}
         <div
           ref={dock}
           className="sticky bottom-0 mx-auto w-full max-w-[calc(var(--container-3xl)+2rem)] px-4 pb-4 before:pointer-events-none before:absolute before:inset-0 before:bg-linear-to-t before:from-background before:to-transparent"
         >
-          {/* Down to the latest while it is out of view, glass over the words it floats on, fading in and out as
-          ChatGPT's does on the even curve (the sharp ones here drop it in a frame or two), shrinking and blurring a
+          {/* Down to the latest while it is out of view, glass over the words it floats on, fading in and out on
+          the even curve (the sharp ones here drop it in a frame or two), shrinking and blurring a
           little on its way as the plan does. While the agent works down there, the thinking lights pass on it in place of
           the arrow, which comes back under the pointer. A plain button: the glass is its whole surface, with no
           variant's to undo. Once the lens is drawn, the glass softens what is under it a touch and bends it with the
@@ -895,14 +963,14 @@ export function RunView({
               })
             }
           >
-            {/* What it shows, the orbs or the arrow under the pointer, is kept through the fade out: it turns invisible,
-            and stops taking the pointer, only once faded. The orbs are still while hidden. */}
+            {/* What it shows, the wave or the arrow under the pointer, is kept through the fade out: it turns invisible,
+            and stops taking the pointer, only once faded. The wave is still while hidden. */}
             {working && (
               <span
                 aria-hidden
                 className={cn(
-                  "thinking-orbs group-hover/latest:hidden group-focus-visible/latest:hidden",
-                  !behind && "[&>span]:[animation-play-state:paused]"
+                  "thinking-wave group-hover/latest:hidden group-focus-visible/latest:hidden",
+                  !behind && "[--thinking-play:paused]"
                 )}
               >
                 <span />
@@ -939,7 +1007,7 @@ export function RunView({
           aria-label={t.run.plan}
           data-closing={planClosing || undefined}
           className={cn(
-            "absolute top-2 right-3 z-10 flex max-h-[calc(100%-7rem)] w-72 origin-top-right flex-col overflow-y-auto rounded-2xl px-4 pt-3 pb-2.5 transition-[opacity,scale,filter] delay-100 duration-250 ease-(--ease-out) data-closing:scale-95 data-closing:opacity-0 data-closing:blur-[2px] data-closing:delay-0 motion-reduce:transition-opacity motion-reduce:data-closing:scale-100 motion-reduce:data-closing:blur-none starting:scale-95 starting:opacity-0 starting:blur-[2px] motion-reduce:starting:scale-100 motion-reduce:starting:blur-none",
+            "absolute top-2 right-2.5 z-10 flex max-h-[calc(100%-7rem)] w-72 origin-top-right flex-col overflow-y-auto rounded-2xl px-4 pt-3 pb-2.5 transition-[opacity,scale,filter] delay-100 duration-250 ease-(--ease-out) data-closing:scale-95 data-closing:opacity-0 data-closing:blur-[2px] data-closing:delay-0 motion-reduce:transition-opacity motion-reduce:data-closing:scale-100 motion-reduce:data-closing:blur-none starting:scale-95 starting:opacity-0 starting:blur-[2px] motion-reduce:starting:scale-100 motion-reduce:starting:blur-none",
             docked
               ? "border bg-background shadow-xs"
               : "bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10"

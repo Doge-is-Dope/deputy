@@ -16,7 +16,6 @@ import {
   CloseIcon,
   CopyIcon,
   ExpandIcon,
-  ShrinkIcon,
   CursorEnterIcon,
   HandIcon,
   OfflineIcon,
@@ -25,10 +24,17 @@ import {
 } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { useRunLog } from "@/hooks/use-run-events"
 import { useCopy } from "@/hooks/use-copy"
 import { NUDGE_MS, useFlash } from "@/hooks/use-flash"
 import { useLive } from "@/hooks/use-live"
+import { usePresence } from "@/hooks/use-presence"
+import { useDoingNow } from "@/hooks/use-doing-now"
 import { useTaskClock } from "@/hooks/use-task-clock"
 import { useThread } from "@/hooks/use-thread"
 import {
@@ -51,8 +57,9 @@ import {
 } from "@/lib/liquid-takeover"
 import { useT } from "@/lib/i18n"
 import { reducedMotion } from "@/lib/motion"
+import { seedStyle, useAppearance } from "@/lib/appearance"
 import { mergeSession } from "@/lib/logs"
-import { doingNow, runningTask, stepUnderWay, type Task } from "@/lib/thread"
+import { runningTask, stepUnderWay, type Task } from "@/lib/thread"
 
 // After the pill switches, its button ignores clicks this long: the return button appears where the takeover
 // button was, so a double click would otherwise take over and hand control straight back.
@@ -62,6 +69,8 @@ const SWITCH_LOCK_MS = 1000
 const TAKING_AFTER_MS = 250
 // Holding the expand button this long shows the live view full screen.
 const HOLD_MS = 500
+// The picture coming in: what covered the screen fades away, and the pill fades in below it.
+const REVEAL_MS = 200
 // How long the desktop stays unavailable before the user is asked to report it: most problems clear up on their own
 // within seconds (a restart, a dropped connection), and a report of one of those is noise.
 const REPORT_AFTER_MS = 30_000
@@ -227,6 +236,7 @@ function WorkNow({
   userSince: number | null // the user has had the desktop since then, by the status
 }) {
   const { worked } = useTaskClock(task, userSince, task !== null)
+  const doing = useDoingNow(task)
   if (!task) return null
   return (
     <p
@@ -235,7 +245,7 @@ function WorkNow({
       className="absolute inset-x-0 bottom-full mb-2.5 flex items-center gap-2 text-sm text-muted-foreground transition-[opacity,filter,translate] duration-250 ease-(--ease-out) data-hidden:translate-y-1 data-hidden:opacity-0 data-hidden:blur-[2px] data-hidden:duration-200 motion-reduce:transition-opacity"
     >
       <SpinnerIcon className="size-4" />
-      <span className="shimmer min-w-0 truncate">{doingNow(task)}</span>
+      <span className="shimmer min-w-0 truncate">{doing}</span>
       <span className="ml-auto shrink-0 tabular-nums opacity-70">
         {formatDuration(worked)}
       </span>
@@ -293,7 +303,8 @@ export function LiveView({
   const active = status?.active ?? null
   const log = useRunLog(active)
   const events = useMemo(
-    () => (active ? mergeSession([{ id: active, events: log }], false).events : log),
+    () =>
+      active ? mergeSession([{ id: active, events: log }], false).events : log,
     [active, log]
   )
   const task = runningTask(useThread(events))
@@ -341,6 +352,11 @@ export function LiveView({
   const face = waiting && slow && !user ? "taking" : owner
 
   const problem = problemOf(status, offline)
+  // Why there is no picture, over the screen; once there is one it fades away.
+  const [covered, uncovering] = usePresence(
+    !!problem || state !== "live",
+    REVEAL_MS
+  )
 
   // The canvas where the browser can draw it, chosen before first paint; else a plain ring (index.css).
   const [liquid] = useState(canDrawLiquid)
@@ -454,49 +470,75 @@ export function LiveView({
   const corner = fullscreen
     ? {
         label: t.liveView.exitFullscreen,
-        Icon: ShrinkIcon,
         onClick: () => void document.exitFullscreen(),
         pressed: true,
       }
     : onExpand
       ? {
           label: expanded ? t.liveView.shrink : t.liveView.expand,
-          Icon: expanded ? ShrinkIcon : ExpandIcon,
           onClick: onExpand,
           pressed: expanded,
         }
       : onClose && {
           label: t.liveView.close,
-          Icon: CloseIcon,
           onClick: onClose,
           pressed: undefined,
         }
   // Held, the expand button shows it full screen instead, where the page can be (not on an iPhone).
-  const hold = useHoldForFullscreen(
-    root,
-    !!onExpand && !fullscreen && document.fullscreenEnabled
-  )
+  const holds = !!onExpand && !fullscreen && document.fullscreenEnabled
+  const hold = useHoldForFullscreen(root, holds)
+  // Full screen it is dark all round, in the dark theme chosen, as a film is.
+  const dark = useAppearance().themes.dark
 
   return (
     <aside
       ref={root}
-      className={cn("relative flex min-h-0 flex-col bg-background", className)}
+      data-mode={fullscreen ? "dark" : undefined}
+      style={fullscreen ? seedStyle(dark) : undefined}
+      className={cn(
+        "relative flex min-h-0 flex-col bg-background text-foreground",
+        className
+      )}
       aria-label={t.liveView.label}
     >
       {corner && (
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={corner.label}
-          aria-pressed={corner.pressed}
-          className="absolute top-1.5 right-2.5 z-10"
-          {...hold.handlers}
-          onClick={() => {
-            if (!hold.held()) corner.onClick()
-          }}
-        >
-          <corner.Icon className="size-5" />
-        </Button>
+        <Tooltip>
+          <TooltipTrigger
+            render={
+              <Button
+                variant="ghost"
+                size="icon"
+                aria-label={corner.label}
+                aria-pressed={corner.pressed}
+                // Beside the page's own toggle for the live view, which keeps the corner (App.tsx); in the corner
+                // itself where that is out of sight: on a phone's sheet, and full screen.
+                className={cn(
+                  "touch-target absolute top-1.5 z-10",
+                  onExpand && !fullscreen ? "right-12.5" : "right-2.5"
+                )}
+                {...hold.handlers}
+                // A press leaves the keyboard where it was (on the desktop, taken over), and no ring on the button
+                // at the next key.
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => {
+                  if (!hold.held()) corner.onClick()
+                }}
+              />
+            }
+          >
+            {corner.pressed === undefined ? (
+              <CloseIcon className="size-5" />
+            ) : (
+              <ExpandIcon inward={corner.pressed} className="size-5" />
+            )}
+          </TooltipTrigger>
+          <TooltipContent side="bottom" align="end">
+            {corner.label}
+            {holds && (
+              <span className="opacity-60">{t.liveView.holdFullscreen}</span>
+            )}
+          </TooltipContent>
+        </Tooltip>
       )}
 
       {/* data-control drives the takeover frame and pill styles in index.css; unset while the desktop can't be
@@ -559,8 +601,14 @@ export function LiveView({
                   onScreenFocused?.()
                 }}
               />
-              {(problem || state !== "live") && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center-safe gap-2 overflow-y-auto bg-neutral-950/85 p-6 text-center text-sm text-neutral-200 @max-sm:p-4">
+              {covered && (
+                <div
+                  inert={uncovering}
+                  className={cn(
+                    "absolute inset-0 flex flex-col items-center justify-center-safe gap-2 overflow-y-auto bg-neutral-950/85 p-6 text-center text-sm text-neutral-200 transition-opacity duration-200 ease-(--ease-out) @max-sm:p-4",
+                    uncovering && "opacity-0"
+                  )}
+                >
                   {problem ? (
                     <Unavailable key={problem.code} problem={problem} />
                   ) : (
@@ -580,19 +628,18 @@ export function LiveView({
             says why, nobody takes over a desktop they can't see, and keeping its space stops the screen from shifting
             when the video comes in. The user's own control stays, though: handing back needs no sight of the screen,
             and the agent waits on it. */}
-          <div
-            ref={pill}
-            className={cn(
-              "takeover-pill",
-              (problem || (state !== "live" && !user && !pending)) &&
-                "invisible"
-            )}
-          >
+          <div ref={pill} className="takeover-pill">
             <span aria-hidden className="takeover-pill-bg" />
             {/* One label and one button for both owners, each holding every text (slot), so a switch rolls and resizes
               them in place (the effect above) instead of swapping elements. The label's room on the left and its gap
               to the button lie within its texts, so a label with none leaves the button in the middle of the pill. */}
-            <span className="relative z-[3] flex items-center">
+            <span
+              className={cn(
+                "relative z-[3] flex items-center transition-[opacity,visibility] duration-200 ease-(--ease-out)",
+                (problem || (state !== "live" && !user && !pending)) &&
+                  "invisible opacity-0"
+              )}
+            >
               {/* Below 20rem the tab and its concave corners would outgrow the frame's straight bottom edge, so the pill
                 keeps only its button. */}
               <span className="flex items-center text-sm whitespace-nowrap @max-xs:hidden">
@@ -721,7 +768,8 @@ function useFullscreen(root: RefObject<HTMLElement | null>) {
 
 /** Press handlers for the expand button that show `root` full screen once it is held, and whether the press was a
  * hold, whose click then does nothing. The browser counts a mouse press as the user's own act, so full screen comes
- * while it is held; a touch counts only once lifted, so a held touch asks again then. */
+ * while it is held; a touch counts only once lifted, so a held touch asks again then. The press may end anywhere:
+ * full screen moves the button from under the pointer. */
 function useHoldForFullscreen(
   root: RefObject<HTMLElement | null>,
   enabled: boolean
@@ -738,13 +786,14 @@ function useHoldForFullscreen(
           held.current = true
           showFullscreen(root.current)
         }, HOLD_MS)
-      },
-      onPointerUp: () => {
-        cancel()
-        if (held.current && !document.fullscreenElement)
-          showFullscreen(root.current)
-        // After the click this release brings, if any.
-        setTimeout(() => (held.current = false))
+        const released = () => {
+          cancel()
+          if (held.current && !document.fullscreenElement)
+            showFullscreen(root.current)
+          // After the click this release brings, if any.
+          setTimeout(() => (held.current = false))
+        }
+        window.addEventListener("pointerup", released, { once: true })
       },
       onPointerLeave: cancel,
       onPointerCancel: cancel,
@@ -781,7 +830,7 @@ function ApprovalBar({
   }
   return (
     <div className="mt-6 w-full max-w-3xl shrink-0">
-      <div className="flex w-full animate-in flex-wrap items-center justify-end gap-x-3 gap-y-2 rounded-[1.75rem] border bg-background p-2 pl-3 shadow-[0_2px_8px_rgb(0_0_0/0.04)] duration-200 ease-(--ease-out) fade-in slide-in-from-bottom-1 motion-reduce:animate-none dark:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]">
+      <div className="flex w-full animate-in flex-wrap items-center justify-end gap-x-3 gap-y-2 rounded-4xl border bg-background p-2 pl-3 shadow-[0_2px_8px_rgb(0_0_0/0.04)] duration-200 ease-(--ease-out) fade-in slide-in-from-bottom-1 motion-reduce:animate-none dark:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]">
         <div className="flex min-h-10 min-w-0 flex-[1_1_14rem] items-center gap-2.5 pr-2 pl-1">
           <HandIcon className="size-5 shrink-0 text-warning" />
           <p role="status" className="min-w-0 text-sm text-pretty">

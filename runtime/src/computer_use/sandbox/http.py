@@ -51,11 +51,26 @@ class HttpCodeRunner:
         body = await self._request("POST", "/write", {"thread": thread, "path": path, "content": content})
         return f"Wrote {body['path']} ({body['bytes']} bytes)."
 
+    async def has(self, thread: str, path: str, source: str | None = None) -> bool:
+        try:
+            response = await self._client.head("/files", params={"thread": thread, "path": path,
+                                                               **({"source": source} if source else {})})
+        except httpx.HTTPError as error:
+            raise CodeRunnerError(f"{type(error).__name__}: {error}") from error
+        return response.status_code == 200
+
+    async def put(self, thread: str, path: str, data: bytes, source: str | None = None) -> bool:
+        params = {"thread": thread, "path": path, **({"source": source} if source else {})}
+        return (await self._request("PUT", "/files", params=params, content=data))["written"]
+
     async def stop(self, task: str) -> None:
         try:
             await self._request("POST", "/stop", {"task": task})
         except CodeRunnerError:  # nothing more to do: it stops itself once the command's time is up
             pass
+
+    async def delete(self, thread: str) -> None:
+        await self._request("POST", "/delete", {"thread": thread})
 
     async def read(self, thread: str, path: str) -> bytes:
         try:
@@ -73,9 +88,14 @@ class HttpCodeRunner:
     async def close(self) -> None:
         await self._client.aclose()
 
-    async def _request(self, method: str, path: str, body: dict | None = None, timeout: float | None = None) -> dict:
+    async def _request(
+        self, method: str, path: str, body: dict | None = None, timeout: float | None = None,
+        params: dict | None = None, content: bytes | None = None,
+    ) -> dict:
         try:
-            response = await self._client.request(method, path, json=body, timeout=timeout or REQUEST_SECONDS)
+            response = await self._client.request(
+                method, path, json=body, params=params, content=content, timeout=timeout or REQUEST_SECONDS,
+            )
         except httpx.HTTPError as error:
             raise CodeRunnerError(f"{type(error).__name__}: {error}") from error
         if response.status_code == 400:

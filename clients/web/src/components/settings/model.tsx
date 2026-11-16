@@ -1,17 +1,15 @@
-import { cn } from "cn"
-
-import { ChevronDownIcon, ProviderIcon } from "@/components/icons"
+import { ProviderIcon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuRadioGroup,
-  DropdownMenuRadioItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { type Choice, type Status } from "@/lib/api"
 import { chooseModel, resetModels, resolve, useChoices } from "@/lib/choices"
-import { effortName, modelName } from "@/lib/format"
+import { agentName, effortName, modelName } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { Card, Row, Section } from "@/components/settings/layout"
 
@@ -24,11 +22,6 @@ const AGENTS = ["main", "computer", "coding"]
 export function Model({ status }: { status: Status | null }) {
   const t = useT()
   const { agents: chosen } = useChoices()
-  const names: Record<string, string> = {
-    main: t.settings.mainAgent,
-    computer: t.settings.computerAgent,
-    coding: t.settings.codingAgent,
-  }
   const order = Object.keys(status?.defaults ?? {}).sort(
     (a, b) =>
       (AGENTS.indexOf(a) + 1 || AGENTS.length + 1) -
@@ -52,20 +45,16 @@ export function Model({ status }: { status: Status | null }) {
             order.map((agent) => {
               const choice = resolve(status, agent, chosen)
               return (
-                <div
-                  key={agent}
-                  className="flex min-h-14 flex-wrap items-center justify-between gap-x-6 gap-y-2 py-3"
-                >
-                  <div>{names[agent] ?? agent}</div>
+                <Row key={agent} label={agentName(agent)}>
                   <ModelPicker
-                    label={names[agent] ?? agent}
+                    label={agentName(agent)}
                     choice={choice}
                     byDefault={resolve(status, agent, {})}
                     models={status.models.map((each) => each.id)}
                     efforts={efforts(choice.model)}
                     onChange={(change) => chooseModel(status, agent, change)}
                   />
-                </div>
+                </Row>
               )
             })}
           {status?.title_model && (
@@ -84,11 +73,11 @@ export function Model({ status }: { status: Status | null }) {
           )}
         </Card>
       </Section>
-      {/* Beside the dialog's close button, placed against the dialog rather than this page, so it stays there as the
-          page scrolls. */}
+      {/* Beside the dialog's close button and level with it (8 down), placed against the dialog rather than this page,
+          so it stays there as the page scrolls. */}
       <Button
         variant="ghost"
-        className="absolute top-2.5 right-12"
+        className="absolute top-2 right-12"
         disabled={atDefaults}
         onClick={resetModels}
       >
@@ -98,10 +87,8 @@ export function Model({ status }: { status: Status | null }) {
   )
 }
 
-const PICKER =
-  "flex h-9 items-center gap-2 rounded-lg border bg-background py-1.5 pr-2 pl-2.5 text-sm whitespace-nowrap outline-none select-none hover:bg-muted focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50 data-popup-open:bg-muted"
-
-/** Model and effort pickers, restricted to supported efforts and marking runtime defaults. */
+/** Model and effort pickers, as the other settings' menus: each opens over its trigger, the choice in its place.
+ * Restricted to supported efforts, and marking the runtime's defaults. */
 function ModelPicker({
   label,
   choice,
@@ -112,78 +99,70 @@ function ModelPicker({
 }: {
   label: string
   choice: Choice
-  byDefault?: Choice // the settings' own, marked in the menu; an effort only with its model
+  byDefault?: Choice // the runtime's default, marked in the menu; an effort only with its model
   models: string[]
   efforts: string[]
   onChange: (change: Partial<Choice>) => void
 }) {
   const t = useT()
+  // In the menu only, after the name: the trigger shows the name alone.
+  const marked = (isDefault: boolean) =>
+    isDefault && (
+      <span className="text-muted-foreground">{t.settings.byDefault}</span>
+    )
   return (
     <div className="ml-auto flex items-center gap-2">
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          aria-label={`${label}: ${t.settings.model}`}
-          className={PICKER}
-        >
-          <ProviderIcon model={choice.model} className="size-4" />
-          {modelName(choice.model)}
-          <ChevronDownIcon className="size-4 text-muted-foreground" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent className="min-w-48">
-          <DropdownMenuRadioGroup
-            value={choice.model}
-            onValueChange={(model) => onChange({ model: model as string })}
-          >
-            {models.map((model) => (
-              <DropdownMenuRadioItem
-                key={model}
-                value={model}
-                className="gap-2"
-              >
+      <Select
+        value={choice.model}
+        onValueChange={(model) => onChange({ model: model as string })}
+      >
+        <SelectTrigger aria-label={`${label}: ${t.settings.model}`}>
+          <SelectValue>
+            {(model: string) => (
+              <>
                 <ProviderIcon model={model} className="size-4" />
-                {/* One line of text, or the item's flex row would drop the space " (Default)" starts with. */}
-                <span>
-                  {modelName(model)}
-                  {model === byDefault?.model && (
-                    <span className="text-muted-foreground">
-                      {t.settings.byDefault}
-                    </span>
-                  )}
-                </span>
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
-      <DropdownMenu>
-        <DropdownMenuTrigger
+                {modelName(model)}
+              </>
+            )}
+          </SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {models.map((model) => (
+            <SelectItem key={model} value={model}>
+              <ProviderIcon model={model} className="size-4" />
+              {/* One line of text, or the row's gap would drop the space " (Default)" starts with. */}
+              <span>
+                {modelName(model)}
+                {marked(model === byDefault?.model)}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+      <Select
+        value={choice.effort}
+        onValueChange={(effort) => onChange({ effort: effort as string })}
+      >
+        <SelectTrigger
           aria-label={`${label}: ${t.settings.effort}`}
-          className={cn(PICKER, "text-muted-foreground")}
+          className="text-muted-foreground"
         >
-          {effortName(choice.effort)}
-          <ChevronDownIcon className="size-4" />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent className="min-w-36">
-          <DropdownMenuRadioGroup
-            value={choice.effort}
-            onValueChange={(effort) => onChange({ effort: effort as string })}
-          >
-            {efforts.map((effort) => (
-              <DropdownMenuRadioItem key={effort} value={effort}>
-                <span>
-                  {effortName(effort)}
-                  {choice.model === byDefault?.model &&
-                    effort === byDefault.effort && (
-                      <span className="text-muted-foreground">
-                        {t.settings.byDefault}
-                      </span>
-                    )}
-                </span>
-              </DropdownMenuRadioItem>
-            ))}
-          </DropdownMenuRadioGroup>
-        </DropdownMenuContent>
-      </DropdownMenu>
+          <SelectValue>{(effort: string) => effortName(effort)}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          {efforts.map((effort) => (
+            <SelectItem key={effort} value={effort}>
+              <span>
+                {effortName(effort)}
+                {marked(
+                  choice.model === byDefault?.model &&
+                    effort === byDefault.effort
+                )}
+              </span>
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }

@@ -144,15 +144,6 @@ async def capture(computer: Computer) -> Shot:
     return await asyncio.to_thread(_shot, image)
 
 
-async def settle(computer: Computer, before: Image.Image, no_change_seconds: float) -> Shot:
-    """Wait for drawing to stop after the gray screen `before`, or for `no_change_seconds` if nothing draws.
-
-    App launches can outlast the no-change timeout. Return the current screen and
-    let the agent decide whether to wait longer rather than delay every input.
-    Polls compare raw captures; only the returned frame is encoded as PNG."""
-    return await _settle(computer, before, no_change_seconds)
-
-
 async def settle_judged[T](
     computer: Computer, before: Image.Image, no_change_seconds: float, judge: Callable[[bytes], Awaitable[T]],
 ) -> tuple[Shot, T | None]:
@@ -169,7 +160,7 @@ async def settle_judged[T](
         task = asyncio.create_task(judge(png))
 
     try:
-        shot = await _settle(computer, before, no_change_seconds, still)
+        shot = await settle(computer, before, no_change_seconds, still)
         try:
             return shot, await asyncio.wait_for(asyncio.shield(task), JUDGE_GRACE_SECONDS)
         except TimeoutError:
@@ -179,12 +170,17 @@ async def settle_judged[T](
             task.cancel()
 
 
-async def _settle(
+async def settle(
     computer: Computer, before: Image.Image, no_change_seconds: float,
     still: Callable[[Image.Image], Awaitable[None]] | None = None,
 ) -> Shot:
-    """settle, calling `still` with the screen whenever it may be the last one: at first, and once a poll finds it
-    unchanged after drawing (text printing letter by letter draws on every poll)."""
+    """Wait for drawing to stop after the gray screen `before`, or for `no_change_seconds` if nothing draws.
+
+    App launches can outlast the no-change timeout. Return the current screen and
+    let the agent decide whether to wait longer rather than delay every input.
+    Polls compare raw captures; only the returned frame is encoded as PNG. `still` is called with the screen whenever
+    it may be the last one: at first, and once a poll finds it unchanged after drawing (text printing letter by letter
+    draws on every poll)."""
     loop = asyncio.get_running_loop()
     start = still_since = loop.time()
     looks: dict[tuple[int, int], set[int]] = {}

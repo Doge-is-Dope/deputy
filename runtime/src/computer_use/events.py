@@ -4,7 +4,7 @@ from typing import Literal, TypedDict
 
 NoteCode = Literal[
     "userControl", "controlReturned", "disconnected", "reconnected", "interrupted", "stuck", "declined", "gone",
-    "unusable", "runnerUnusable", "takeoverRequested", "runFinished", "runStopped", "runFailed", "goal", "memoryUsed",
+    "unusable", "runnerUnusable", "takeoverRequested", "goal", "memoryUsed",
 ]
 ActionReason = Literal[
     "userControl", "userActed", "screenChanged", "disconnected", "declined", "tookControl", "batched",
@@ -47,7 +47,7 @@ class PlanSnapshot(TypedDict):
 
 def shown_args(args: dict) -> dict:
     """An action's arguments as people read them: without the approval fields or those left empty, which in a
-    batch's actions are most of them and once cut the text it typed out of an action's line (2026-10-08)."""
+    batch's actions are most of them."""
     shown = {key: value for key, value in args.items() if key not in CONFIRM_FIELDS and value is not None}
     if isinstance(shown.get("actions"), list):
         shown["actions"] = [

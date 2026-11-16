@@ -37,8 +37,8 @@ function SelectValue({ className, ...props }: SelectPrimitive.Value.Props) {
   )
 }
 
-/** The list over the trigger, the chosen item where the trigger's text is, as a Mac's menus open (Base UI's
-    alignItemWithTrigger): the choice is not shown twice. Opened by keyboard or touch, or without the room, it comes
+/** The list over the trigger, the chosen item where the trigger's text is (Base UI's alignItemWithTrigger), so the
+    choice is not shown twice. Opened by keyboard or touch, or without the room, it comes
     under the trigger instead, lined up with its end. */
 function SelectContent({
   className,
@@ -59,7 +59,7 @@ function SelectContent({
         <SelectPrimitive.Popup
           data-slot="select-content"
           className={cn(
-            "max-h-(--available-height) min-w-(--anchor-width) origin-(--transform-origin) overflow-y-auto rounded-lg bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-150 ease-(--ease-out) outline-none data-[side=none]:zoom-in-100 data-[side=none]:zoom-out-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
+            "max-h-(--available-height) min-w-(--anchor-width) origin-(--transform-origin) overflow-y-auto rounded-popup bg-popover p-popup text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-150 ease-(--ease-out) outline-none data-[side=none]:zoom-in-100 data-[side=none]:zoom-out-100 data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 data-closed:animate-out data-closed:fade-out-0 data-closed:zoom-out-95",
             className
           )}
           {...props}
@@ -80,7 +80,7 @@ function SelectItem({
     <SelectPrimitive.Item
       data-slot="select-item"
       className={cn(
-        "relative flex cursor-default items-center rounded-md py-1.5 pr-8 pl-2 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50",
+        "relative flex cursor-default items-center rounded-row py-1.5 pr-8 pl-2 outline-none select-none data-highlighted:bg-accent data-highlighted:text-accent-foreground data-disabled:pointer-events-none data-disabled:opacity-50",
         className
       )}
       {...props}

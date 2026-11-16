@@ -9,7 +9,7 @@ import type { QuestionOption } from "@/lib/thread"
 import { CheckIcon, QuestionIcon } from "@/components/icons"
 
 const ROW =
-  "w-full rounded-[1.25rem] px-3.5 py-2 text-left text-sm leading-6 transition-[background-color,scale] duration-150 ease-(--ease-out) outline-none active:scale-[0.985] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:opacity-50 motion-reduce:transition-none"
+  "w-full rounded-2xl px-3.5 py-2 text-left text-sm leading-6 transition-[background-color,scale] duration-150 ease-(--ease-out) outline-none active:scale-[0.985] motion-reduce:active:scale-100 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset disabled:opacity-50 motion-reduce:transition-none"
 
 /** Options come in one after another, a beat apart. */
 const stagger = (index: number) => ({ transitionDelay: `${index * 40}ms` })
@@ -75,7 +75,7 @@ export function QuestionCard({
   return (
     <section
       aria-label={question}
-      className="w-full max-w-md arrive rounded-[1.75rem] border bg-background dark:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
+      className="w-full max-w-md arrive rounded-4xl border bg-background dark:bg-[color-mix(in_oklch,var(--muted)_40%,var(--background))]"
     >
       <p className="px-4 pt-3.5 pb-1 text-sm leading-6 text-pretty wrap-break-word">
         {question}
@@ -167,9 +167,12 @@ export function QuestionCard({
                 className={cn(
                   ROW,
                   "block",
+                  // The recommended answer in a tint of the theme's color, its label on a stronger one in grey words;
+                  // black is the primary button's alone. Another under the pointer lights fainter, so the recommended
+                  // one stays the clearest.
                   index === 0
-                    ? "bg-primary text-primary-foreground hover:bg-primary/85 focus-visible:ring-primary-foreground/60"
-                    : "hover:bg-accent"
+                    ? "bg-(--theme-accent)/8 hover:bg-(--theme-accent)/12"
+                    : "hover:bg-accent/50"
                 )}
               >
                 <span className="flex items-center gap-2">
@@ -177,20 +180,13 @@ export function QuestionCard({
                     {option.label}
                   </span>
                   {index === 0 && (
-                    <span className="shrink-0 rounded-md bg-primary-foreground/15 px-1.5 text-xs leading-5 text-primary-foreground/80">
+                    <span className="shrink-0 rounded-md bg-(--theme-accent)/12 px-1.5 text-xs leading-5 text-muted-foreground">
                       {t.run.question.recommended}
                     </span>
                   )}
                 </span>
                 {option.reason && (
-                  <span
-                    className={cn(
-                      "mt-0.5 block text-xs leading-4 wrap-break-word",
-                      index === 0
-                        ? "text-primary-foreground/60"
-                        : "text-muted-foreground/70"
-                    )}
-                  >
+                  <span className="mt-0.5 block text-xs leading-4 wrap-break-word text-muted-foreground/70">
                     {option.reason}
                   </span>
                 )}

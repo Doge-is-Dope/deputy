@@ -1,6 +1,6 @@
-"""A conversation's plan: the steps the main agent means to carry out, as the whole list it last wrote, and which of
-them are done. It holds no tasks: what runs is given when the plan is shown, so a step and the task on it can be
-written in either order."""
+"""A request's plan: the steps the main agent means to carry out for the user's message, as the whole list it last
+wrote, and which of them are done. The next message starts without one. It holds no tasks: what runs is given when the
+plan is shown, so a step and the task on it can be written in either order."""
 
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
@@ -27,16 +27,7 @@ class Plan:
     def __init__(self):
         self.steps: tuple[Step, ...] = ()
         self.done: set[str] = set()  # the ids of the steps that are done
-        self.version = 0  # of the latest snapshot: logs of several turns hold them, and the newest is the highest
-
-    @classmethod
-    def restored(cls, snapshot: PlanSnapshot) -> "Plan":
-        """The plan a snapshot showed. Nothing runs in a new session, so a step in progress then is not done now."""
-        plan = cls()
-        plan.steps = tuple(Step(s["id"], s["title"], s["done_when"], tuple(s["needs"])) for s in snapshot["steps"])
-        plan.done = {s["id"] for s in snapshot["steps"] if s["status"] == "completed"}
-        plan.version = snapshot["version"]
-        return plan
+        self.version = 0  # of the latest snapshot: a session's logs hold them, and the newest is the highest
 
     def write(self, steps: Sequence[Step], finished: Iterable[str] = (), reopened: Iterable[str] = ()) -> None:
         """Replace the list. A step that stays keeps whether it is done, unless named in `finished` or `reopened`."""
@@ -63,6 +54,10 @@ class Plan:
         return [self._shown(step, running.get(step.id, ())) for step in self.steps]
 
     def _shown(self, step: Step, tasks: Sequence[str]) -> PlanStep:
-        status = "completed" if step.id in self.done else "in_progress" if tasks else "pending"
+        """In progress once a task is on it and the steps it needs are done: one task handed several steps in order
+        works on the first that is open. A step the plan no longer has holds nothing."""
+        known = {each.id for each in self.steps}
+        ready = all(need in self.done for need in step.needs if need in known)
+        status = "completed" if step.id in self.done else "in_progress" if tasks and ready else "pending"
         return {"id": step.id, "title": step.title, "done_when": step.done_when, "needs": list(step.needs),
                 "status": status, "tasks": list(tasks)}

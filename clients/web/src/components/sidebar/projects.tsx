@@ -15,7 +15,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSub,
-  useSidebar,
+  useSidebarSheet,
 } from "@/components/ui/sidebar"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { NameField } from "@/components/sidebar/name-field"
@@ -41,13 +41,13 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { carriedBy, NEW_PROJECT } from "@/components/sidebar/drag"
-import { FOLD, fold } from "@/components/sidebar/motion"
+import { carriedBy, NEW_PROJECT, TAKES } from "@/components/sidebar/drag"
+import { DROP, FOLD, fold } from "@/components/sidebar/motion"
 import type { Lists } from "@/hooks/use-api"
 
 /** The row that makes a project while there is none, under Projects: a folder with a
  * plus on the folders' column, as a project's row has its folder. A conversation dropped on it goes into the project it makes, the
- * row lit meanwhile as a project's is. Where the last project is folding shut, it opens as that closes up, so the list
+ * row outlined meanwhile as a project is. Where the last project is folding shut, it opens as that closes up, so the list
  * below moves one way only. */
 export function NewProjectRow({
   onCreate,
@@ -72,10 +72,8 @@ export function NewProjectRow({
     >
       <SidebarMenuButton
         className={cn(
-          "h-8 pl-2.5 pointer-coarse:h-10",
-          isOver &&
-            carriedBy(active) &&
-            "bg-sidebar-accent text-sidebar-accent-foreground"
+          "h-8 pl-row-icon pointer-coarse:h-10",
+          isOver && carriedBy(active) && TAKES
         )}
         onClick={onCreate}
       >
@@ -154,7 +152,7 @@ export function ProjectGroup({
     )
     return () => window.clearTimeout(timer)
   }, [open, leaving, project, read, load, loading, failedRead])
-  const { isMobile, setOpenMobile } = useSidebar()
+  const { isMobile, setOpenMobile } = useSidebarSheet()
   // Enter or blur renames it to a changed, nonempty name; Escape cancels, as a conversation's rename does.
   const [draft, setDraft] = useState<string | null>(null)
   const commit = () => {
@@ -186,7 +184,7 @@ export function ProjectGroup({
   // It unfolds once its first page is in: Base UI measures the panel as it opens, and a spinner measured there held
   // the fold to one line, the rows snapping in at its end. A first read that failed opens on the spinner, retrying.
   const unfolded = shown && (lists.loaded(project) || failedRead)
-  // A conversation from elsewhere carried over it, or over its conversations: its row lit and its folder open, to take
+  // A conversation from elsewhere carried over it, or over its conversations: a line around it and its folder open, to take
   // it in. One of its own is home already.
   const carried = carriedBy(active)
   const target = isOver && carried !== undefined && carried.project !== project
@@ -223,6 +221,7 @@ export function ProjectGroup({
       style={{ transform: CSS.Translate.toString(transform), transition }}
       className={cn(
         "relative",
+        target && TAKES,
         isDragging && "opacity-0",
         leaving && "pointer-events-none"
       )}
@@ -230,14 +229,10 @@ export function ProjectGroup({
       <Collapsible open={unfolded}>
         <div className="group/menu-item relative">
           <SidebarMenuButton
-            // Its folder as the commands' icons above it: 20px, in the text's color, on the same column (pl-2.5).
+            // Its folder as the commands' icons above it: 20px, in the text's color, on the same column.
             ref={setActivatorNodeRef}
             {...listeners}
-            // Lit as a hovered row is while it would take a carried conversation.
-            className={cn(
-              "h-8 pl-2.5 pointer-coarse:h-10",
-              target && "bg-sidebar-accent text-sidebar-accent-foreground"
-            )}
+            className="h-8 pl-row-icon pointer-coarse:h-10"
             isActive={selected}
             aria-expanded={shown}
             onClick={() => onOpen(!open)}
@@ -287,7 +282,7 @@ export function ProjectGroup({
           {/* Over the row, its folder and the name kept in place: the row's gap between them (gap-2.5), or the name
               jumps as the field opens. */}
           {draft !== null && (
-            <div className="absolute inset-0 z-10 flex items-center gap-2.5 rounded-md bg-sidebar-accent pr-2 pl-2.5 text-sidebar-accent-foreground">
+            <div className="absolute inset-0 z-10 flex items-center gap-2.5 rounded-md bg-sidebar-accent pr-2 pl-row-icon text-sidebar-accent-foreground">
               <Folder className="shrink-0" />
               <NameField
                 value={draft}
@@ -365,7 +360,7 @@ export function ProjectGroup({
                 {children}
               </ProjectRows>
             ) : (
-              <li className="flex h-8 animate-in items-center pr-2 pl-10 text-sm text-muted-foreground duration-200 ease-(--ease-out) fade-in motion-reduce:animate-none pointer-coarse:h-10">
+              <li className="flex h-8 animate-in items-center pr-2 pl-row-nested text-sm text-muted-foreground duration-200 ease-(--ease-out) fade-in motion-reduce:animate-none pointer-coarse:h-10">
                 {t.sidebar.noChats}
               </li>
             )}
@@ -397,6 +392,24 @@ function ProjectRows({
   const more = lists.more(project) // the runtime has conversations beyond those given
   // The one whose page is open, listed after the first five while it is further down; no Show more for it alone.
   const appended = reading >= limit
+  // Show more opens the room for its rows on a dropped row's curve, the lists below moving down with it.
+  const grown = useRef<{ list: HTMLElement; from: number } | null>(null)
+  useLayoutEffect(() => {
+    const { list, from } = grown.current ?? {}
+    grown.current = null
+    if (!list || reducedMotion()) return
+    list.style.overflow = "clip"
+    const animation = list.animate(
+      { height: [`${from}px`, `${list.offsetHeight}px`] },
+      DROP
+    )
+    const done = () => {
+      animation.cancel()
+      list.style.overflow = ""
+    }
+    animation.onfinish = done
+    return done
+  }, [limit])
   return (
     <>
       {rows.slice(0, limit)}
@@ -409,8 +422,10 @@ function ProjectRows({
         (rows.length > limit + (appended ? 1 : 0) || more) && (
           <SidebarMenuItem>
             <SidebarMenuButton
-              className="h-8 pl-10 text-muted-foreground pointer-coarse:h-10"
-              onClick={() => {
+              className="h-8 pl-row-nested text-muted-foreground pointer-coarse:h-10"
+              onClick={(event) => {
+                const list = event.currentTarget.closest("ul")
+                if (list) grown.current = { list, from: list.offsetHeight }
                 // The next page from the runtime, only when those loaded cannot fill the longer list: a list opened
                 // again lists five of those it has, and shows the rest first.
                 if (more && rows.length < limit + PROJECT_PAGE)

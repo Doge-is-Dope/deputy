@@ -105,9 +105,9 @@ def test_openai_is_offered_the_hand_over_tools_and_left_to_choose_among_them(set
     desktop = TaskTool(ComputerAgent.agent, ComputerAgent.about, None)  # schema only
     tools = handover_tools([desktop], background=None, user=None)
     bound = build_chat_model(Choice("openai:gpt-6-luna", "high"), settings).bind_tools(tools)
-    payload = bound.bound._get_request_payload([HumanMessage("@Computer open Notepad")], **bound.kwargs)
+    payload = bound.bound._get_request_payload([HumanMessage("open Notepad")], **bound.kwargs)
 
-    assert "tool_choice" not in payload  # a message for the desktop is not forced (agent.main_agent DESKTOP_ASKED)
+    assert "tool_choice" not in payload  # a message for the desktop is not forced (prompts.computer DESKTOP_ASKED)
     # Without a code runner, start_task offers only the computer agent.
     assert [each["name"] for each in payload["tools"]] == ["start_task", "tell_task", "stop_task"]
     assert list(payload["tools"][0]["parameters"]["properties"]) == ["agent", "title", "task", "steps"]

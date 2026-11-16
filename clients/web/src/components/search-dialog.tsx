@@ -5,12 +5,14 @@ import {
   type ComponentProps,
   type KeyboardEvent,
   type ReactNode,
+  type Ref,
 } from "react"
 
 import { ChatIcon, ComposeIcon, FolderPlusIcon } from "@/components/icons"
 import { PAGES } from "@/components/settings/settings-dialog"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { Kbd } from "@/components/ui/kbd"
+import { SidebarMenuSkeleton } from "@/components/ui/sidebar"
 import { useNow } from "@/hooks/use-now"
 import { useSearch } from "@/hooks/use-search"
 import type { Conversation, SearchHit } from "@/lib/api"
@@ -24,8 +26,8 @@ import { marked } from "@/lib/search"
 import type { Messages } from "@/locales/zh-Hant"
 import { cn } from "cn"
 
-// Show loaded recents without a query; search all conversations through the API.
-const RECENT = 50
+// Without a query, the loaded recents, this many at a time; with one, the runtime's pages of as many.
+const PAGE = 10
 
 /** A command the search offers above the conversations, with its shortcut if it has one. */
 type Action = {
@@ -90,7 +92,8 @@ function SearchBody({
   const [active, setActive] = useState(0)
   const list = useRef<HTMLDivElement>(null)
   const now = useNow(true, 60_000)
-  const hits = useSearch(query)
+  const { hits, more, reading, added } = useSearch(query, conversations)
+  const [recent, setRecent] = useState(PAGE) // how many of the recents are listed
   const words = query.trim().toLocaleLowerCase()
   const searching = words !== ""
   const matchesLabel = (label: (messages: Messages) => string) =>
@@ -128,8 +131,30 @@ function SearchBody({
   const found: SearchHit[] = searching
     ? (hits ?? [])
     : conversations
-        .slice(0, RECENT)
+        .slice(0, recent)
         .map((conversation) => ({ conversation, snippet: null }))
+  // The list goes on as its end comes near: the search's next page, or the next of the recents, there already.
+  const next = searching
+    ? more
+    : recent < conversations.length
+      ? () => setRecent((count) => count + PAGE)
+      : null
+  // Watched anew as each page's end takes the last one's place, and as the recents grow under the same end.
+  const [end, setEnd] = useState<HTMLDivElement | null>(null)
+  const goOn = useRef(next)
+  useEffect(() => {
+    goOn.current = next
+  })
+  const ends = next !== null
+  useEffect(() => {
+    if (!end || !ends) return
+    const observer = new IntersectionObserver(
+      ([entry]) => entry.isIntersecting && goOn.current?.(),
+      { root: list.current }
+    )
+    observer.observe(end)
+    return () => observer.disconnect()
+  }, [end, ends, recent])
   // Use one row index across sections for keyboard navigation.
   const sections: { label: string; items: Item[]; first: number }[] = []
   let start = 0
@@ -186,11 +211,15 @@ function SearchBody({
         onChange={(event) => {
           setQuery(event.target.value)
           setActive(0)
+          // From its top: scrolled down, a new query's first page would have its end in view and read the next.
+          list.current?.scrollTo({ top: 0 })
         }}
         onKeyDown={onKeyDown}
-        className="h-14 shrink-0 border-b bg-transparent pr-14 pl-5 text-base outline-none placeholder:text-muted-foreground md:text-sm"
+        // h-13: its middle level with the close button's, 26px down. Its words on the 16px column, as the rows' are.
+        className="h-13 shrink-0 border-b bg-transparent pr-14 pl-4 text-base outline-none placeholder:text-muted-foreground md:text-sm"
       />
-      {/* scroll-py matches p, so rows the arrow keys scroll to keep their margin. On a phone, the whole screen, the
+      {/* scroll-py matches p, so rows the arrow keys scroll to keep their margin. 8px in, a row (12) is concentric
+          with the dialog's corner (20), and its words (px-2) on the 16px column. On a phone, the whole screen, the
           results lie on the page's background under the bar, as the settings' pages do. */}
       <div
         ref={list}
@@ -209,6 +238,8 @@ function SearchBody({
             {items.map((item, at) => {
               const row = {
                 index: first + at,
+                // Those a page brought come in as the sidebar's do.
+                arriving: items === found && at >= items.length - added,
                 current,
                 onHover: setActive,
                 onChoose: () => choose(item),
@@ -254,16 +285,53 @@ function SearchBody({
             })}
           </Section>
         ))}
+        {/* No conversation to list until the answer is in: their section with its rows' places, pulsing, under the
+            commands and settings, which are matched here and listed at once. Only for an answer that is slow to come,
+            counted from the last key (its key), as the sidebar's own placeholder waits: a quick one would flash it. */}
+        {searching && hits === null && (
+          <Section
+            key={query}
+            label={t.chats.chats}
+            className="animate-in delay-300 duration-200 ease-(--ease-out) fill-mode-both fade-in motion-reduce:animate-none"
+          >
+            <LoadingRows />
+          </Section>
+        )}
+        {reading ? <LoadingRows ref={setEnd} /> : next && <div ref={setEnd} />}
       </div>
     </>
   )
 }
 
-/** A labeled group of search results. */
-function Section({ label, children }: { label: string; children: ReactNode }) {
+/** Rows on their way: three of their shapes, pulsing as one, as the sidebar's next page does. */
+function LoadingRows({ ref }: { ref?: Ref<HTMLDivElement> }) {
+  const t = useT()
   return (
-    <div role="group" aria-label={label} className="not-first:mt-2">
-      <div className="px-3 pt-2 pb-1 text-xs text-muted-foreground">
+    <div ref={ref} role="status" className="motion-safe:animate-pulse">
+      <span className="sr-only">{t.common.loading}</span>
+      {Array.from({ length: 3 }, (_, index) => (
+        <SidebarMenuSkeleton key={index} showIcon className="h-9" />
+      ))}
+    </div>
+  )
+}
+
+function Section({
+  label,
+  className,
+  children,
+}: {
+  label: string
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className={cn("not-first:mt-2", className)}
+    >
+      <div className="px-2 pt-2 pb-1 text-xs text-muted-foreground">
         {label}
       </div>
       {children}
@@ -271,7 +339,6 @@ function Section({ label, children }: { label: string; children: ReactNode }) {
   )
 }
 
-/** A command's row: its icon, its name and its shortcut. */
 function ActionRow({
   action,
   query,
@@ -279,6 +346,7 @@ function ActionRow({
 }: {
   action: Action
   index: number
+  arriving: boolean
   current: number
   query: string
   onHover: (index: number) => void
@@ -292,9 +360,10 @@ function ActionRow({
         <span className="min-w-0 flex-1 truncate">
           <Marked text={action.label(t)} query={query} />
         </span>
-        {/* No keyboard to press it on a touch screen. */}
+        {/* No keyboard to press it on a touch screen. 6px from the row's end as from its top and bottom, so its corner
+            (6) is concentric with the row's (12). */}
         {action.shortcut && (
-          <Kbd className="pointer-coarse:hidden">
+          <Kbd row className="-mr-0.5 pointer-coarse:hidden">
             {shortcutLabel(action.shortcut)}
           </Kbd>
         )}
@@ -306,6 +375,7 @@ function ActionRow({
 /** One choice in the list: lit while the arrows or the pointer are on it. */
 function Row({
   index,
+  arriving,
   current,
   href,
   onHover,
@@ -313,6 +383,7 @@ function Row({
   children,
 }: {
   index: number
+  arriving: boolean // it came with a next page
   current: number
   href?: string
   onHover: (index: number) => void
@@ -333,7 +404,8 @@ function Row({
         onChoose()
       }}
       className={cn(
-        "block cursor-pointer rounded-lg px-3 py-2 outline-none",
+        "block cursor-pointer rounded-lg px-2 py-2 outline-none",
+        arriving && "arrive-row",
         index === current && "bg-muted"
       )}
     >

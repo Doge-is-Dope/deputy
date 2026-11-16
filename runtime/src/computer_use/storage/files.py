@@ -1,4 +1,5 @@
 """Runs as folders: data/users/<user>/runs/<id>/steps.jsonl, one event per line; a user's folder is their whole view.
+An older format's records are left unlisted until `rebuild` erases them with their runs.
 Files go to a files store, by default beside the record. The list revision is the mtime of data/users/<user>/revision,
 so processes sharing the data see each other's changes. Projects are data/users/<user>/projects.json, rewritten
 under a lock. Records are parsed in a worker thread; appends stay on the event loop to keep their order."""
@@ -16,24 +17,36 @@ from pathlib import Path
 
 from computer_use.files import FileStore
 from computer_use.storage import (
-    ALL, LISTED, MAX_HITS, PAGE, Conversation, Cursor, Event, Hit, Page, Project, RunFiles, RunId, RunSummary, Thread,
-    conversations_of, named, page_of, project_name, said, snippet, summarize, supported, user_id,
+    ALL, HITS, LISTED, PAGE, Conversation, Cursor, Event, Hit, Page, Project, RunFiles, RunId, RunSummary, Thread,
+    conversations_of, decode_cursor, named, page_of, project_name, said, snippet, summarize, supported, user_id,
 )
 
 
 class FileRunStore:
     def __init__(self, data_dir: Path, files: FileStore):
-        self.users = data_dir / "users"
+        self.folder = data_dir / "users"
         self.files = files
         self._views: dict[str, FileRuns] = {}  # one view per user, with its caches
 
     def of(self, user: str) -> "FileRuns":
         if user not in self._views:
-            self._views[user] = FileRuns(self.users / user_id(user), user, self.files)
+            self._views[user] = FileRuns(self.folder / user_id(user), user, self.files)
         return self._views[user]
 
     async def close(self) -> None:
         pass
+
+    async def users(self) -> list[str]:
+        """Everyone with a folder."""
+        return sorted(path.name for path in self.folder.iterdir() if path.is_dir()) if self.folder.is_dir() else []
+
+    async def rebuild(self, user: str) -> tuple[int, int, int]:
+        """Erases the user's runs of an older format, which are never listed and so could never be deleted; returns the
+        counts of runs, conversations and erased runs. Records are read each time, so there is nothing to remake."""
+        view = self.of(user)
+        erased = await view._erase(await asyncio.to_thread(view._older))
+        summaries = await view._scanned()
+        return len(summaries), len(conversations_of(summaries)), erased
 
 
 class FileRuns(RunFiles):
@@ -47,6 +60,7 @@ class FileRuns(RunFiles):
         self._summaries: dict[RunId, tuple[tuple[int, int], RunSummary]] = {}
         # The scan in progress and the revision it began at: lists asked for meanwhile share it.
         self._scan: tuple[int, asyncio.Future[list[RunSummary]]] | None = None
+        self._last_revision = 0  # the revision last written, in ns
 
     def _folder(self, run: RunId) -> Path:
         return self.root / run
@@ -72,7 +86,22 @@ class FileRuns(RunFiles):
         """Appends are written as they are made."""
 
     async def events(self, run: RunId, after: int = -1, *, messages: bool = True) -> list[Event]:
-        return await asyncio.to_thread(self._events, self._record(run), after)
+        events = await asyncio.to_thread(self._events, self._record(run), after)
+        return events if messages else [{key: value for key, value in event.items() if key != "message"} for event in events]
+
+    async def thread(self, run: RunId) -> Thread | None:
+        first = await asyncio.to_thread(self._first, self._record(run))
+        return first[0]["thread"] if supported(first) else None
+
+    @staticmethod
+    def _first(path: Path) -> list[Event]:
+        """The record's first event, alone; none while it has no whole line."""
+        try:
+            with path.open(encoding="utf-8") as file:
+                line = file.readline()
+        except (FileNotFoundError, NotADirectoryError):
+            return []
+        return [json.loads(line)] if line.endswith("\n") else []
 
     @staticmethod
     def _events(path: Path, after: int = -1) -> list[Event]:
@@ -123,11 +152,14 @@ class FileRuns(RunFiles):
                     continue
                 cached = self._summaries[run] = (key, summarize(run, events))
             items.append(cached[1])
-        items.sort(key=lambda item: item.started, reverse=True)
         return items
 
     async def delete(self, thread: Thread) -> list[RunId]:
         runs = [each.id for each in await self.runs(thread)]
+        await self._erase(runs)
+        return runs
+
+    async def _erase(self, runs: list[RunId]) -> int:
         for run in runs:
             # Record first, then files: a crash leaves stray files, never a record naming missing ones.
             await asyncio.to_thread(shutil.rmtree, self._folder(run), ignore_errors=True)
@@ -135,12 +167,17 @@ class FileRuns(RunFiles):
             self._summaries.pop(run, None)
         if runs:
             self._touch()
-        return runs
+        return len(runs)
 
-    async def search(self, query: str, limit: int = MAX_HITS) -> list[Hit]:
-        return await asyncio.to_thread(self._search, query, limit)
+    def _older(self) -> list[RunId]:
+        """Runs whose record is in an older format; a folder without a record (a database's run files) is not one."""
+        paths = self.root.glob("*/steps.jsonl") if self.root.is_dir() else ()
+        return [path.parent.name for path in paths if not supported(self._events(path))]
 
-    def _search(self, query: str, limit: int) -> list[Hit]:
+    async def search(self, query: str, limit: int = HITS, before: Cursor | None = None) -> list[Hit]:
+        return await asyncio.to_thread(self._search, query, limit, before and decode_cursor(before))
+
+    def _search(self, query: str, limit: int, before: tuple[float, Thread] | None) -> list[Hit]:
         """Newest first; a record whose raw text lacks the query is skipped unparsed."""
         written = json.dumps(query, ensure_ascii=False)[1:-1].lower()
         summaries = self._summarize()
@@ -151,12 +188,14 @@ class FileRuns(RunFiles):
         for conversation in conversations_of(summaries):
             if len(hits) == limit:
                 break
+            if before is not None and (conversation.last, conversation.id) >= before:
+                continue
             found = None
             for run in reversed(runs_of[conversation.id]):  # latest match first
                 text = self._read(self._record(run))
                 if written in text.lower() and (found := snippet(said(self._parse(text)), query)):
                     break
-            if found or named(conversation, query):
+            if found or named(conversation.title, conversation.goal, query):
                 hits.append(Hit(conversation, found))
         return hits
 
@@ -170,12 +209,7 @@ class FileRuns(RunFiles):
         """Moves the revision forward, even within one clock tick."""
         self.folder.mkdir(parents=True, exist_ok=True)
         self.revision_path.touch()
-        now = time.time_ns()
-        try:
-            last = self._last_revision
-        except AttributeError:
-            last = 0
-        self._last_revision = max(now, last + 1)
+        self._last_revision = max(time.time_ns(), self._last_revision + 1)
         os.utime(self.revision_path, ns=(self._last_revision, self._last_revision))
 
 

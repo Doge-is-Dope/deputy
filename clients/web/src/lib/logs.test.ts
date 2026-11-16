@@ -1,9 +1,9 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { RunEvent } from "@/lib/api"
-import single from "../../../../runtime/tests/fixtures/events-v5.json"
 import records from "../../../../runtime/tests/fixtures/events-v7.json"
-import { mergeSession, type SessionLog } from "@/lib/logs"
+import { applyEventBatch, type EventState } from "@/lib/events"
+import { mergeSession, sameLogs, type SessionLog } from "@/lib/logs"
 import { buildThread, runningTask } from "@/lib/thread"
 
 vi.mock("@/lib/i18n", async () => {
@@ -41,11 +41,6 @@ function drawn(events: RunEvent[]) {
 }
 
 describe("a session's logs", () => {
-  it("draw as the one log of a run did", () => {
-    const { events } = mergeSession(logs, true)
-    expect(drawn(events)).toEqual(drawn(single as RunEvent[]))
-  })
-
   it("end when its last log ended, a task after the turn that handed it over", () => {
     const { events } = mergeSession(logs.slice(0, 2), true)
     const end = events.at(-1)
@@ -179,5 +174,23 @@ describe("a task whose log comes before its turn hands it over", () => {
       "task",
       "reply",
     ])
+  })
+})
+
+describe("sameLogs", () => {
+  it("keeps the logs through a frame of the reply being written, and not once an event comes", () => {
+    const state: EventState = { events: turn, draft: "", final: false, streamed: new Set() }
+    const of = (stream: EventState): SessionLog[] => [
+      { id: "turn-1", events: stream.events, streamed: stream.streamed },
+    ]
+    const last = of(state)
+    const writing = applyEventBatch(state, [{ draft: "Hel", whole: false }])
+    const logged = applyEventBatch(writing, [{ event: turn[0] }])
+
+    expect(writing.draft).toBe("Hel")
+    expect(sameLogs(last, of(writing))).toBe(last)
+    expect(sameLogs(last, of(logged))).not.toBe(last)
+    expect(sameLogs(last, [...of(writing), { id: "task-1", events: task }])).not.toBe(last)
+    expect(sameLogs(undefined, last)).toBe(last)
   })
 })

@@ -13,8 +13,8 @@ import { reducedMotion } from "@/lib/motion"
  * placed at once; where it can't be drawn, live-view.tsx shows a plain ring instead (index.css).
  */
 
-// The timing (index.css: --ease-out, --ease-in-out). Taking over, as the CSS takeover's: the tab widens out of the
-// button on the strong ease-out, answering the click at once and settling into place; the frame leaves its ends as it
+// The timing (index.css: --ease-out, --ease-in-out). Taking over, the tab widens out of the button on the strong
+// ease-out, answering the click at once and settling into place; the frame leaves its ends as it
 // is about done and runs round both ways on the strong ease-in-out, so its two heads leave the tab gently and slow
 // into each other at the top instead of stopping dead. Returning, quicker, the blue drains back as one: the frame
 // runs back into the tab's ends, then the tab narrows into the button, on one strong ease-in-out, each for its share
@@ -379,7 +379,7 @@ export function createLiquidTakeover(
     )
     return { screen, pill, button, line, hx, hy, total, tabEnd, tabTravel }
   }
-  // How fast the frame ran at the last frame drawn, in frames per second, for its head's swell.
+  // Where the frame had run to at the last frame drawn, and when: how fast it runs (its share a second) swells its head.
   let lastRun = 0
   let lastTime = 0
   let blank = false
@@ -456,14 +456,15 @@ export function createLiquidTakeover(
     if (!frame) draw()
   })
   resized.observe(canvas)
-  // Light or dark and the theme, from the system or from 設定, end up on <html data-mode data-theme>
-  // (lib/appearance.ts).
+  // Light or dark, from the system or from 設定, ends up on <html data-mode> (lib/appearance.ts); full screen, the
+  // live view sets its own mode.
   const scheme = new MutationObserver(() => {
     readColor()
     if (!frame) draw()
   })
   scheme.observe(document.documentElement, {
-    attributeFilter: ["data-mode", "data-theme"],
+    attributeFilter: ["data-mode"],
+    subtree: true,
   })
   // The GPU may drop the context; draw again once it is back.
   const lost = (event: Event) => event.preventDefault()

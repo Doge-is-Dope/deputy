@@ -93,6 +93,7 @@ import {
   carriedBy,
   collision,
   DraggedConversation,
+  HOME,
   DraggedProject,
   NEW_PROJECT,
   RECENTS,
@@ -133,12 +134,15 @@ function ShortcutItem({
         aria-keyshortcuts={shortcutAria(shortcut)}
         // As high as a conversation's row. In the closed rail a 32px square under
         // the trigger's middle, so closing the sidebar moves no icon: the margin and padding change together.
-        className="h-8 pl-2.5 transition-[width,height,padding,margin] group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-1.5! pointer-coarse:h-10"
+        className="h-8 pl-row-icon transition-[width,height,padding,margin] group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-1.5! pointer-coarse:h-10"
         {...props}
       >
         {icon}
         {label}
-        <Kbd className="ml-auto opacity-0 group-hover/menu-item:opacity-100 group-has-[:focus-visible]/menu-item:opacity-100 group-data-[collapsible=icon]:hidden [@media(hover:none)]:hidden">
+        <Kbd
+          row
+          className="-mr-1 ml-auto opacity-0 group-hover/menu-item:opacity-100 group-has-[:focus-visible]/menu-item:opacity-100 group-data-[collapsible=icon]:hidden [@media(hover:none)]:hidden"
+        >
           {keys}
         </Kbd>
       </SidebarMenuButton>
@@ -204,6 +208,13 @@ export function AppSidebar({
   const [searchOpen, setSearchOpen] = useState(false)
   const { user, login } = useSession()
   const searchedNew = useRef(false) // 新對話 chosen in the search, which hands the focus to the composer as it closes
+  // Where the keyboard was when the search opened, which gets it back: ⌘K has no button to give it back to.
+  const searchedFrom = useRef<HTMLElement | null>(null)
+  const noteFocus = () => {
+    const active = document.activeElement
+    if (active instanceof HTMLElement && !active.closest("[role=dialog]"))
+      searchedFrom.current = active
+  }
   // 新對話 puts the caret in the composer, also on the page it is already on (where the
   // composer is not mounted anew to focus itself). On a phone the sheet hands the focus to it as it closes, rather than
   // back to its toggle.
@@ -259,6 +270,9 @@ export function AppSidebar({
   }
   // The conversation being carried onto a project or out to the recents, until it is dropped.
   const [carried, setCarried] = useState<Conversation | null>(null)
+  // Whether what is under it would take it: its chip is faint otherwise, and a release there, or Escape, puts the
+  // chip back on its row (DROP). Kept past the drop, which reads it as the chip goes.
+  const [aimed, setAimed] = useState(false)
   // The page marked while anything is dragged, for the system's closed hand over all of it (index.css).
   const grab = (dragging: boolean) =>
     document.documentElement.toggleAttribute("data-dragging", dragging)
@@ -318,6 +332,7 @@ export function AppSidebar({
         openSettings()
       } else if (isShortcut(event, SEARCH_SHORTCUT)) {
         event.preventDefault()
+        noteFocus()
         setSearchOpen((open) => !open)
       } else if (isShortcut(event, NEW_SHORTCUT)) {
         event.preventDefault()
@@ -394,14 +409,26 @@ export function AppSidebar({
       onDragStart={({ active }) => {
         grab(true)
         const conversation = carriedBy(active)
-        if (conversation) setCarried(conversation)
-        else {
+        if (conversation) {
+          setCarried(conversation)
+          setAimed(false)
+        } else {
           window.clearTimeout(landing.current)
           setDragged(String(active.id))
           setSorting(true)
         }
       }}
+      onDragOver={({ active, over }) => {
+        const conversation = carriedBy(active)
+        if (conversation)
+          setAimed(
+            over !== null && over.id !== (conversation.project ?? RECENTS)
+          )
+      }}
       onDragCancel={() => {
+        // Escape leaves the keyboard's focus ring on the row the press focused.
+        if (document.activeElement instanceof HTMLElement)
+          document.activeElement.blur()
         grab(false)
         setCarried(null)
         setSorting(false)
@@ -438,14 +465,14 @@ export function AppSidebar({
     >
       {/* Closed, it narrows to a rail of its toggle, 新對話 and 搜尋, with the account's circle at its foot, each named
           on hover. Open or closed, they stay in one column, their 20px icons centred 28px from the left edge. */}
-      <Sidebar collapsible="icon" finalFocus={sheetFocus}>
-        {/* The toggle sits on the page header's line: its center 24px from the top, like the header's buttons. In the
+      <Sidebar finalFocus={sheetFocus}>
+        {/* The toggle sits on the page header's line: 36px with its center 24px from the top, like the header's buttons. In the
             closed rail it is a 32px square like the commands under it, so their tooltips and hover marks line up; the
             margins keep its icon, and the rows under it, where they were. */}
-        {/* New and the settings above the list. A hairline under them shows
+        {/* New and search above the list. A hairline under them shows
             while the list is scrolled, fading in and out, so the top of the list reads as passing under them. */}
         <SidebarHeader className="relative pt-1 pb-2">
-          <SidebarTrigger className="size-10 transition-[width,height,margin] duration-300 ease-(--ease-drawer) group-data-[collapsible=icon]:my-1 group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8" />
+          <SidebarTrigger className="m-0.5 size-9 transition-[width,height,margin] duration-300 ease-(--ease-drawer) group-data-[collapsible=icon]:my-1 group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8" />
           <SidebarMenu className="gap-0.5">
             <ShortcutItem
               icon={<ComposeIcon />}
@@ -459,7 +486,10 @@ export function AppSidebar({
               icon={<SearchIcon />}
               label={t.sidebar.search}
               shortcut={SEARCH_SHORTCUT}
-              onClick={() => setSearchOpen(true)}
+              onClick={() => {
+                noteFocus()
+                setSearchOpen(true)
+              }}
             />
           </SidebarMenu>
           <span
@@ -514,7 +544,7 @@ export function AppSidebar({
                     key={group}
                     className="py-0 motion-safe:animate-pulse"
                   >
-                    <div className="flex h-8 items-center px-2">
+                    <div className="flex h-8 items-center pr-2 pl-row-text">
                       <Skeleton className="h-3 w-12" />
                     </div>
                     <SidebarMenu className="gap-0.5">
@@ -522,7 +552,10 @@ export function AppSidebar({
                         <SidebarMenuItem key={index}>
                           <SidebarMenuSkeleton
                             showIcon={icon}
-                            className="h-8 pointer-coarse:h-10"
+                            className={cn(
+                              "h-8 pointer-coarse:h-10",
+                              !icon && "pl-row-text"
+                            )}
                           />
                         </SidebarMenuItem>
                       ))}
@@ -533,8 +566,7 @@ export function AppSidebar({
             )}
             {/* The projects above the rest, each shut unless the viewer opened it: an eval's runs out of the way of
               the user's own conversations. A new one is made from the heading's button, shown while the heading is
-              hovered; with none yet, from a row in their place, as ChatGPT lists New project under
-              its Projects. */}
+              hovered; with none yet, from a row in their place. */}
             {conversations !== null && (
               <SidebarGroup className="py-0">
                 {/* The heading and its button the hover group: hovering a project shows its own buttons, not this. */}
@@ -661,7 +693,7 @@ export function AppSidebar({
                         // The avatar a size up from the icons above, its middle on theirs and the name where their words begin.
                         user
                           ? "gap-2 pl-2 group-data-[collapsible=icon]:p-1! [&_svg]:size-6"
-                          : "pl-2.5 group-data-[collapsible=icon]:p-1.5!"
+                          : ["pl-row-icon group-data-[collapsible=icon]:p-1.5!"]
                       )}
                     />
                   }
@@ -675,30 +707,37 @@ export function AppSidebar({
                 <DropdownMenuContent
                   side="top"
                   align="start"
+                  alignOffset={-2}
                   className="min-w-56"
                 >
                   {/* Who it is, not a choice: the avatar on the items' icons, the name where their words begin. */}
                   {user && (
                     <>
-                      <div className="flex items-center gap-1.5 py-1.5 pr-2 pl-1.5">
+                      <div className="flex items-center gap-2.5 py-1.5 pr-2 pl-1.5">
                         <UserAvatar id={user.id} className="size-5 shrink-0" />
                         <span className="truncate">{user.name}</span>
                       </div>
                       <DropdownMenuSeparator />
                     </>
                   )}
-                  <DropdownMenuItem onClick={() => openSettings()}>
+                  <DropdownMenuItem
+                    className="gap-3"
+                    onClick={() => openSettings()}
+                  >
                     <GearIcon />
                     {t.settings.title}
                     {/* No keyboard to press it on a touch screen. */}
-                    <Kbd className="ml-auto pointer-coarse:hidden">
+                    <Kbd row className="-mr-1 ml-auto pointer-coarse:hidden">
                       {shortcutLabel(SETTINGS_SHORTCUT)}
                     </Kbd>
                   </DropdownMenuItem>
                   {login === "token" && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onClick={() => void signOut()}>
+                      <DropdownMenuItem
+                        className="gap-3"
+                        onClick={() => void signOut()}
+                      >
                         <SignOutIcon />
                         {t.sidebar.signOut}
                       </DropdownMenuItem>
@@ -727,7 +766,10 @@ export function AppSidebar({
         finalFocus={() => {
           const chose = searchedNew.current
           searchedNew.current = false
-          return chose ? (composer.current ?? true) : true
+          const from = searchedFrom.current
+          if (!chose && from?.isConnected && from !== document.body) return from
+          // Nowhere to go back to: the composer, but not on a phone, where that would raise the keyboard.
+          return chose || !isMobile ? (composer.current ?? true) : true
         }}
       />
       {/* Outside the sidebar, which on a phone is a sheet that is gone while closed, so ⌘, opens it from anywhere. */}
@@ -771,20 +813,21 @@ export function AppSidebar({
         }}
       />
       {/* Over the page, so neither the sidebar nor a list's fold clips it; as tall as its row, not the project, and a
-          conversation's chip as wide as its name. A project settles into its place; a conversation's chip goes at
-          once, as its row leaves the recents (dragged is only a project's, held until it has landed). The pointer
+          conversation's chip as wide as its name. A project settles into its place, and a conversation's chip back onto
+          its row where nothing took it (HOME); taken, the chip goes at once, as its row leaves its list (dragged is only a
+          project's, held until it has landed). The pointer
           passes through it: released on it, outside the phone's sidebar sheet, the drag's click would count as a
           press outside the sheet, and the next click anywhere would close it. */}
       {createPortal(
         <DragOverlay
           className="pointer-events-none"
-          dropAnimation={dragged === null ? null : DROP}
+          dropAnimation={dragged !== null ? DROP : aimed ? null : HOME}
           style={
             carried ? { height: "auto", width: "auto" } : { height: "auto" }
           }
         >
           {carried ? (
-            <DraggedConversation name={nameOf(carried)} />
+            <DraggedConversation name={nameOf(carried)} faint={!aimed} />
           ) : (
             dragged !== null && <DraggedProject name={names[dragged] ?? ""} />
           )}

@@ -1,12 +1,14 @@
 import { describe, expect, it, vi } from "vitest"
 
 import type { Pending, RunEvent } from "@/lib/api"
-import events from "../../../../runtime/tests/fixtures/events-v5.json"
+import records from "../../../../runtime/tests/fixtures/events-v7.json"
+import { mergeSession } from "@/lib/logs"
 import {
   awaitingDesktop,
   buildThread,
   citedMemories,
   doingNow,
+  lastAsked,
   openQuestion,
   stepFailed,
   unlogged,
@@ -24,9 +26,31 @@ vi.mock("@/lib/i18n", async () => {
   return { t: () => en, locale: () => "en" }
 })
 
-const fixture = events as RunEvent[]
+// The runtime's shared fixture as the page reads it: a turn that hands a task over, the task's own log and the turn
+// its end woke, as one session; without its plan and the user's attachments, which these tests are not about. All
+// behavior comes from codes, not these display strings.
+const [turnLog, taskLog, nextLog] = (records as { records: RunEvent[][] })
+  .records
+const fixture = mergeSession(
+  [
+    { id: "turn-1", events: turnLog },
+    { id: "task-1", events: taskLog },
+    { id: "turn-2", events: nextLog },
+  ],
+  true
+).events.filter((event) => event.type !== "plan" && event.type !== "input")
+describe("the user's attachments", () => {
+  it("go with the message, from the first input that names them", () => {
+    const [first] = (records as { records: RunEvent[][] }).records
+    const thread = buildThread(first.filter((event) => event.type !== "plan"))
+    expect(thread.attachments).toEqual([
+      { file: "main-000-message.png", name: "報表.png" },
+      { file: "main-000-message-2.pdf", name: "報表.pdf" },
+    ])
+    expect(buildThread(fixture).attachments).toEqual([])
+  })
+})
 
-// Both runtimes consume this contract fixture. All behavior comes from codes, not these display strings.
 describe("v4 event projection", () => {
   it("groups background work, subtracts user control time and shows the main reply once", () => {
     const thread = buildThread(fixture)
@@ -60,10 +84,9 @@ describe("v4 event projection", () => {
       },
     })
     expect(thread.screenshots).toEqual([
-      { name: "001-left_click.png", label: "#1 Click (50, 60)" },
+      { name: "task-1/001-left_click.png", label: "#1 Click" },
     ])
     expect(thread.thinking).toBe(false)
-    expect(thread.usingComputer).toBe(false)
   })
 
   it("does not infer behavior from the runtime's prose", () => {
@@ -304,7 +327,6 @@ describe("v4 event projection", () => {
       "commentary",
       "held",
     ])
-    expect(thread.usingComputer).toBe(false)
   })
 
   it("shows a task the runtime handed over itself where it started", () => {
@@ -322,7 +344,7 @@ describe("v4 event projection", () => {
         state: "started",
         id: "t1",
         agent: "computer",
-        brief: "@Computer open notepad",
+        brief: "open notepad",
         title: "open notepad",
         time: 102,
       },
@@ -342,7 +364,6 @@ describe("v4 event projection", () => {
       outcome: "running",
     })
     expect(item.task.entries).toHaveLength(1)
-    expect(thread.usingComputer).toBe(true)
     expect(thread.items.at(-1)).toBe(item)
   })
 
@@ -418,7 +439,7 @@ describe("v4 event projection", () => {
           state: "started",
           id: "t1",
           agent: "computer",
-          brief: "@Computer send it",
+          brief: "send it",
           title: "send it",
           time: 102,
         },
@@ -455,7 +476,7 @@ describe("v4 event projection", () => {
         state: "started",
         id,
         agent: "computer",
-        brief: `@Computer ${id}`,
+        brief: `task ${id}`,
         title: id,
         time,
       })
@@ -547,7 +568,6 @@ describe("v4 event projection", () => {
       "commentary",
       "task",
     ])
-    expect(thread.usingComputer).toBe(false)
   })
 
   it("does not treat an execution error as an intentionally held task", () => {
@@ -1008,7 +1028,6 @@ describe("v4 event projection", () => {
         ["coding", "done", ["b1", "b2"]],
       ])
       expect(item.tasks.map((task) => task.title)).toEqual(["A", "B"])
-      expect(thread.usingComputer).toBe(true)
       expect(
         thread.items.filter((each) => each.kind === "commentary")
       ).toHaveLength(1)
@@ -1085,6 +1104,20 @@ describe("a task's groups of steps and the step under way", () => {
     expect(doingNow(task([]))).toBe("Thinking about the next step")
   })
 
+  it("still says a step done within its shortest time on show", () => {
+    const done = { tool: "key", status: "success" } as Step["action"]
+    const one = step("1", { call, action: done })
+    expect(lastAsked(task([one]))).toBe("1")
+    expect(lastAsked(task([step("1", {})]))).toBeNull()
+    expect(doingNow(task([one]), "1")).toBe("Press Ctrl+S")
+    // Held for another step, or the step under way after it: not said.
+    expect(doingNow(task([one]), "0")).toBe("Thinking about the next step")
+    const next = { name: "key", args: { text: "ctrl+p" } } as Step["call"]
+    expect(doingNow(task([one, step("2", { call: next })]), "1")).toBe(
+      "Press Ctrl+P"
+    )
+  })
+
   it("counts an error as a failure, not an action held back on purpose", () => {
     const action = (part: object) =>
       ({ tool: "key", status: "error", ...part }) as Step["action"]
@@ -1112,7 +1145,7 @@ describe("a question to the user", () => {
     args: {
       question: `Question ${n}`,
       options: [{ label: "A", reason: "Newer." }, { reason: "No label." }],
-      placeholder: "Or name another",
+      suggestion: "The second",
     },
     status,
     result: "Shown to the user.",
@@ -1132,7 +1165,7 @@ describe("a question to the user", () => {
     expect(openQuestion(thread)).toMatchObject({
       question: "Question 1",
       options: [{ label: "A", reason: "Newer." }],
-      placeholder: "Or name another",
+      suggestion: "The second",
     })
     expect(thread.thinking).toBe(false)
   })

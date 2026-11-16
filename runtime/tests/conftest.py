@@ -15,6 +15,7 @@ from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, Huma
 from langchain_core.outputs import ChatGenerationChunk
 from langchain_core.runnables import RunnableLambda
 from PIL import Image, ImageDraw, ImageFont
+from pymongo import MongoClient
 
 import computer_use.agent.main_agent as main_agent
 import computer_use.agent.computer_agent as computer_agent
@@ -29,12 +30,12 @@ from computer_use.tools.desktop import desktop_tools
 from computer_use.desktop.actions import CONFIRMABLE
 from computer_use.agent.trajectory import Trajectory
 from computer_use.adapters import build_control
-from computer_use.agent.history import in_call_order, with_images
+from computer_use.agent.history import in_call_order, with_media
 from computer_use.computers import ComputerError, Frame, Status
 from computer_use.storage import LOCAL_USER, MAIN, TURN, Runs
 from computer_use.files.local import LocalFileStore
 from computer_use.storage.files import FileRunStore, FileRuns
-from computer_use.sandbox import CodeRunnerError, RunOutput
+from computer_use.sandbox import CodeRunnerError, RunOutput, Status as CodeRunnerStatus
 from computer_use.config import Settings
 from computer_use.desktop.control import ControlFile
 from computer_use.desktop.executor import Executor
@@ -46,7 +47,7 @@ OBSERVE_CALL = {"type": "tool_call", "name": "screenshot", "args": {}, "id": "ca
 
 async def restore(store: Runs, run: str, record: dict) -> BaseMessage:
     """A recorded message with its images read back from their files."""
-    return await with_images(store, run, messages_from_dict([record])[0])
+    return await with_media(store, run, messages_from_dict([record])[0])
 
 
 async def main_messages(store: Runs, run: str) -> list[BaseMessage]:
@@ -88,8 +89,6 @@ def no_network(request, monkeypatch):
 @pytest.fixture
 def mongo_url():
     """A fresh database on CU_TEST_MONGO_URL (a replica set), dropped after the test."""
-    from pymongo import MongoClient
-
     server = os.environ.get("CU_TEST_MONGO_URL")
     if not server:
         pytest.fail("the mongo tests need CU_TEST_MONGO_URL, e.g. mongodb://localhost:27017/?replicaSet=rs0")
@@ -466,12 +465,6 @@ def run_file(settings, run: str, name: str) -> Path:
                 run_dir(settings, run) / name)
 
 
-def files_of(settings, run: str) -> set[str]:
-    """The names of the files written from the message that began `run` on."""
-    return {path.name for folder in session_folders(settings, run) for path in folder.iterdir()
-            if path.name != "steps.jsonl"}
-
-
 def first_run(settings) -> str:
     """The run that began the only conversation there is: its thread."""
     return min(path.name for path in runs_dir(settings.data_dir).iterdir())
@@ -519,6 +512,16 @@ def computer_use_result(result) -> dict:
 
 def handed_back(result) -> dict:
     return computer_use_result(result)["message"]["data"]["artifact"]
+
+
+def desktop_ended(result) -> str | None:
+    """How the session's last desktop task ended, as its log's end says its agent stopped; None when the desktop was not
+    used, or its task ended before its agent had a reason."""
+    ends = [event for folder in session_folders(LAST_SETTINGS[0], result.run) if (events := read_events(folder))
+            and events[0].get("kind") == "task" and events[0].get("agent") == "computer"
+            for event in events if event["type"] == "end"]
+    last = max(ends, key=lambda event: event["time"], default=None)
+    return last.get("agent_stop_reason") if last is not None else None
 
 
 @pytest.fixture
@@ -611,11 +614,15 @@ class FakeCodeRunner:
         self.tasks: list[str] = []  # whose each command was
         self.files: dict[str, str] = {}
         self.stops: list[str] = []
+        self.deleted: list[str] = []  # conversations whose folders were deleted
+        self.asked: list[str] = []  # the paths `has` was asked about
+        self.puts: list[tuple[str, str | None]] = []  # each file put and its source run
+        self.sources: dict[str, str] = {}
         self.answer = lambda script: RunOutput(0, "ok", 0)
         self.closed = False
 
     async def status(self):
-        return Status(self.connected, f"Code runner: {'connected' if self.connected else 'not reachable'}")
+        return CodeRunnerStatus(self.connected, f"Code runner: {'connected' if self.connected else 'not reachable'}")
 
     async def run(self, thread, task, script, seconds):
         if not self.connected:
@@ -626,13 +633,37 @@ class FakeCodeRunner:
         return await output if asyncio.iscoroutine(output) else output
 
     async def write(self, thread, path, content):
+        path = path.removeprefix(f"/workspace/{thread}/")
         if path.startswith("/") or ".." in path:
             raise ValueError(f"{path} is outside the working folder")
         self.files[path] = content
         return f"Wrote {path} ({len(content.encode())} bytes)."
 
+    async def read(self, thread, path):
+        path = path.removeprefix(f"/workspace/{thread}/")
+        if path not in self.files:
+            raise FileNotFoundError(path)
+        data = self.files[path]
+        return data.encode() if isinstance(data, str) else data
+
+    async def has(self, thread, path, source=None):
+        self.asked.append(path)
+        return path in self.files and (source is None or self.sources.get(path, "") >= source)
+
+    async def put(self, thread, path, data, source=None):
+        self.puts.append((path, source))
+        if source is not None and path in self.files and self.sources.get(path, "") >= source:
+            return False
+        self.files[path] = data
+        if source is not None:
+            self.sources[path] = source
+        return True
+
     async def stop(self, task):
         self.stops.append(task)
+
+    async def delete(self, thread):
+        self.deleted.append(thread)
 
     async def close(self):
         self.closed = True

@@ -77,7 +77,8 @@ class FakeApi:
     def __call__(self, method, url, body, headers):
         path = url.removeprefix(URL)
         self.requests.append({
-            "method": method, "path": path, "headers": headers, "body": json.loads(body) if body else None,
+            "method": method, "path": path, "headers": headers,
+            "body": (json.loads(body) if headers.get("Content-Type") == "application/json" else body) if body else None,
         })
         queue = self.answers.get((method, path))
         if not queue:

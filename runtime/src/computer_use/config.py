@@ -25,8 +25,8 @@ class Settings(BaseSettings):
     anthropic_api_key: SecretStr | None = Field(default=None, validation_alias="ANTHROPIC_API_KEY")
     openai_api_key: SecretStr | None = Field(default=None, validation_alias="OPENAI_API_KEY")
 
-    # "none" on the loopback address only, "token" (CU_AUTH_TOKEN), or "proxy": a sign-in proxy names the user in
-    # auth_header, believed only from auth_proxies.
+    # "none" (only on the loopback address unless set explicitly), "token" (CU_AUTH_TOKEN), or "proxy": a sign-in
+    # proxy names the user in auth_header, believed only from auth_proxies.
     auth: Literal["none", "token", "proxy"] = "none"
     auth_token: SecretStr | None = None
     auth_header: str = "X-Forwarded-User"
@@ -35,13 +35,23 @@ class Settings(BaseSettings):
     data_dir: Path = Path("data")
     # Runs, projects and memories: empty for files under data_dir, else a database URL whose scheme picks the store.
     database_url: str = ""
-    # Shared-volume Unix socket; no coding agent when unset or unreachable.
+    # Shared-volume Unix socket; no coding agent when unset. While it is unreachable, coding tasks fail at once.
     code_runner_url: str | None = "unix:///run/code-runner/runner.sock"
 
     # The RDP backend: the X display showing the session (rdp-entrypoint.sh reads the same RDP_* variables, and
     # sizes the screen with RDP_SCREEN_WIDTH and RDP_SCREEN_HEIGHT; the runtime reads the size off screenshots).
     display: str = Field(default=":1", validation_alias="RDP_DISPLAY")
     keyboard_pipe: Path = Field(default=Path("/tmp/rdp-keyboard"), validation_alias="RDP_KEYBOARD_PIPE")
+
+    # The Windows Tools host on the machine the desktop shows: commands for the desktop agent. Off with neither a
+    # path nor a token. The host is the RDP one unless named.
+    rdp_host: str | None = Field(default=None, validation_alias="RDP_HOST")
+    windows_tools_host: str | None = Field(default=None, validation_alias="WINDOWS_TOOLS_HOST")
+    windows_tools_port: int = Field(default=8767, validation_alias="WINDOWS_TOOLS_PORT")
+    # Where the host's program is on Windows: the runtime then starts it itself before a desktop task, with a token
+    # of its own making. Or the token of a host started by hand.
+    windows_tools_path: str | None = Field(default=None, validation_alias="WINDOWS_TOOLS_PATH")
+    windows_tools_token: SecretStr | None = Field(default=None, validation_alias="WINDOWS_TOOLS_TOKEN")
 
     web_url: str = "http://localhost:5173"
     # A TURN server the browser relays the live view through when it cannot reach the runtime's own addresses,
@@ -106,16 +116,16 @@ class Choice:
 class RunChoices:
     """Per-message choices held by the browser.
 
-    Missing choices use Settings; FOLLOW inherits the main agent. Model changes apply to the next run; approval
+    Missing choices use Settings; FOLLOW inherits the main agent. Model and command changes apply to the next run; approval
     changes apply to its next flagged step. Memory is off unless sent: a run from the command line or an eval neither
     learns nor follows what the user taught on the page."""
 
     agents: dict[str, dict[str, str]] = field(default_factory=dict)
     approvals: Approvals = "ask"
-    locale: str | None = None
     timezone: str | None = None  # IANA, e.g. "Asia/Taipei"
     learn: bool = False  # the main agent may remember rules from the user's corrections
     recall: bool = False  # the run is told what it remembers, and hands rules over
+    commands: bool = True  # the desktop agent may run commands on Windows, where a Windows Tools host is set
 
 
 @lru_cache

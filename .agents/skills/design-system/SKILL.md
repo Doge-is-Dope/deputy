@@ -44,8 +44,6 @@ drawing, not text to read.
   status line).
 - Muted color, not a smaller size, sets text apart: a step's details from its title, a sidebar heading from
   its rows.
-- The @Computer logo is 1em with `em` offsets (`mentions.tsx`, `composer.tsx`), so it follows the text it sits in;
-  check it after changing that text's font.
 
 ## Measuring
 

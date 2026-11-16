@@ -86,9 +86,6 @@ export function FollowingLine({ id, text }: { id: string; text: string }) {
   )
 }
 
-/** The rules a run's tasks were handed over with, from its last reply's details menu: spaced and divided as a
- * project's rules are (MemoryList), each as it is now, which opens it where it is kept (openMemory); one deleted since
- * stays, muted, and opens nothing. Five in view, the rest scrolled to. */
 // A list as tall as its first five rules, however many lines each wraps to: up to the sixth's top.
 function fitFive(list: HTMLUListElement | null) {
   const sixth = list?.children[5]
@@ -99,6 +96,9 @@ function fitFive(list: HTMLUListElement | null) {
         : ""
 }
 
+/** The rules a run's tasks were handed over with, from its last reply's details menu: spaced and divided as a
+ * project's rules are (MemoryList), each as it is now, which opens it where it is kept (openMemory); one deleted since
+ * stays, muted, and opens nothing. Five in view, the rest scrolled to. */
 export function CitedMemoriesDialog({
   memories,
   open,
@@ -115,7 +115,8 @@ export function CitedMemoriesDialog({
   }, [open])
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-3 sm:max-w-lg">
+      {/* The last rule's words 14px from the bottom (pb-3.5, its own padding off), as the title's are from the top. */}
+      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-2.5 pb-3.5 sm:max-w-lg">
         <DialogTitle className="flex h-8 items-center pr-8">
           {t.run.memory.cited}
         </DialogTitle>
@@ -127,7 +128,7 @@ export function CitedMemoriesDialog({
           {memories.map((each) => {
             const now = list?.find((memory) => memory.id === each.id)
             return (
-              <li key={each.id} className="py-4">
+              <li key={each.id} className="py-4 last:pb-0">
                 {list && !now ? (
                   <span className="text-muted-foreground">
                     {t.run.memory.deleted(each.text)}

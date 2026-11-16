@@ -10,6 +10,7 @@ From the repository root, with the runtime up ([runtime setup](../../runtime/REA
 uv run --project clients/cli computer-use run "<goal>"                    # send the desktop a goal and follow the run
 uv run --project clients/cli computer-use run "<next goal>" --thread RUN  # continue the conversation containing RUN
 uv run --project clients/cli computer-use run "<goal>" --project eval     # list the conversation under eval
+uv run --project clients/cli computer-use run "<goal>" --attach FILE      # send a file with the goal (up to 5)
 uv run --project clients/cli computer-use resume [RUN]                    # send a run's message again (default: the latest)
 uv run --project clients/cli computer-use observe [--out FILE]            # save a screenshot of the desktop
 uv run --project clients/cli computer-use takeover / return               # take over the desktop / hand it back
@@ -22,7 +23,7 @@ uv run --project clients/cli computer-use export RUN FOLDER               # save
 
 To have `computer-use` on your path instead, run `uv tool install ./clients/cli`.
 
-Use `--max-steps N` to limit a run, and `--main MODEL [EFFORT]` or `--computer MODEL [EFFORT]` to choose models. Both `run` and `resume` accept these options. The API defaults to `http://127.0.0.1:8000`; override it with `--api` or `CU_API_URL`.
+Use `--max-steps N` to limit a run, `--main MODEL [EFFORT]` or `--computer MODEL [EFFORT]` to choose models, and `--no-commands` to keep the agent to the mouse and keyboard where it could also run commands on Windows. Both `run` and `resume` accept these options. `--attach` uploads each file before the message, typed by its name, as on the web page, except that pictures are not shrunk: one over 5 MB or 2048 pixels on its long side is turned away. The API defaults to `http://127.0.0.1:8000`; override it with `--api` or `CU_API_URL`.
 
 `run` follows the session the message starts until it is quiet: the steps of each turn and each task as they
 happen, a line as each task ends, then the main agent's last reply (`Agent:`), how the last desktop task ended

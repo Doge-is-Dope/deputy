@@ -35,7 +35,8 @@ export function ProjectMemoryDialog({
       open={opened.project !== null}
       onOpenChange={(open) => !open && close()}
     >
-      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-3 sm:max-w-lg">
+      {/* pb-1: the last rule's light 8px from the bottom (with its own 4), as from the sides, concentric (12 in 20). */}
+      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-2.5 pb-1 sm:max-w-lg">
         <DialogTitle className="flex h-8 items-center pr-8">
           {t.sidebar.projectMemoryTitle(shown ? (names[shown] ?? "") : "")}
         </DialogTitle>
@@ -50,12 +51,7 @@ export function ProjectMemoryDialog({
         ) : (
           // Scrolled within, the rules' light reaching into the dialog's padding, their words under its title's.
           <div className="-mx-4 min-h-0 overflow-y-auto px-3">
-            <MemoryList
-              memories={rows}
-              item={opened.item}
-              editing={opened.editing}
-              onClose={close}
-            />
+            <MemoryList memories={rows} item={opened.item} onClose={close} />
           </div>
         )}
       </DialogContent>

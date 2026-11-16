@@ -9,7 +9,6 @@ const api = process.env.CU_API_URL ?? "http://127.0.0.1:8000"
 // same for the image).
 const headers = { "Content-Security-Policy": "frame-ancestors 'none'" }
 
-// https://vite.dev/config/
 export default defineConfig({
   // The React Compiler memoizes components and what they render, so a change of state in the sidebar's component
   // renders its rows again only where their props changed: with some forty rows, it rendered them all for 20-30ms.

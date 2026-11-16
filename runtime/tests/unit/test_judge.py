@@ -135,13 +135,34 @@ async def test_press_while_keeps_its_presses_when_the_screen_keeps_moving(comput
     async def moving(seen, now, points):
         nonlocal pressed
         pressed += 1
-        return pressed > 1  # after the first press
+        return True  # the first press is judged on the current screen, so this is checked from the second on
 
     executor._stale = moving
     result = await executor.run("press_while", ARGS)
     assert result.ok and result.reason is None
     assert "Pressed x 1 times; stopped because the screen kept changing" in result.text
-    assert len(computer.calls) == 1
+    assert len(computer.calls) == 1 and pressed == computer_use.desktop.executor.PRESS_ANIMATION_WAITS + 1
+
+
+async def test_press_while_judges_its_first_press_on_the_current_screen(computer, executor, quick):
+    pages = Pages(computer, executor, menu_at=3)
+    await executor.observe("start")
+    pages.page = 1  # the dialogue printed its next page while the model decided
+
+    async def stale(seen, now, points):
+        raise AssertionError("the first press is judged on the current screen, not checked against the old one")
+
+    executor._stale = stale
+    result = await executor.run("press_while", {**ARGS, "max_presses": 1})
+    assert result.ok and "Pressed x 1 times" in result.text and len(computer.calls) == 1
+
+
+async def test_press_while_sends_nothing_when_the_current_screen_left_the_condition(computer, executor, quick):
+    pages = Pages(computer, executor, menu_at=3)
+    await executor.observe("start")
+    pages.page = 3  # a menu opened while the model decided
+    result = await executor.run("press_while", ARGS)
+    assert result.ok and "Pressed x 0 times" in result.text and computer.calls == []
 
 
 @pytest.mark.parametrize("same, sent", [(True, True), (False, False)])

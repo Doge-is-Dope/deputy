@@ -4,11 +4,11 @@ neither reach nor collide with another's documents.
 events          {user, run, seq, said?, event}: `event` is the steps.jsonl line; `said` is what search reads (said_of)
 runs            {user, run, **row}: the run's row (storage.Row)
 conversations   {user, thread, v, project, title, goal, last, latest}: the sidebar pages over these
-
-Rows and conversations carry the event format (`v`) they were made in, and only the current one's are read: an
-older format's are left as they are, unlisted, as the files store leaves its records.
 revisions       {user, n}
 projects        {user, id, name, created}
+
+Rows and conversations carry the event format (`v`) they were made in, and only the current one's are read: an
+older format's are left unlisted until `rebuild` erases them with their runs.
 
 An append returns at once; each run's writes follow one another in the background: the event, then its `run_change`,
 without a transaction. A crash in between leaves the rows behind the events, which `rebuild` repairs with the runtime
@@ -28,21 +28,31 @@ from pymongo.errors import DuplicateKeyError
 
 from computer_use.files import FileStore
 from computer_use.storage import (
-    ALL, CHANGE_FIELDS, FORMAT, LISTED, MAX_HITS, PAGE, Conversation, Cursor, Event, Hit, Page, Project, RunChange, RunFiles,
+    ALL, CHANGE_FIELDS, FORMAT, HITS, LISTED, PAGE, Conversation, Cursor, Event, Hit, Page, Project, RunChange, RunFiles,
     RunId, RunSummary, Thread, conversations_of, decode_cursor, encode_cursor, named, page_limit, project_name, row_of,
     run_change, said_of, snippet, summary_of, user_id,
 )
 
 logger = logging.getLogger(__name__)
 
-# Unique keys first.
+# What search reads, and nothing else: an index of the events that have words, with the words in it, so a search
+# neither reads the other events (most of them) nor fetches a document.
+SAID = {"partialFilterExpression": {"said": {"$exists": True}}}
+# What a search reads of them, from that index.
+WORDS = {"run": 1, "said": 1, "_id": 0}
+# Up to this many matching events, a search looks its conversations up from them; past it, it walks the
+# conversations: this many at a time, a few to begin with and more while it finds little.
+FEW = 2000
+WALK, MAX_WALK = 50, 2000
+# Each index's keys and options, unique keys first.
+UNIQUE = {"unique": True}
 INDEXES = {
-    "events": [(["user", "run", "seq"], True)],
-    "runs": [(["user", "run"], True), (["user", "thread", "started"], False)],
-    "conversations": [(["user", "thread"], True), (["user", "last", "thread"], False),
-                      (["user", "project", "last", "thread"], False)],
-    "revisions": [(["user"], True)],
-    "projects": [(["user", "id"], True), (["user", "name"], True)],
+    "events": [(["user", "run", "seq"], UNIQUE), (["user", "run", "seq", "said"], SAID)],
+    "runs": [(["user", "run"], UNIQUE), (["user", "thread", "started"], {})],
+    "conversations": [(["user", "thread"], UNIQUE), (["user", "last", "thread"], {}),
+                      (["user", "project", "last", "thread"], {})],
+    "revisions": [(["user"], UNIQUE)],
+    "projects": [(["user", "id"], UNIQUE), (["user", "name"], UNIQUE)],
 }
 NO_ID = {"_id": 0}
 # What the row is made from: not the model messages, most of the bytes.
@@ -54,8 +64,8 @@ def connect(url: str, indexes: dict) -> AsyncDatabase:
     with MongoClient(url) as client:
         database = client.get_default_database()
         for collection, wanted in indexes.items():
-            for keys, unique in wanted:
-                database[collection].create_index([(key, ASCENDING) for key in keys], unique=unique)
+            for keys, options in wanted:
+                database[collection].create_index([(key, ASCENDING) for key in keys], **options)
     return AsyncMongoClient(url, maxPoolSize=8).get_default_database()
 
 
@@ -88,13 +98,18 @@ class MongoRunStore:
             found.update(await self.db[collection].distinct("user"))
         return sorted(found)
 
-    async def rebuild(self, user: str) -> tuple[int, int]:
-        """Remakes the user's rows and conversations from events; returns their counts. Stop all writers first:
-        concurrent appends could be omitted or counted twice."""
+    async def rebuild(self, user: str) -> tuple[int, int, int]:
+        """Remakes the user's rows and conversations from events and erases the runs of an older format, which are
+        never listed and so could never be deleted; returns the counts of rows, conversations and erased runs. Stop all
+        writers first: concurrent appends could be omitted or counted twice."""
         records: dict[RunId, list[Event]] = {}
         async for doc in self.db.events.find(_of(user), CHANGES).sort([("run", ASCENDING), ("seq", ASCENDING)]):
             records.setdefault(doc["run"], []).append(doc["event"])
         rows = {run: row for run, events in records.items() if (row := row_of(events)) is not None}
+        old = [run for run in records if run not in rows]
+        await self.db.events.delete_many(_of(user, run={"$in": old}))
+        for run in old:
+            await self.of(user).delete_files(run)
         conversations = conversations_of(summary_of(run, row) for run, row in rows.items())
         if rows:
             await self.db.runs.bulk_write([
@@ -107,7 +122,7 @@ class MongoRunStore:
         await self.db.runs.delete_many(_of(user, run={"$nin": list(rows)}))
         await self.db.conversations.delete_many(_of(user, thread={"$nin": [each.id for each in conversations]}))
         await self.of(user).bump()
-        return len(rows), len(conversations)
+        return len(rows), len(conversations), len(old)
 
 
 class MongoRuns(RunFiles):
@@ -210,6 +225,11 @@ class MongoRuns(RunFiles):
         last = await self.db.events.find_one(self._of(run=run), {"seq": 1}, sort=[("seq", DESCENDING)])
         return last["seq"] + 1 if last else 0
 
+    async def thread(self, run: RunId) -> Thread | None:
+        await self._settled(run)
+        found = await self.db.runs.find_one(self._current(run=run), {"thread": 1})
+        return found and found["thread"]
+
     async def runs(self, thread: Thread) -> list[RunSummary]:
         await self._settled()
         found = self.db.runs.find(self._current(thread=thread), NO_ID).sort([("started", ASCENDING), ("run", ASCENDING)])
@@ -220,17 +240,21 @@ class MongoRuns(RunFiles):
     ) -> Page[Conversation]:
         limit = page_limit(limit)
         await self._settled()
-        query = self._current()
-        if project != ALL:
-            query["project"] = project
-        if before is not None:
-            last, thread = decode_cursor(before)
-            query["$or"] = [{"last": {"$lt": last}}, {"last": last, "thread": {"$lt": thread}}]
-        found = self.db.conversations.find(query, NO_ID).sort([("last", DESCENDING), ("thread", DESCENDING)])
-        docs = await found.limit(limit + 1).to_list()
+        docs = await self._page(before, limit + 1, **({} if project == ALL else {"project": project}))
         # The next page goes on from the documents, which may name a run a crash left them without.
         after = encode_cursor(docs[limit - 1]["last"], docs[limit - 1]["thread"]) if len(docs) > limit else None
         return Page(await self._conversations(docs[:limit]), after)
+
+    async def _page(self, before: Cursor | None, limit: int, **fields) -> list[dict]:
+        """Up to `limit` conversation documents, most recently active first, after cursor `before`."""
+        query = self._current(**fields)
+        if before is not None:
+            last, thread = decode_cursor(before)
+            # The bound starts the index scan at the cursor: the $or alone may be planned as a scan from the top.
+            query["last"] = {"$lte": last}
+            query["$or"] = [{"last": {"$lt": last}}, {"last": last, "thread": {"$lt": thread}}]
+        found = self.db.conversations.find(query, NO_ID).sort([("last", DESCENDING), ("thread", DESCENDING)])
+        return await found.limit(limit).to_list()
 
     async def _conversations(self, docs: list[dict]) -> list[Conversation]:
         found = self.db.runs.find(self._current(run={"$in": [doc["latest"] for doc in docs]}), NO_ID)
@@ -257,36 +281,50 @@ class MongoRuns(RunFiles):
         await self.bump()
         return runs
 
-    async def search(self, query: str, limit: int = MAX_HITS) -> list[Hit]:
-        """Snippets come from the first matching message in each conversation's latest matching run."""
+    async def search(self, query: str, limit: int = HITS, before: Cursor | None = None) -> list[Hit]:
+        """Snippets come from the first matching message in each conversation's latest matching run. Words few runs
+        have are looked up from those runs; words many have are found by walking the conversations, newest first,
+        which soon has a page of them. Either way a page costs far less than reading the store."""
         await self._settled()
         pattern = {"$regex": re.escape(query), "$options": "i"}
-        matching = await self.db.events.distinct("run", self._of(said=pattern))
-        latest: dict[Thread, RunId] = {}  # thread -> its latest matching run
-        found = self.db.runs.find(self._current(run={"$in": matching}), {"run": 1, "thread": 1})
-        async for run in found.sort([("started", ASCENDING), ("run", ASCENDING)]):
-            latest[run["thread"]] = run["run"]
-        named_or_matched = [{"thread": {"$in": list(latest)}}, {"title": pattern}, {"title": None, "goal": pattern}]
-        candidates = self._current(**{"$or": named_or_matched})
+        said = self.db.events.find(self._of(said=pattern), WORDS).sort([("run", ASCENDING), ("seq", ASCENDING)])
+        rows = await said.limit(FEW + 1).to_list()
+        if len(rows) > FEW:
+            return await self._walk(query, pattern, limit, before)
+        words = await self._words(rows)
+        found = {"$or": [{"thread": {"$in": list(words)}}, {"title": pattern}, {"title": None, "goal": pattern}]}
+        return await self._hits(await self._page(before, limit, **{"$and": [found]}), words, query)  # the cursor's $or beside it
+
+    async def _walk(self, query: str, pattern: dict, limit: int, before: Cursor | None) -> list[Hit]:
+        """The conversations a batch at a time, a few to begin with and more while it finds little, until it has
+        `limit` of them."""
         hits: list[Hit] = []
-        skip = 0
+        batch = WALK
         while len(hits) < limit:
-            docs = await self.db.conversations.find(candidates, NO_ID).sort(
-                [("last", DESCENDING), ("thread", DESCENDING)],
-            ).skip(skip).limit(limit).to_list()
-            for conversation in await self._conversations(docs):
-                text = None
-                if conversation.id in latest:
-                    first = await self.db.events.find_one(
-                        self._of(run=latest[conversation.id], said=pattern), {"said": 1}, sort=[("seq", ASCENDING)],
-                    )
-                    text = first and snippet([first["said"]], query)
-                if (text or named(conversation, query)) and len(hits) < limit:
-                    hits.append(Hit(conversation, text))
-            if len(docs) < limit:
+            docs = await self._page(before, batch)
+            runs = self.db.runs.find(self._current(thread={"$in": [doc["thread"] for doc in docs]}), {"run": 1})
+            said = self.db.events.find(self._of(run={"$in": await runs.distinct("run")}, said=pattern), WORDS)
+            words = await self._words(await said.sort([("run", ASCENDING), ("seq", ASCENDING)]).to_list())
+            found = [doc for doc in docs if doc["thread"] in words or named(doc["title"], doc["goal"], query)]
+            hits += await self._hits(found[:limit - len(hits)], words, query)
+            if len(docs) < batch:
                 break
-            skip += limit
+            before, batch = encode_cursor(docs[-1]["last"], docs[-1]["thread"]), min(batch * 4, MAX_WALK)
         return hits
+
+    async def _words(self, rows: list[dict]) -> dict[Thread, str]:
+        """Each conversation's matching words from `rows` (a run's in order): its latest matching run's first."""
+        first: dict[RunId, str] = {}
+        for row in rows:
+            first.setdefault(row["run"], row["said"])
+        found = self.db.runs.find(self._current(run={"$in": list(first)}), {"run": 1, "thread": 1})
+        return {run["thread"]: first[run["run"]] async for run in found.sort([("started", ASCENDING), ("run", ASCENDING)])}
+
+    async def _hits(self, docs: list[dict], words: dict[Thread, str], query: str) -> list[Hit]:
+        return [
+            Hit(conversation, (text := words.get(conversation.id)) and snippet([text], query))
+            for conversation in await self._conversations(docs)
+        ]
 
     async def revision(self) -> int:
         await self._settled()

@@ -45,7 +45,7 @@ export function skippedReason(
     : result.split("\n", 1)[0]
 }
 
-// How wide the thumbnails are asked for: twice what they show, for sharp screens.
+// The runtime's smallest thumbnail width (server.py THUMBNAIL_WIDTHS); these show 36 wide.
 const THUMBNAIL_WIDTH = 160
 
 /**
@@ -71,16 +71,16 @@ export function Thumbnail({
         type="button"
         onClick={onOpen}
         aria-label={label}
-        className="relative ml-auto flex shrink-0 arrive-line cursor-zoom-in rounded-[5px] outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        className="relative ml-auto flex shrink-0 arrive-line cursor-zoom-in rounded-xs outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
       >
         <img
           src={screenshotUrl(run, name, THUMBNAIL_WIDTH)}
           alt=""
-          width={44}
-          height={28}
+          width={36}
+          height={24}
           loading="lazy"
           decoding="async"
-          className="aspect-[16/10] w-11 rounded-[5px] border bg-muted object-cover transition-opacity hover:opacity-85"
+          className="h-6 w-9 rounded-xs border bg-muted object-cover transition-opacity hover:opacity-85"
         />
         {live && (
           <span className="absolute -top-0.5 -right-0.5 size-2 rounded-full bg-success ring-2 ring-background" />
@@ -247,26 +247,18 @@ export function StepLine({
 export function PlainLine({
   icon,
   children,
-  running = false,
-  after,
   className,
 }: {
   icon: ReactNode
   children: ReactNode
-  running?: boolean
-  after?: ReactNode // at the end of the line: the screen now, while the agent thinks about its next step
   className?: string
 }) {
   return (
     <div className="flex min-w-0 arrive-line items-center gap-3">
-      <TraceLine
-        status={running ? "running" : undefined}
-        className={cn("min-h-7", className)}
-      >
+      <TraceLine className={cn("min-h-7", className)}>
         <TraceIcon>{icon}</TraceIcon>
         <TraceTitle className="whitespace-normal">{children}</TraceTitle>
       </TraceLine>
-      {after}
     </div>
   )
 }
@@ -321,7 +313,8 @@ export function PlanLine({ step, waiting }: { step: Step; waiting: boolean }) {
 
 /**
  * Steps in a row: what the agent said as it took the first, in full, then the steps one by one while they are under
- * way; once done, they fold into one line of what they did by kind, which opens them again.
+ * way; once done, they fold into one line of what they did by kind, which opens them again. Steps seen while under way
+ * stay open once done: folding them would pull away what is being read.
  */
 export function PhaseLine({
   phase,
@@ -335,6 +328,8 @@ export function PhaseLine({
   lines: ReactNode[]
 }) {
   const [chosen, setChosen] = useState<boolean | null>(null)
+  const [seen, setSeen] = useState(current)
+  if (current && !seen) setSeen(true)
   const calls = phase.entries.flatMap((entry) =>
     entry.kind === "step" ? [stepTool(entry.step)] : []
   )
@@ -347,7 +342,7 @@ export function PhaseLine({
         />
       )}
       <TraceCollapsible
-        open={chosen ?? current}
+        open={chosen ?? (current || seen)}
         onOpenChange={setChosen}
         className="arrive-line"
       >

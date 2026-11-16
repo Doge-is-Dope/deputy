@@ -61,26 +61,14 @@ async def test_a_question_is_answered_without_touching_the_desktop(settings, com
 
     result = await run_turn(settings, "What is 128 x 37?", max_steps=10, computer=computer)
 
-    assert (result.reply, result.computer) == ("128 x 37 = 4736.", None)
+    assert result.reply == "128 x 37 = 4736."
     assert computer.calls == [] and computer.releases == 0 and computer_model.received == []
     assert not settings.control_path.exists()
     assert not settings.run_lock_path.exists()
     events = events_of(settings, result.run)
     assert all(event.get("agent") == MAIN for event in events if "message" in event)
     end = events[-1]
-    assert (end["type"], end["stop_reason"], end["computer"], end["summary"]) == ("end", "replied", None, "128 x 37 = 4736.")
-
-
-@pytest.mark.parametrize(
-    "message", ["@Computer open Notepad", "@computer", "  @COMPUTER打開記事本", "請 @Computer 打開記事本", "用@Computer開記事本"]
-)
-def test_a_message_that_mentions_at_computer_is_for_the_desktop(message):
-    assert computer_agent.MENTION.said(message)
-
-
-@pytest.mark.parametrize("message", ["open Notepad", "@Computers are fast", "write to me@computer.org"])
-def test_other_messages_are_not(message):
-    assert not computer_agent.MENTION.said(message)
+    assert (end["type"], end["stop_reason"], end["summary"]) == ("end", "replied", "128 x 37 = 4736.")
 
 
 @pytest.mark.parametrize("forced", [True, False])
@@ -106,14 +94,14 @@ async def test_a_message_for_the_desktop_the_main_agent_does_not_hand_over_the_r
     ])
 
     result = await run_turn(
-        settings, "@Computer open notepad", max_steps=10, computer=computer, force_computer=True
+        settings, "open notepad", max_steps=10, computer=computer, force_computer=True
     )
 
     assert result.reply == "Notepad is open." and len(computer_model.received) == 1
     events = events_of(settings, result.run)
     (started,) = [event for event in events if event["type"] == "task" and event["state"] == "started"]
     assert (started["agent"], started["title"]) == ("computer", "open notepad")
-    assert started["brief"] == "@Computer open notepad"
+    assert started["brief"] == "open notepad"
     # Told at once, as its reply called nothing: it says so in its next call, before the task ends.
     told = main_model.received[1][-1]
     assert not from_user(told) and told.text.startswith("[From the runtime, not the user] " + DESKTOP_HANDED)
@@ -130,7 +118,7 @@ async def test_a_plan_written_first_is_not_taken_for_a_reply_that_leaves_the_des
     ])
 
     result = await run_turn(
-        settings, "@Computer open notepad, then type hi", max_steps=10, computer=computer, force_computer=True
+        settings, "open notepad, then type hi", max_steps=10, computer=computer, force_computer=True
     )
 
     assert result.reply == "Notepad is open." and len(computer_model.received) == 1
@@ -457,17 +445,17 @@ async def test_what_the_user_changes_meanwhile_the_main_agent_tells_the_task_wit
         AIMessage("Start was opened, then closed."),
     ])
     inbox = Inbox()
-    sent_while_pressing(computer, inbox, "@Computer and close it again", until=lambda: bool(told))
+    sent_while_pressing(computer, inbox, "and close it again", until=lambda: bool(told))
 
     result = await run_turn(settings, "open start", max_steps=10, computer=computer, inbox=inbox)
 
     note = computer_model.received[1][-1]  # after the key press's result, before its next decision
     assert isinstance(note, HumanMessage) and note.text.startswith("From the main agent, while you work.")
-    assert "Close Start again once it is open." in note.text and "- @Computer and close it again" in note.text
+    assert "Close Start again once it is open." in note.text and "- and close it again" in note.text
     assert [binding.get("tool_choice") for binding in main_model.bindings] == [None] * 3
     assert result.reply == "Start was opened, then closed."
     assert [event["text"] for event in events_of(settings, result.run) if event["type"] == "message"] == [
-        "@Computer and close it again"
+        "and close it again"
     ]
 
 
@@ -497,23 +485,6 @@ async def test_the_main_agent_stops_the_task_when_asked(settings, computer, monk
     assert result.reply == "Stopped it." and len(computer_model.received) == 1
     # What it held is let go of, by the action cut short and again as the task ends.
     assert task_states(settings, result.run) == [("t1", "started"), ("t1", "stopped")] and computer.releases == 2
-
-
-async def test_a_message_for_the_desktop_sent_before_a_task_is_handed_over_and_quoted_in_it(
-    settings, computer, monkeypatch
-):
-    computer_model, main_model = use_script(monkeypatch, [AIMessage("Opened it.")])
-    inbox = Inbox()
-    inbox.put("@Computer open notepad")
-
-    await run_turn(settings, "hi", max_steps=10, computer=computer, inbox=inbox)
-
-    assert [binding.get("tool_choice") for binding in main_model.bindings] == [None, None]
-    sent, word = main_model.received[0][-2:]
-    assert from_user(sent) and sent.text == "@Computer open notepad" and DESKTOP_ASKED in word.text
-    assert "The user's messages this task comes from, word for word, oldest first:\n- hi\n- @Computer open notepad" in (
-        first_text(computer_model.received[0])
-    )
 
 
 async def test_a_message_sent_while_the_run_works_brings_its_own_two_desktop_tasks(settings, computer, monkeypatch):
@@ -720,6 +691,11 @@ def snapshots(settings, result) -> list[dict]:
     return sorted(found, key=lambda event: event["version"])
 
 
+def plans_of(settings, run: str) -> list[dict]:
+    """The plan's snapshots logged from the message that began `run` on, its tasks' included."""
+    return [event for event in events_of(settings, run) if event["type"] == "plan"]
+
+
 def shown(snapshot: dict) -> dict[str, tuple[str, list[str]]]:
     return {step["id"]: (step["status"], step["tasks"]) for step in snapshot["steps"]}
 
@@ -747,7 +723,9 @@ async def test_a_plan_beside_a_hand_over_shows_the_task_on_its_step_in_either_or
 
 
 async def test_a_task_that_did_not_reply_leaves_its_step_undone(settings, computer, monkeypatch):
-    _, main_model = use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "screenshot")])], main=[
+    # Its one model call asks for a step; the next is its hand-over at the limit.
+    script = [AIMessage(content="", tool_calls=[tool_call("c1", "screenshot")]), AIMessage("Took a screenshot.")]
+    _, main_model = use_script(monkeypatch, script, main=[
         handing_over("m1", plan(None), on=["A"]),
         AIMessage("It ran out of steps."),
     ])
@@ -758,25 +736,26 @@ async def test_a_task_that_did_not_reply_leaves_its_step_undone(settings, comput
     assert notes.plan_left(["A"]) in main_model.received[1][-1].text
 
 
-async def test_the_main_agent_marks_steps_and_the_plan_goes_on_in_the_next_message(settings, computer, monkeypatch):
+async def test_the_main_agent_marks_steps_and_the_next_request_starts_without_a_plan(settings, computer, monkeypatch):
     use_script(monkeypatch, [AIMessage("Did A.")], main=[
         handing_over("m1", plan(None, None), on=["A"]),
         AIMessage(content="", tool_calls=[tool_call("m2", "write_plan", steps=plan(False, True))]),
         AIMessage("A fell short."),
     ])
     first = await run_turn(settings, "do A then B", max_steps=10, computer=computer)
-    before = snapshots(settings, first)[-1]
-    assert shown(before) == {"A": ("pending", []), "B": ("completed", [])}
+    assert shown(snapshots(settings, first)[-1]) == {"A": ("pending", []), "B": ("completed", [])}
+
+    use_script(monkeypatch, [AIMessage("Did it.")], main=[handing_over("m3", None), AIMessage("Done.")])
+    second = await run_turn(settings, "do C", max_steps=10, computer=computer, thread=first.run)
+    assert plans_of(settings, second.run) == []
 
     use_script(monkeypatch, [], main=[
-        AIMessage(content="", tool_calls=[tool_call("m3", "write_plan", steps=plan(None, None))]),
-        AIMessage("Still so."),
+        AIMessage(content="", tool_calls=[tool_call("m4", "write_plan", steps=plan(None, None))]),
+        AIMessage("Planned."),
     ])
-    second = await run_turn(settings, "where are we?", max_steps=10, computer=computer, thread=first.run)
+    third = await run_turn(settings, "do D then E", max_steps=10, computer=computer, thread=first.run)
 
-    latest = snapshots(settings, second)[-1]
-    assert latest["version"] > before["version"]
-    assert shown(latest) == {"A": ("pending", []), "B": ("completed", [])}
+    assert [shown(each) for each in plans_of(settings, third.run)] == [{"A": ("pending", []), "B": ("pending", [])}]
 
 
 async def test_a_list_that_is_no_plan_is_a_failed_call_the_main_agent_can_answer(settings, computer, monkeypatch):
@@ -804,6 +783,7 @@ async def test_a_task_starts_with_the_plan_and_reports_each_step_it_finishes(set
 
     opening = next(m for m in computer_model.received[0] if isinstance(m, HumanMessage))
     assert "- A. [in progress: you] Do A." in opening.text
+    assert "Report each step marked you with finish_step" in opening.text
     assert {"read_blackboard", "finish_step", "ask"} <= {tool.name for tool in computer_model.bindings[0]["tools"]}
     seen = [shown(each) for each in snapshots(settings, result)]
     assert {"A": ("completed", ["t1"]), "B": ("in_progress", ["t1"])} in seen
@@ -1053,7 +1033,7 @@ def asking(**args) -> AIMessage:
 
 async def test_asking_the_user_ends_the_turn_until_they_answer(settings, computer, monkeypatch):
     _, main_model = use_script(monkeypatch, [], main=[
-        asking(options=[{"label": "The first", "reason": "It is newer."}], placeholder="Or name another"),
+        asking(options=[{"label": "The first", "reason": "It is newer."}], suggestion="The second"),
     ])
 
     result = await run_turn(settings, "Pick one for me", max_steps=10, computer=computer)

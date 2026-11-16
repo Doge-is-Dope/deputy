@@ -8,7 +8,7 @@ import {
 
 import { eventsUrl, RETRY_MS, type RunEvent } from "@/lib/api"
 import { applyEventBatch, readEvents, type EventBatchItem } from "@/lib/events"
-import { mergeSession } from "@/lib/logs"
+import { mergeSession, sameLogs, type SessionLog } from "@/lib/logs"
 import { answered } from "@/lib/session"
 
 /**
@@ -206,7 +206,8 @@ function draftOf(states: readonly Stream[]): { draft: string; final: boolean } {
   return { draft: writing?.draft ?? "", final: writing?.final ?? false }
 }
 
-/** Where the session's streams stand together: missing first log, or the furthest behind. */
+/** Where the session's streams stand together: missing if its first log is, done once all are, else retrying or open
+ * if any is. */
 function phaseOf(states: readonly Stream[]): StreamPhase {
   if (states[0]?.phase === "missing") return "missing"
   if (
@@ -245,42 +246,42 @@ export function useSessionEvents(
     },
     [key]
   )
-  // The same list while no stream changed: a new one on every read would draw the session again each time.
-  const kept = useRef<{ key: string; states: Stream[] } | null>(null)
-  const states = useSyncExternalStore(subscribe, () => {
+  // The same list while no stream changed: a new one on every read would draw the session again each time. And the
+  // same logs while only the reply being written changed: its frames merge nothing again.
+  const kept = useRef<{
+    key: string
+    states: Stream[]
+    logged: readonly SessionLog[]
+  } | null>(null)
+  const { states, logged } = useSyncExternalStore(subscribe, () => {
     const now = logs.map((run) => streams.get(run)?.state ?? FRESH)
     const last = kept.current
     if (
       last?.key === key &&
       last.states.every((state, at) => state === now[at])
     )
-      return last.states
-    kept.current = { key, states: now }
-    return now
+      return last
+    const logged = sameLogs(
+      last?.logged,
+      now.map((state, at) => ({
+        id: logs[at],
+        events: state.events,
+        streamed: state.streamed,
+      }))
+    )
+    return (kept.current = { key, states: now, logged })
   })
   useEffect(() => {
     for (const run of key.split(" ")) streams.get(run)?.retryNow()
   }, [key, wake])
-  // A session that is over is drawn once all its logs are read, as one run's whole log once was: a task whose own
-  // log has yet to come would seem to run on until the session's last event, and a clock shown never goes back.
+  // A session that is over is drawn once all its logs are read: a task whose own log has yet to come would seem to
+  // run on until the session's last event, and a clock shown never goes back.
   const read = states.every(
     (state) => state.phase === "done" || state.phase === "missing"
   )
   const merged = useMemo(
-    () =>
-      quiet && !read
-        ? NOTHING_MERGED
-        : mergeSession(
-            states.map((state, at) => ({
-              id: logs[at],
-              events: state.events,
-              streamed: state.streamed,
-            })),
-            quiet
-          ),
-    // `logs` is read through `states`, which changes with `key`
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [states, quiet, read]
+    () => (quiet && !read ? NOTHING_MERGED : mergeSession(logged, quiet)),
+    [logged, quiet, read]
   )
   const phase = phaseOf(states)
   return {

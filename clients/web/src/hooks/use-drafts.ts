@@ -22,8 +22,14 @@ const drafts = store<Record<string, string>>(
   })()
 )
 
-export function setDraft(conversation: string, text: string) {
-  const next = { ...drafts.get() }
+export function setDraft(
+  conversation: string,
+  text: string,
+  expected?: string
+) {
+  const current = drafts.get()
+  if (expected !== undefined && current[conversation] !== expected) return
+  const next = { ...current }
   if (text) next[conversation] = text
   else delete next[conversation]
   try {

@@ -23,8 +23,6 @@ RULES = [
 
 RENDERS = [
     (main.start_task, (6, [("computer", computer.ABOUT), ("coding", coding.ABOUT)])),
-    (computer.system_prompt, (None,)),
-    (computer.system_prompt, ("zh-Hant",)),
     *[(computer.stopped, (reason, 40, 3)) for reason in ("replied", "step_limit", "error", *get_args(Stop))],
     (computer.typed_on, (4,)),
     (computer.user_had_control, (12.6,)),
@@ -33,6 +31,7 @@ RENDERS = [
     (computer.declined, ("not now",)),
     *[(coding.stopped, (reason, 40)) for reason in ("replied", "step_limit", "error")],
     (coding.runner_unusable, (RuntimeError("no runner"),)),
+    (coding.working_folder, ("/workspace/conversation",)),
     (review.review_context, ("Goal: open Notepad", ["stop after"], STEPS)),
     (review.review_request, ("Goal: open Notepad", "press Delete")),
     (notes.started, ("t1",)),

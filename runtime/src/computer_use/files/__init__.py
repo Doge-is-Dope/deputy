@@ -1,6 +1,7 @@
-"""Where runs' files (screenshots, thumbnails) are kept, apart from their records. Keys are
-users/<user>/runs/<run>/<name>, so a user's or a run's files share a prefix. LocalFileStore (files.local) keeps them
-under the data folder; adapters.build_file_store picks it."""
+"""Where runs' files (screenshots, thumbnails, what the user attached) are kept, apart from their records. Keys are
+users/<user>/runs/<run>/<name>, so a user's or a run's files share a prefix; a file the user uploaded waits under
+users/<user>/uploads/<day>/<upload>/ until a message takes it. LocalFileStore (files.local) keeps them under the data
+folder; adapters.build_file_store picks it."""
 
 from typing import Protocol
 
@@ -20,3 +21,8 @@ class FileStore(Protocol):
 def run_key(user: str, run: str, name: str = "") -> str:
     """A run file's key, or without a name the run's prefix."""
     return f"users/{user}/runs/{run}/{name}"
+
+
+def upload_key(user: str, day: str, upload: str = "", name: str = "") -> str:
+    """An uploaded file's key, or without a name its folder; without an upload, the day's folder."""
+    return f"users/{user}/uploads/{day}/" + (f"{upload}/{name}" if upload else "")

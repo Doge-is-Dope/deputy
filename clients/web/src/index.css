@@ -9,44 +9,24 @@
    keyframes a reply's words fade in by while it is written. */
 @source "../node_modules/streamdown/dist/*.js";
 
-/* The composer's text box holds U+E000 in place of a mention's @ (components/composer.tsx). This font draws it as
-   nothing, 1.25em wide, where the composer draws the logo; its ascent and descent are Geist's, so lines keep their
-   height. Made by scripts/composer-mention-font.py. */
-@font-face {
-  font-family: "Composer Mention";
-  src: url("./assets/composer-mention.ttf") format("truetype");
-  unicode-range: U+E000;
-  font-display: block;
-}
-
 /* Light or dark as <html data-mode> says: the system's unless chosen in 設定 (lib/appearance.ts). A subtree can set
    its own, as the previews in 設定 do. The colors are worked out from a theme's three, below. */
 @custom-variant dark (&:where([data-mode="dark"], [data-mode="dark"] *));
 
 @theme inline {
-  --font-heading: var(--font-sans);
   --font-sans:
     "Geist Variable", "PingFang TC", "Noto Sans TC", "Microsoft JhengHei",
     sans-serif;
-  --font-composer: "Composer Mention", var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-accent: var(--sidebar-accent);
-  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
-  --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar: var(--sidebar);
-  --color-chart-5: var(--chart-5);
-  --color-chart-4: var(--chart-4);
-  --color-chart-3: var(--chart-3);
-  --color-chart-2: var(--chart-2);
-  --color-chart-1: var(--chart-1);
   --color-ring: var(--ring);
   --color-link: var(--link);
   /* A new reply's dot: the send button's color, the theme's accent. */
   --color-unread: var(--theme-accent);
-  --color-selection: var(--selection);
   --color-bubble: var(--bubble);
   --color-input: var(--input);
   --color-border: var(--border);
@@ -65,25 +45,38 @@
   --color-primary: var(--primary);
   --color-popover-foreground: var(--popover-foreground);
   --color-popover: var(--popover);
-  --color-card-foreground: var(--card-foreground);
   --color-card: var(--card);
   --color-foreground: var(--foreground);
   --color-background: var(--background);
-  --radius-sm: calc(var(--radius) * 0.6);
-  --radius-md: calc(var(--radius) * 0.8);
+  /* Steps of 2 and 4px, so a row (md) sits concentric in a popup (xl) with a 6px gap. */
+  --radius-xs: calc(var(--radius) - 6px);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
-  --radius-xl: calc(var(--radius) * 1.4);
-  --radius-2xl: calc(var(--radius) * 1.8);
-  --radius-3xl: calc(var(--radius) * 2.2);
-  --radius-4xl: calc(var(--radius) * 2.6);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  /* A popup that lists rows: its radius less its padding is a row's, so their corners are concentric. */
+  --radius-popup: var(--radius-xl);
+  --radius-row: var(--radius-md);
+  --spacing-popup: 0.375rem;
+  /* Where a sidebar row's content starts: an icon (its middle 28px from the edge), words with no icon (where an icon's
+     line starts), words under a labelled row (where its label starts). */
+  --spacing-row-icon: 0.625rem;
+  --spacing-row-text: 0.75rem;
+  --spacing-row-nested: 2.5rem;
+  /* A transition that names no curve takes the app's ease-out, so a hover answers at once. */
+  --default-transition-timing-function: var(--ease-out);
+  /* A turn in 0.8s: a slower spinner makes the wait feel longer. */
+  --animate-spin: spin 0.8s linear infinite;
 }
 
 /* A theme is three colors per mode (lib/themes.ts): the background (surface), the text (ink) and the accent. Every
-   other color is worked out from them here, by the ChatGPT desktop app's own measures (its Zos and $os, at its default
-   contrast, read 2026-10-23): borders, hovers and secondary text are the ink at a strength; the sidebar sits a step
-   darker than the page, menus and the composer a step out from it. The three start as ChatGPT's own; lib/appearance.ts
-   sets a chosen theme's on <html>, and a subtree drawn in another theme (the previews in 設定) sets its own with its
-   data-mode, which these rules then work out again. */
+   other color is worked out from them here: borders, hovers and secondary text are the ink at a strength; the sidebar
+   sits a step darker than the page, menus and the composer a step out from it. The three start as the default
+   theme's; lib/appearance.ts sets a chosen theme's on <html>, and a subtree drawn in another theme (the previews in
+   設定) sets its own with its data-mode, which these rules then work out again. */
 :root,
 [data-mode="light"] {
   color-scheme: light;
@@ -93,7 +86,6 @@
   --background: var(--theme-surface);
   --foreground: var(--theme-ink);
   --card: color-mix(in srgb, var(--theme-surface) 79%, white);
-  --card-foreground: var(--theme-ink);
   --popover: var(--card);
   --popover-foreground: var(--theme-ink);
   --primary: var(--theme-ink);
@@ -117,8 +109,6 @@
   --bubble: color-mix(in srgb, var(--theme-surface) 92%, var(--theme-accent));
   --sidebar: color-mix(in srgb, var(--theme-surface) 96%, var(--theme-ink));
   --sidebar-foreground: var(--theme-ink);
-  --sidebar-primary: var(--primary);
-  --sidebar-primary-foreground: var(--primary-foreground);
   /* A hovered or chosen row: half the accent of menus and buttons. */
   --sidebar-accent: color-mix(in srgb, var(--theme-ink) 5%, transparent);
   /* The accent as it shows over the sidebar, opaque: what a band laid over a hovered or chosen row matches. */
@@ -141,12 +131,7 @@
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-overshoot: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --chart-1: oklch(0.87 0 0);
-  --chart-2: oklch(0.556 0 0);
-  --chart-3: oklch(0.439 0 0);
-  --chart-4: oklch(0.371 0 0);
-  --chart-5: oklch(0.269 0 0);
-  --radius: 0.625rem;
+  --radius: 0.75rem;
 }
 
 [data-mode="dark"] {
@@ -157,7 +142,6 @@
   --background: var(--theme-surface);
   --foreground: var(--theme-ink);
   --card: color-mix(in srgb, var(--theme-surface) 87%, var(--theme-ink));
-  --card-foreground: var(--theme-ink);
   --popover: var(--card);
   --popover-foreground: var(--theme-ink);
   --primary: var(--theme-ink);
@@ -176,8 +160,6 @@
   --bubble: color-mix(in srgb, var(--theme-surface) 87%, var(--theme-accent));
   --sidebar: color-mix(in srgb, var(--theme-surface) 84%, black);
   --sidebar-foreground: var(--theme-ink);
-  --sidebar-primary: var(--primary);
-  --sidebar-primary-foreground: var(--primary-foreground);
   --sidebar-accent: color-mix(in srgb, var(--theme-ink) 4%, transparent);
   --sidebar-accent-solid: color-mix(
     in srgb,
@@ -216,12 +198,12 @@
   ::selection {
     background-color: var(--selection);
   }
-  /* A long URL or path breaks at the edge instead of running out of its box; inherited, so this one rule covers all text. */
+  /* Inherited by all text: long URLs wrap at the edge, and the caret takes the theme's accent. */
   body {
     @apply bg-background text-foreground;
     overflow-wrap: break-word;
-    /* Grayscale antialiasing, as chatgpt.com and claude.ai set: on a Mac the default subpixel smoothing makes text
-       read a weight heavier than it is. */
+    caret-color: var(--theme-accent);
+    /* Grayscale antialiasing: on a Mac the default subpixel smoothing makes text read a weight heavier than it is. */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
   }
@@ -262,6 +244,38 @@
 @media (prefers-reduced-motion: reduce) {
   .sidebar-icon-edge {
     transition: none;
+  }
+}
+/* The expand icon's arrows, each turning about its own middle to point the other way, with the panel. */
+.expand-icon-arrow {
+  transform-box: view-box;
+  transition: transform 300ms var(--ease-drawer);
+}
+.expand-icon-arrow[data-inward] {
+  transform: scale(-1);
+}
+@media (prefers-reduced-motion: reduce) {
+  .expand-icon-arrow {
+    transition: none;
+  }
+}
+
+/* A control smaller than a fingertip takes touches from 44px round its middle (--touch-w wide, where a neighbour is
+   closer than that), looking no different; only where the pointer is a finger. */
+@utility touch-target {
+  @media (pointer: coarse) {
+    &:not(.absolute, .fixed) {
+      position: relative;
+    }
+    &::after {
+      content: "";
+      position: absolute;
+      top: 50%;
+      left: 50%;
+      width: max(100%, var(--touch-w, 2.75rem));
+      height: max(100%, 2.75rem);
+      translate: -50% -50%;
+    }
   }
 }
 
@@ -350,64 +364,70 @@
   }
 }
 
-/* Three small lights lift and brighten in sequence while the main agent thinks, rising and falling on a sine and
-   resting on their line. Beside words that line is the middle of the lowercase letters, which in Geist sits 0.09em
-   below the middle of the line box. The fixed footprint keeps the label still; only transforms and opacity animate.
-   Reduced motion keeps the light passing, without movement. */
-@utility thinking-orbs {
+/* Three dots stretch into lines and back, one after another, as a wave that never rests, while the main agent thinks.
+   Each is one pill whose height grows and shrinks about its middle, lit as it stretches, in the theme's accent as a
+   link is. Beside words they sit on the middle of the lowercase letters, which in Geist is 0.09em below the middle of
+   the line box. The fixed footprint keeps the label still and keeps the layout each frame to the three pills.
+   --thinking-play: paused holds them. Reduced motion keeps the light passing, without the stretch. */
+@utility thinking-wave {
   display: inline-flex;
   align-items: center;
   justify-content: space-between;
   width: 18px;
   height: 18px;
+  padding-inline: 1.75px;
   flex-shrink: 0;
+  color: var(--link);
 
   &:has(+ .shimmer) {
     translate: 0 0.09em;
   }
 
   & > span {
-    width: 4px;
-    height: 4px;
-    border-radius: 50%;
+    width: 2.5px;
+    height: 2.5px;
+    border-radius: 9999px;
     background: currentColor;
-    animation: thinking-orb 1.3s cubic-bezier(0.37, 0, 0.63, 1) infinite
-      backwards;
+    animation:
+      thinking-wave-light 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite backwards,
+      thinking-wave-stretch 1.4s cubic-bezier(0.45, 0, 0.55, 1) infinite
+        backwards;
+    animation-play-state: var(--thinking-play, running);
   }
   & > span:nth-child(2) {
-    animation-delay: 0.16s;
+    animation-delay: 0.2s;
   }
   & > span:nth-child(3) {
-    animation-delay: 0.32s;
+    animation-delay: 0.4s;
   }
 
   @media (prefers-reduced-motion: reduce) {
     & > span {
-      animation-name: thinking-orb-soft;
+      animation-name: thinking-wave-light;
     }
   }
 }
-@keyframes thinking-orb {
+@keyframes thinking-wave-light {
   0%,
-  60%,
   100% {
-    transform: scale(0.85);
-    opacity: 0.4;
+    opacity: 0.45;
   }
-  30% {
-    transform: translateY(-3px) scale(1);
+  50% {
     opacity: 1;
   }
 }
-@keyframes thinking-orb-soft {
-  0%,
-  60%,
-  100% {
-    opacity: 0.55;
+@keyframes thinking-wave-stretch {
+  50% {
+    height: 9.5px;
   }
-  30% {
-    opacity: 1;
-  }
+}
+
+/* The composer's placeholder, coming back once a sent message has left the draft (message-send.ts). Registered, so
+   it animates rather than flips. */
+@property --send-placeholder-opacity {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 1;
 }
 
 /* What arrives while a conversation is open (a message, a reply, a step of work) rises into place out of a slight
@@ -462,8 +482,8 @@
   }
 }
 /* A row that arrives in the conversation opens its room as it rises, its gap to what follows too, so what is under it
-   (the thinking row folding shut) moves down with it rather than jumping. Browsers that
-   cannot ease to an auto height open it at once, as before. With motion reduced, the room is just there. */
+   (the thinking row folding shut) moves down with it rather than jumping. Browsers that cannot ease to an auto height
+   open it at once. With motion reduced, the room is just there. */
 @media (prefers-reduced-motion: no-preference) {
   [data-settled] > :is(.arrive, .arrive-line) {
     interpolate-size: allow-keywords;
@@ -495,8 +515,9 @@
     transition-duration: 150ms;
     transition-timing-function: ease-in-out;
   }
+  /* The new words wait until the box has eased most of the way to their width, so their end is not cut off. */
   & > [data-line="enter"] {
-    transition-delay: 50ms;
+    transition-delay: 150ms;
   }
   /* Only once the conversation has settled: words there when it opened are simply there. */
   [data-settled] & > [data-line="enter"] {
@@ -602,6 +623,107 @@
     }
   }
 }
+/* Attachments at the top of the composer. Their row, there even with none, opens its room as the first comes, so the
+   composer grows rather than jumps. Each tile grows in out of a blur; taken off (data-leaving), it shrinks and fades as
+   the ones after it close up (transitions.dev's icon swap), with no blur, which would cost the GPU every frame, and its
+   remove button gone at once. The last one fades where it is as the row closes just behind it, without
+   the long tail of the app's ease-out (data-closing). With motion reduced, they only fade. */
+@utility attach-row {
+  interpolate-size: allow-keywords;
+  transition-property: height, padding-top;
+  transition-duration: 250ms;
+  transition-timing-function: var(--ease-out);
+  &[data-closing] {
+    height: 0;
+    padding-top: 0;
+    transition-duration: 250ms;
+    transition-delay: 50ms;
+    transition-timing-function: cubic-bezier(0.4, 0, 0.2, 1);
+  }
+  /* Still a transition, so the row says when it has closed. */
+  @media (prefers-reduced-motion: reduce) {
+    &,
+    &[data-closing] {
+      transition-duration: 1ms;
+      transition-delay: 0s;
+    }
+  }
+}
+@utility attach-tile {
+  interpolate-size: allow-keywords;
+  transition-property: width, margin-right, opacity, scale, filter;
+  transition-duration: 250ms;
+  transition-timing-function: var(--ease-out);
+  /* Coming, it waits until its row has mostly opened (attach-row), so the first is not seen cut in half. */
+  transition-delay: 0s, 0s, 120ms, 120ms, 120ms;
+  @starting-style {
+    opacity: 0;
+    scale: 0.8;
+    filter: blur(2px);
+  }
+  &[data-leaving] {
+    transition-delay: 0s;
+    /* A flex item is no narrower than what it holds unless told so: without this it keeps its room to the end. */
+    min-width: 0;
+    width: 0;
+    margin-right: -0.5rem;
+    overflow: clip;
+    opacity: 0;
+    scale: 0.8;
+    pointer-events: none;
+    & button {
+      visibility: hidden;
+    }
+  }
+  [data-closing] > &[data-leaving] {
+    width: auto;
+    margin-right: 0;
+    transition-duration: 150ms;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition-property: opacity;
+    transition-duration: 150ms;
+    @starting-style {
+      scale: none;
+      filter: none;
+    }
+  }
+}
+
+/* The photo and the document over the page while files are dragged over it (DropOverlay): they come up out of one
+   place and fan apart, overshooting a little, then bob gently, out of step, while the files are held there. With
+   motion reduced, they only fade in. */
+@keyframes drop-bob {
+  from {
+    translate: 0 -2px;
+  }
+  to {
+    translate: 0 2px;
+  }
+}
+@utility drop-card {
+  transition-property: rotate, translate, scale, opacity;
+  transition-duration: 450ms;
+  transition-timing-function: var(--ease-overshoot);
+  /* From the middle: each card says how far it has to come (--from). */
+  @starting-style {
+    rotate: 0deg;
+    translate: var(--from, 0) 12px;
+    scale: 0.7;
+    opacity: 0;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    transition-property: opacity;
+    transition-duration: 150ms;
+  }
+}
+@utility drop-bob {
+  animation: drop-bob 1.6s ease-in-out infinite alternate;
+  @media (prefers-reduced-motion: reduce) {
+    animation: none;
+  }
+}
+
 /* Rows drawn again in a fold as it forms (RunThread's work, once the final reply comes) were on the page already: for
    that first frame nothing in them transitions, so what would rise or grow in is simply there. */
 [data-refolded] * {
@@ -698,7 +820,7 @@
   }
 }
 
-/* Glass, as Apple's liquid glass: a disc of pale, frosted glass floating over the conversation.
+/* Glass: a disc of pale, frosted glass floating over the conversation.
    What passes under it shows through, dimmed to a light grey, so the glass reads as a grey disc even on white; a fine
    dark line marks its very edge and a bright ring just inside it catches the light at the top and bottom; a faint
    shadow falls below it. Lensed (lib/liquid-glass.ts, where the browser can), the rim also bends what is under it and
@@ -754,25 +876,47 @@
   }
 }
 
-/* A rule through a line of text (a flex row), dashed in the text's color on either side of it. The dashes tile outwards
-   from the text, each in the middle of its tile, so both sides leave the text the same way. */
-@utility dashed-rule {
-  &::before,
-  &::after {
-    content: "";
-    flex: 1;
-    height: 1px;
-    background-image: linear-gradient(
-      to right,
-      transparent 2px,
-      currentColor 2px 6px,
-      transparent 6px
-    );
-    background-size: 8px 1px;
-    background-repeat: repeat-x;
+/* A scroller whose content fades out at an edge with more beyond it, not cut off there: no fade while it all fits, and
+   each grows over the first 32px scrolled away from its edge. The mask is opaque less a band at each end. Where
+   scroll-driven animations are missing nothing fades; the scrollbar still shows. */
+@property --fade-start {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@property --fade-end {
+  syntax: "<length>";
+  inherits: false;
+  initial-value: 0px;
+}
+
+@utility scroll-fade {
+  --fade-size: 2rem;
+  mask:
+    linear-gradient(black, black) no-clip subtract,
+    linear-gradient(to bottom, black, transparent) 0 0 / 100% var(--fade-start)
+      no-repeat no-clip,
+    linear-gradient(to bottom, transparent, black) 0 100% / 100% var(--fade-end)
+      no-repeat no-clip;
+  animation:
+    scroll-fade-start linear both,
+    scroll-fade-end linear both;
+  animation-timeline: scroll(self block);
+  animation-range:
+    0 var(--fade-size),
+    calc(100% - var(--fade-size)) 100%;
+}
+
+@keyframes scroll-fade-start {
+  to {
+    --fade-start: var(--fade-size);
   }
-  &::before {
-    background-position: right center;
+}
+
+@keyframes scroll-fade-end {
+  from {
+    --fade-end: var(--fade-size);
   }
 }
 
@@ -946,7 +1090,7 @@
     position: absolute;
     inset: 0;
     z-index: 1;
-    border-radius: 1.625rem;
+    border-radius: calc(infinity * 1px);
     background: transparent;
     transition: background-color 0ms;
   }

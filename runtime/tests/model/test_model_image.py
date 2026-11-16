@@ -1,4 +1,5 @@
-"""Real model calls against CU_COMPUTER_MODEL. Run with `uv run pytest -m model`; needs an API key in .env."""
+"""Real model calls against CU_COMPUTER_MODEL and CU_MAIN_MODEL. Run with `uv run pytest -m model`; needs an API key
+in .env."""
 
 import os
 

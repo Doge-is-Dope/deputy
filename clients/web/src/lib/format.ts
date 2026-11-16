@@ -25,8 +25,6 @@ import {
 type Icon = ComponentType<SVGProps<SVGSVGElement>>
 type Args = Record<string, unknown>
 
-const point = (value: unknown) =>
-  Array.isArray(value) ? `(${value.join(", ")})` : ""
 const held = (args: Args) =>
   typeof args.text === "string" && args.text ? `${args.text} + ` : ""
 const clip = (text: string, length = 80) =>
@@ -52,7 +50,8 @@ const keys = (text: unknown) =>
     )
     .join("+")
 
-/** What a tool call did, in a few words, and an icon for it. */
+/** What a tool call did, in a few words, and an icon for it. Where on the screen is the step's screenshot's to show,
+ * its target marked: coordinates mean nothing to whoever reads them. */
 export function describeAction(
   tool: string,
   args: Args
@@ -61,21 +60,21 @@ export function describeAction(
   if (tool in say.clicks) {
     return {
       icon: ClickIcon,
-      label: `${held(args)}${say.clicks[tool]} ${point(args.coordinate) || say.atCursor}`,
+      label: `${held(args)}${say.clicks[tool]}`,
     }
   }
   switch (tool) {
     case "screenshot":
       return { icon: ScreenshotIcon, label: say.screenshot }
     case "zoom":
-      return { icon: ZoomInIcon, label: say.zoom(point(args.region)) }
+      return { icon: ZoomInIcon, label: say.zoom }
     case "left_click_drag":
       return {
         icon: DragIcon,
-        label: say.drag(point(args.start_coordinate), point(args.coordinate)),
+        label: say.drag,
       }
     case "mouse_move":
-      return { icon: PointerIcon, label: say.move(point(args.coordinate)) }
+      return { icon: PointerIcon, label: say.move }
     case "left_mouse_down":
       return { icon: ClickIcon, label: say.mouseDown }
     case "left_mouse_up":
@@ -90,7 +89,7 @@ export function describeAction(
     case "type":
       return {
         icon: PencilIcon,
-        label: say.type(clip(String(args.text ?? "")).replaceAll("\n", "⏎")),
+        label: say.type(clip(String(args.text ?? "")).replace(/\r?\n/g, " ↵ ")),
       }
     case "key": {
       const repeat = Number(args.repeat ?? 1) > 1 ? ` ×${args.repeat}` : ""
@@ -121,7 +120,14 @@ export function describeAction(
         icon: HandIcon,
         label: say.requestTakeover(String(args.reason ?? "")),
       }
-    // The coding agent's (agent/coding_agent.py): a command, by its first line, and a file it writes.
+    // A command on the Windows machine (tools/native.py), by its first line.
+    case "run_command": {
+      const first = String(args.command ?? "")
+        .trim()
+        .split("\n")[0]
+      return { icon: TerminalIcon, label: clip(first) || tool }
+    }
+    // The coding agent's (tools/coding.py): a command, by its first line, and a file it writes.
     case "bash": {
       const first = String(args.script ?? "")
         .trim()
@@ -132,6 +138,11 @@ export function describeAction(
       return {
         icon: PencilIcon,
         label: say.code.write(String(args.path ?? "")),
+      }
+    case "view_image":
+      return {
+        icon: ScreenshotIcon,
+        label: say.code.view(String(args.path ?? "")),
       }
     case "read_blackboard":
       return { icon: PlanIcon, label: say.plan.read }
@@ -166,6 +177,7 @@ const KINDS: Record<string, keyof ReturnType<typeof t>["actions"]["kinds"]> = {
   request_takeover: "takeover",
   bash: "run",
   write_file: "write",
+  view_image: "view",
   read_blackboard: "plan",
 }
 
@@ -271,7 +283,7 @@ export function formatDuration(seconds: number): string {
   return t().duration(minutes, total % 60)
 }
 
-// Each model the runtime offers (agent/models.py's PRICES) as its maker names it.
+// Each model the runtime offers (agent/usage.py's PRICES) as its maker names it.
 const MODEL_NAMES: Record<string, string> = {
   "openai:gpt-6-luna": "GPT-6 Luna",
   "openai:gpt-6.1-sol": "GPT-6.1 Sol",
@@ -285,12 +297,25 @@ const MODEL_NAMES: Record<string, string> = {
 export const modelName = (spec: string) =>
   MODEL_NAMES[spec] ?? spec.split(":").pop() ?? spec
 
+/** An agent's name as the settings show it; one the runtime adds goes by its own. */
+export function agentName(agent: string): string {
+  const say = t().settings
+  const names: Record<string, string> = {
+    main: say.mainAgent,
+    computer: say.computerAgent,
+    coding: say.codingAgent,
+  }
+  return names[agent] ?? agent
+}
+
 /** A reasoning effort's name; one not in EFFORTS goes by its id. */
 export const effortName = (effort: string) =>
   EFFORTS.find(({ id }) => id === effort)?.name ?? effort
 
-/** US dollars: to the cent, or to a hundredth of one under a dollar. */
+/** US dollars: to the cent, or to a hundredth of one under a dollar; an amount that would round to nothing is under
+ * that hundredth, not zero. */
 export function formatDollars(dollars: number): string {
+  if (dollars > 0 && dollars < 0.00005) return `<${formatDollars(0.0001)}`
   const digits = dollars < 1 ? 4 : 2
   return formatter(
     `dollars ${digits}`,
@@ -326,8 +351,8 @@ export function connectionOf(
   }
 }
 
-/** Build copyable failure codes: E-SERVICE for API access, E-DESKTOP for desktop
- * connection, or the run's ErrorCode and ID. */
+/** A problem to copy: E-SERVICE when the API can't be reached, E-DESKTOP when the desktop can't, or a run's ErrorCode
+ * and id. */
 export type Problem = {
   code: "E-SERVICE" | ErrorCode
   detail: string

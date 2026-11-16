@@ -1,5 +1,5 @@
 """Keeps optional LangSmith traces small: model calls keep full text context, graph nodes only the newest message;
-screenshots, encrypted reasoning and repeated tool schemas are omitted."""
+images and files, encrypted reasoning and repeated tool schemas are omitted."""
 
 from dataclasses import fields, is_dataclass, replace
 from functools import cache
@@ -9,7 +9,7 @@ from langchain_core.messages import BaseMessage
 from langchain_core.tools import BaseTool
 from langsmith.utils import tracing_is_enabled
 
-SCREENSHOT_NOT_TRACED = {"type": "text", "text": "[screenshot not traced]"}
+MEDIA_NOT_TRACED = {"type": "text", "text": "[image or file not traced]"}
 NOT_TRACED = "[not traced]"
 
 
@@ -21,9 +21,10 @@ def configure_tracing() -> None:
         langsmith.configure(client=client)
 
 
-def is_image(value) -> bool:
-    # A model call's messages are traced serialized, with images as OpenAI-style "image_url" blocks.
-    return isinstance(value, dict) and value.get("type") in ("image", "image_url")
+def is_media(value) -> bool:
+    # A model call's messages are traced serialized, with images as OpenAI-style "image_url" blocks; a file is "file"
+    # in both forms.
+    return isinstance(value, dict) and value.get("type") in ("image", "image_url", "file")
 
 
 def for_trace(value):
@@ -33,8 +34,8 @@ def for_trace(value):
         return value.model_copy(update=update)
     if isinstance(value, BaseTool):  # its ~1 KB definition is the same on every call
         return value.name
-    if is_image(value):
-        return SCREENSHOT_NOT_TRACED
+    if is_media(value):
+        return MEDIA_NOT_TRACED
     if isinstance(value, dict):
         return {key: NOT_TRACED if key == "encrypted_content" else for_trace(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

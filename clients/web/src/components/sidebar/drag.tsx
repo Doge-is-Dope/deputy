@@ -3,18 +3,21 @@ import {
   pointerWithin,
   type Active,
   type CollisionDetection,
+  type DropAnimation,
   type Modifier,
 } from "@dnd-kit/core"
-import { getEventCoordinates } from "@dnd-kit/utilities"
+import { CSS, getEventCoordinates } from "@dnd-kit/utilities"
+import { cn } from "cn"
 
 import { type Conversation } from "@/lib/api"
 import { FolderIcon } from "@/components/icons"
+import { DROP } from "@/components/sidebar/motion"
 
 // The row a dragged project is carried by (DragOverlay): its folder, shut as the project is while dragged
 // (ProjectGroup), and its name, lifted as a menu is over the page.
 export function DraggedProject({ name }: { name: string }) {
   return (
-    <div className="flex h-8 items-center gap-2.5 rounded-md bg-sidebar-accent pr-2 pl-2.5 text-sm text-sidebar-accent-foreground shadow-md ring-1 ring-foreground/10 pointer-coarse:h-10">
+    <div className="flex h-8 items-center gap-2.5 rounded-md bg-sidebar-accent pr-2 pl-row-icon text-sm text-sidebar-accent-foreground shadow-md ring-1 ring-foreground/10 pointer-coarse:h-10">
       <FolderIcon className="shrink-0" />
       <span className="truncate">{name}</span>
     </div>
@@ -22,13 +25,51 @@ export function DraggedProject({ name }: { name: string }) {
 }
 
 // The chip a dragged conversation is carried by (DragOverlay): its name, lifted as a project's row is, but only as wide
-// as the name and beside the pointer, so the project it would go into shows under it, as Gmail carries mail to a label.
-export function DraggedConversation({ name }: { name: string }) {
+// as the name and beside the pointer, so the project it would go into shows under it. Faint while nothing under it
+// would take it, where a release puts it back.
+export function DraggedConversation({
+  name,
+  faint,
+}: {
+  name: string
+  faint: boolean
+}) {
   return (
-    <div className="flex h-8 w-max max-w-56 items-center rounded-md bg-sidebar-accent px-2.5 text-sm text-sidebar-accent-foreground shadow-md ring-1 ring-foreground/10 pointer-coarse:h-10">
+    <div
+      className={cn(
+        "flex h-8 w-max max-w-56 items-center rounded-md bg-sidebar-accent px-2.5 text-sm text-sidebar-accent-foreground shadow-md ring-1 ring-foreground/10 transition-opacity duration-150 ease-(--ease-out) motion-reduce:transition-none pointer-coarse:h-10",
+        faint && "opacity-50"
+      )}
+    >
       <span className="truncate">{name}</span>
     </div>
   )
+}
+
+// Around what would take the conversation carried over it: a project with its conversations, the new project row, the
+// recents. Inside its edge, so no list's fold clips it.
+export const TAKES = "rounded-md ring-[1.5px] ring-sidebar-ring ring-inset"
+
+// A conversation's chip going back to its row, released where nothing takes it: its name onto the row's name, fading
+// away as the row, left in place, comes back to full (its own transition).
+const inset = (node: Element | null) =>
+  node ? parseFloat(getComputedStyle(node).paddingLeft) : 0
+export const HOME: DropAnimation = {
+  ...DROP,
+  sideEffects: null,
+  keyframes: ({ active, dragOverlay, transform: { initial, final } }) => [
+    { transform: CSS.Transform.toString(initial), opacity: 1 },
+    {
+      transform: CSS.Transform.toString({
+        ...final,
+        x:
+          final.x +
+          inset(active.node) -
+          inset(dragOverlay.node.firstElementChild),
+      }),
+      opacity: 0,
+    },
+  ],
 }
 
 // The conversation a drag carries; none while it is a project.

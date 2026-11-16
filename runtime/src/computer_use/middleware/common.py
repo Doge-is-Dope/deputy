@@ -7,7 +7,7 @@ from langchain.agents.middleware import ModelRequest, ModelRetryMiddleware
 from langchain_core.messages import SystemMessage
 
 from computer_use.agent.failures import failed_in_stream
-from computer_use.tools.common import image_blocks, is_image
+from computer_use.tools.common import is_screenshot, screenshot_blocks
 
 # Prune old screenshots in batches to preserve prompt-cache reuse between prunes.
 # Keep between KEEP_SCREENSHOTS and KEEP_SCREENSHOTS + PRUNE_EVERY - 1 images.
@@ -28,15 +28,16 @@ def pruned(carrying: int, keep: int = KEEP_SCREENSHOTS, every: int = PRUNE_EVERY
 
 
 def without_screenshots(message):
-    """The message with each of its images replaced by a note that it was removed."""
-    blocks = [REMOVED_SCREENSHOT if is_image(block) else block for block in message.content]
+    """The message with each of its screenshots replaced by a note that it was removed."""
+    blocks = [REMOVED_SCREENSHOT if is_screenshot(block) else block for block in message.content]
     return message.model_copy(update={"content": blocks})
 
 
 def prune_screenshots(messages: list, keep: int = KEEP_SCREENSHOTS, every: int = PRUNE_EVERY) -> list:
-    """Remove images from the oldest messages that carry them, `every` messages at a time, keeping at least `keep`."""
+    """Remove screenshots from the oldest messages that carry them, `every` messages at a time, keeping at least
+    `keep`."""
     result = list(messages)
-    carrying = [index for index, message in enumerate(result) if image_blocks(message)]
+    carrying = [index for index, message in enumerate(result) if screenshot_blocks(message)]
     for index in carrying[:pruned(len(carrying), keep, every)]:
         result[index] = without_screenshots(result[index])
     return result

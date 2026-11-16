@@ -1,4 +1,5 @@
 import asyncio
+import base64
 from dataclasses import asdict
 import contextlib
 import fractions
@@ -120,6 +121,7 @@ async def test_generated_files_download_as_attachments(settings, computer, code_
 
     data = "方案,金額\nA,90720\n".encode()
     code_runner.read = AsyncMock(return_value=data)
+    code_runner.delete = AsyncMock(side_effect=CodeRunnerError("gone"))  # deleting goes on without it
     monkeypatch.setattr("computer_use.server.build_code_runner", lambda _: code_runner)
     use_script(monkeypatch, [], main=[AIMessage("Done.")])
     app = create_app(settings, max_steps=10, computer=computer)
@@ -135,10 +137,15 @@ async def test_generated_files_download_as_attachments(settings, computer, code_
         assert response.headers["content-disposition"] == "attachment; filename*=UTF-8''%E5%B9%B4%E5%BA%A6%20%E9%A0%90%E7%AE%97.csv"
         assert response.headers["cache-control"] == "private, no-store"
         code_runner.read.assert_awaited_once_with(thread, "報表/年度 預算.csv")
+        # A picture it made is an image of its own type, for the reply that links it to show; an SVG only downloads.
+        for name, kind in [("chart.png", "image/png"), ("photo.JPG", "image/jpeg"), ("logo.svg", "application/octet-stream")]:
+            assert (await api.get(f"/api/conversations/{thread}/files/{name}")).headers["content-type"] == kind
+        code_runner.read.reset_mock()
         for error, status in [(FileNotFoundError(), 404), (ValueError("refused"), 400), (CodeRunnerError(), 503)]:
             code_runner.read.side_effect = error
             assert (await api.get(url)).status_code == status
-        await api.delete(f"/api/conversations/{thread}")
+        assert (await api.delete(f"/api/conversations/{thread}")).status_code == 200
+        code_runner.delete.assert_awaited_once_with(thread)
         code_runner.read.reset_mock()
         assert (await api.get(url)).status_code == 404
         code_runner.read.assert_not_called()
@@ -174,7 +181,7 @@ async def test_a_run_streams_its_events_and_shows_in_the_list(client, monkeypatc
     }
     end = next(data for _, data in events if data.get("type") == "end")  # the title may come after it
     assert end | {"time": 0, "usage": {}, "cost": {}, "agents": []} == {
-        "type": "end", "stop_reason": "replied", "computer": None, "summary": "", "time": 0, "usage": {},
+        "type": "end", "stop_reason": "replied", "summary": "", "time": 0, "usage": {},
         "cost": {}, "agents": [],
     }
     assert events[-1][0] == "done"
@@ -202,7 +209,7 @@ async def test_a_run_streams_its_events_and_shows_in_the_list(client, monkeypatc
     }
     last = [data for _, data in sse((await client.get(f"/api/runs/{listed[0]['id']}/events")).text)]
     (ended,) = [data for data in last if data.get("type") == "end"]
-    assert ended["summary"] == "Done." and ended["computer"] == "replied"
+    assert ended["summary"] == "Done."
 
 
 async def test_the_reply_being_written_follows_the_log_unnumbered_until_it_is_logged(client, monkeypatch):
@@ -271,12 +278,122 @@ async def test_a_screenshot_comes_as_a_small_webp_for_a_thumbnail(client, runs):
     full = await client.get(f"/api/runs/{run}/files/001-key.png")
 
     assert (small.status_code, small.headers["content-type"]) == (200, "image/webp")
-    assert "immutable" in small.headers["cache-control"]
+    # Kept by the browser for good, never by a cache shared with other people.
+    assert small.headers["cache-control"] == full.headers["cache-control"] == "private, max-age=31536000, immutable"
     with Image.open(io.BytesIO(small.content)) as image:
         assert image.size == (160, 100)
     assert len(small.content) < len(full.content)
     assert (await client.get(f"/api/runs/{run}/files/001-key.png?w=10")).status_code == 400
     assert (await client.get(f"/api/runs/{run}/files/001-key.png?w=big")).status_code == 400
+
+
+async def uploaded(client, name: str, mime_type: str, data: bytes) -> httpx.Response:
+    return await client.post("/api/uploads", params={"name": name}, content=data, headers={"Content-Type": mime_type})
+
+
+def jpeg(image_format: str = "JPEG") -> bytes:
+    data = io.BytesIO()
+    Image.new("RGB", (64, 48), "olive").save(data, format=image_format)
+    return data.getvalue()
+
+
+async def test_what_the_user_uploads_reaches_the_main_agent_and_comes_back_in_the_next_turn(client, monkeypatch):
+    _, main = use_script(monkeypatch, [], main=[AIMessage("The total is 42."), AIMessage("It is dated today.")])
+    photo, pdf = jpeg(), jpeg("PDF")  # a page the model reads
+    ids = [(await uploaded(client, "收據.jpg", "image/jpeg", photo)).json()["id"],
+           (await uploaded(client, "報價單.pdf", "application/pdf", pdf)).json()["id"]]
+    # Before it goes, the page can show an upload at full size.
+    shown = await client.get(f"/api/uploads/{ids[0]}")
+    assert (shown.status_code, shown.headers["content-type"], shown.content) == (200, "image/jpeg", photo)
+    assert (await client.get(f"/api/uploads/{ids[1]}")).headers["content-disposition"] == "attachment"
+    assert (await client.get("/api/uploads/not-an-id")).status_code == 404
+
+    created = await client.post("/api/runs", json={"goal": "what is the total?", "attachments": ids})
+    run = created.json()["id"]
+    await until_idle(client)
+    again = await client.post("/api/runs", json={"goal": "and the date?", "thread": run})
+    await until_idle(client)
+
+    assert (created.status_code, again.status_code) == (201, 201)
+    sent = [{"type": "text", "text": "what is the total?"},
+            {"type": "image", "base64": base64.b64encode(photo).decode(), "mime_type": "image/jpeg", "filename": "收據.jpg"},
+            {"type": "file", "base64": base64.b64encode(pdf).decode(), "mime_type": "application/pdf", "filename": "報價單.pdf"}]
+    # Both turns' calls get the message as sent: the next turn reads its files back, and they are never pruned.
+    for call in main.received:
+        assert next(m for m in call if isinstance(m, HumanMessage) and isinstance(m.content, list)).content == sent
+    events = await logged(client, run)
+    assert [e["attachments"] for e in events if "attachments" in e] == [
+        [{"file": "main-000-message.jpg", "name": "收據.jpg"}, {"file": "main-000-message-2.pdf", "name": "報價單.pdf"}]
+    ]
+    assert sent[2]["base64"] not in json.dumps(events, ensure_ascii=False)  # kept as files, not in the log
+    # The run keeps its own copies; the uploads it took are gone.
+    reused = await client.post("/api/runs", json={"goal": "again", "attachments": ids[:1]})
+    assert (reused.status_code, reused.json()["error"]) == (400, f"no such upload: {ids[0]}")
+    assert (await client.get(f"/api/uploads/{ids[0]}")).status_code == 404
+    image = await client.get(f"/api/runs/{run}/files/main-000-message.jpg")
+    small = await client.get(f"/api/runs/{run}/files/main-000-message.jpg?w=160")
+    document = await client.get(f"/api/runs/{run}/files/main-000-message-2.pdf")
+    assert (image.status_code, image.headers["content-type"], image.content) == (200, "image/jpeg", photo)
+    assert "content-disposition" not in image.headers and image.headers["x-content-type-options"] == "nosniff"
+    assert (small.status_code, small.headers["content-type"]) == (200, "image/webp")
+    assert (document.status_code, document.headers["content-type"], document.content) == (200, "application/pdf", pdf)
+    assert document.headers["content-disposition"] == "attachment"
+    assert (await client.get(f"/api/runs/{run}/files/main-000-message-2.pdf?w=160")).status_code == 400
+    assert (await client.get(f"/api/runs/{run}/files/main-000-message-2.exe")).status_code == 404
+
+
+async def test_an_upload_stays_until_the_run_has_stored_the_message_it_came_with(client, monkeypatch):
+    async def stopped(self, opening):
+        raise RuntimeError("stopped before the message was logged")
+    monkeypatch.setattr(main_agent.Session, "start", stopped)
+    photo = (await uploaded(client, "a.jpg", "image/jpeg", jpeg())).json()["id"]
+
+    created = await client.post("/api/runs", json={"goal": "look", "attachments": [photo]})
+    await until_idle(client)
+
+    assert created.status_code == 201
+    assert (await client.get(f"/api/uploads/{photo}")).status_code == 200  # still there to send again
+
+
+async def test_uploads_that_cannot_go_are_turned_away_and_one_sent_while_the_conversation_works_waits(
+    client, computer, monkeypatch,
+):
+    held, pressing, _ = blocking_press(computer)
+    use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")])], main=[
+        delegate(), AIMessage("Done."), AIMessage("Got it."),
+    ])
+
+    wrong = await uploaded(client, "a.jpg", "image/jpeg", b"no")
+    big = await uploaded(client, "a.png", "image/png", b"0" * (5 * 2**20 + 1))
+    huge = await uploaded(client, "a.zip", "application/zip", b"0" * (20 * 2**20 + 1))
+    photo = (await uploaded(client, "a.jpg", "image/jpeg", jpeg())).json()["id"]
+    run = (await client.post("/api/runs", json={"goal": "open start"})).json()["id"]
+    await pressing.wait()
+    busy = await client.post("/api/runs", json={"goal": "this too", "thread": run, "attachments": [photo]})
+    steered = await client.post("/api/runs", json={"goal": "and this", "thread": run})
+    held.set()
+    await until_idle(client)
+    later = await client.post("/api/runs", json={"goal": "this too", "thread": run, "attachments": [photo]})
+    await until_idle(client)
+
+    assert (wrong.status_code, wrong.json()["error"]) == (400, "a.jpg is not a JPEG image")
+    assert (big.status_code, big.json()["error"]) == (400, "a.png is over 5 MB")  # what a model takes
+    assert huge.status_code == 413  # what anything takes
+    assert busy.status_code == 409 and busy.json()["reason"] == "conversation"
+    assert steered.status_code == 202  # a message without attachments still steers the run
+    assert later.status_code == 201  # the upload waited for the conversation to be free
+
+
+async def test_a_file_only_code_opens_cannot_go_without_a_code_runner_and_waits(client):
+    sheet = (await uploaded(client, "報表.xlsx", "", b"PK\x03\x04")).json()["id"]
+
+    refused = await client.post("/api/runs", json={"goal": "sum it", "attachments": [sheet]})
+    kept = await client.get(f"/api/uploads/{sheet}")
+
+    assert refused.status_code == 400 and "only by the coding agent" in refused.json()["error"]
+    # Kept for the page as bytes to download, never shown in place.
+    assert (kept.status_code, kept.headers["content-type"]) == (200, "application/octet-stream")
+    assert kept.headers["content-disposition"] == "attachment"
 
 
 async def test_unsupported_logs_are_hidden_and_direct_access_is_rejected_without_changing_them(client, runs):
@@ -425,13 +542,13 @@ async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conve
         AIMessage(content="Done."),
     ])
     first, second = await asyncio.gather(  # sent together, both for the desktop: only one may start
-        client.post("/api/runs", json={"goal": "@Computer open start"}),
-        client.post("/api/runs", json={"goal": "@Computer other"}),
+        client.post("/api/runs", json={"goal": "open start", "computer": True}),
+        client.post("/api/runs", json={"goal": "other", "computer": True}),
     )
     run = (first if first.status_code == 201 else second).json()["id"]
 
     await pressing.wait()
-    busy = await client.post("/api/runs", json={"goal": "@Computer something else"})
+    busy = await client.post("/api/runs", json={"goal": "something else", "computer": True})
     status = (await client.get("/api/status")).json()
     stopped = await client.post(f"/api/conversations/{run}/stop")
     events = sse((await client.get(f"/api/runs/{run}/events")).text)
@@ -441,7 +558,7 @@ async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conve
     (task,) = status["running"][0]["tasks"]
     assert busy.status_code == 409 and busy.json() | {"error": ""} == {"error": "", "reason": "desktop", "run": task}
     assert (status["active"], status["running"]) == (
-        task, [{"run": run, "thread": run, "goal": "@Computer open start", "turn": None, "tasks": [task], "pending": [], "queued": [], "read": []}]
+        task, [{"run": run, "thread": run, "goal": "open start", "turn": None, "tasks": [task], "pending": [], "queued": [], "read": []}]
     )
     assert [item["id"] for item in await listed_sessions(client)] == [run]
     assert stopped.status_code == 200 and (await until_idle(client))["error"] is None
@@ -470,7 +587,7 @@ async def test_one_run_has_the_desktop_and_a_stopped_run_carries_on_in_its_conve
 async def test_other_conversations_go_on_while_one_uses_the_desktop(client, settings, computer, monkeypatch):
     held, pressing, _ = blocking_press(computer)
     use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")])])
-    desktop = (await client.post("/api/runs", json={"goal": "@Computer open start"})).json()["id"]
+    desktop = (await client.post("/api/runs", json={"goal": "open start", "computer": True})).json()["id"]
     await pressing.wait()
 
     use_script(monkeypatch, [], main=[AIMessage("Paris.")])
@@ -489,7 +606,7 @@ async def test_other_conversations_go_on_while_one_uses_the_desktop(client, sett
             break
         await asyncio.sleep(0.01)
     again = await client.post("/api/runs", json={"goal": "next", "thread": desktop})
-    forced = await client.post("/api/runs", json={"goal": "@Computer open notepad", "thread": question["thread"]})
+    forced = await client.post("/api/runs", json={"goal": "open notepad", "computer": True, "thread": question["thread"]})
 
     answered = sse((await client.get(f"/api/runs/{question['id']}/events")).text)
     # The run's title is written as it comes, which may be after its end.
@@ -498,7 +615,7 @@ async def test_other_conversations_go_on_while_one_uses_the_desktop(client, sett
     handed = next(event for event in events if event.get("type") == "action")
     assert (handed["status"], handed["result"]) == ("error", "Not executed: " + DESKTOP_BUSY)
     end = next(event for event in events if event.get("type") == "end")
-    assert (end["stop_reason"], end["computer"]) == ("replied", None)
+    assert end["stop_reason"] == "replied"
     assert again.status_code == 202 and again.json()["id"] == desktop  # it goes to that run, stopped below
     assert forced.status_code == 409 and forced.json()["reason"] == "desktop"
     assert computer.calls == []  # only the first task's key press, which never finished
@@ -545,7 +662,7 @@ async def test_a_message_sent_while_the_conversation_works_goes_to_its_run(
         AIMessage(content="", tool_calls=[tool_call("c2", "key", text="esc")]),
         AIMessage(content="Opened and closed Start."),
     ])
-    run = (await client.post("/api/runs", json={"goal": "@Computer open start"})).json()["id"]
+    run = (await client.post("/api/runs", json={"goal": "open start", "computer": True})).json()["id"]
     await pressing[0].wait()
 
     sent = await client.post("/api/runs", json={"goal": "and close it", "thread": run})
@@ -559,8 +676,8 @@ async def test_a_message_sent_while_the_conversation_works_goes_to_its_run(
 
     assert sent.status_code == 202 and sent.json() | {"message": ""} == {"id": run, "thread": run, "message": ""}
     tasks = waiting[0]["tasks"]
-    assert waiting == [{"run": run, "thread": run, "goal": "@Computer open start", "turn": None, "tasks": tasks, "pending": [{"id": message, "text": "and close it"}], "queued": [], "read": []}]
-    assert read == [{"run": run, "thread": run, "goal": "@Computer open start", "turn": None, "tasks": tasks, "pending": [], "queued": [], "read": [message]}]
+    assert waiting == [{"run": run, "thread": run, "goal": "open start", "turn": None, "tasks": tasks, "pending": [{"id": message, "text": "and close it"}], "queued": [], "read": []}]
+    assert read == [{"run": run, "thread": run, "goal": "open start", "turn": None, "tasks": tasks, "pending": [], "queued": [], "read": [message]}]
     events = await session_events(client, run)
     assert [(event["id"], event["text"]) for event in events if event.get("type") == "message"] == [
         (message, "and close it")
@@ -804,7 +921,7 @@ async def test_stopping_with_no_runs_or_two(settings, computer, control, monkeyp
     held, pressing, _ = blocking_press(computer)
     use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")])])
     runner = runner_of(settings, computer, control)
-    desktop = await runner.start("@Computer open start", 10, force_computer=True)
+    desktop = await runner.start("open start", 10, force_computer=True)
     await pressing.wait()
     blocked, answering = asyncio.Event(), asyncio.Event()
 
@@ -834,7 +951,7 @@ async def test_a_run_of_another_server_sharing_the_desktop_holds_it_and_shows_wh
     with RunLock(settings.run_lock_path) as lock:  # as the eval's server holds it for its run
         lock.name(run)
         status = (await client.get("/api/status")).json()
-        busy = await client.post("/api/runs", json={"goal": "@Computer something else"})
+        busy = await client.post("/api/runs", json={"goal": "something else", "computer": True})
         events = sse((await client.get(f"/api/runs/{run}/events")).text)
         stopped = await client.post(f"/api/runs/{run}/stop")
 
@@ -1000,17 +1117,7 @@ def test_the_users_title_stands_over_the_runtimes_whichever_came_last(tmp_path):
     assert asdict(summarize("r1", [start, made, {**given, "text": "Start again"}]))["title"] == "Start again"
 
 
-async def test_a_message_for_the_desktop_is_recorded_as_one(client, monkeypatch):
-    _, main_model = use_script(monkeypatch, [AIMessage(content="Opened Start.")])
-    run = (await client.post("/api/runs", json={"goal": "@Computer open start"})).json()["id"]
-    await until_idle(client)
-
-    first = sse((await client.get(f"/api/runs/{run}/events")).text)[0][1]
-    assert (first["goal"], first["computer"]) == ("@Computer open start", True)
-    assert DESKTOP_ASKED in main_model.received[0][-1].text
-
-
-async def test_a_message_sent_for_the_desktop_goes_to_it_without_mentioning_it(client, monkeypatch):
+async def test_a_message_sent_for_the_desktop_goes_to_it(client, monkeypatch):
     _, main_model = use_script(monkeypatch, [AIMessage(content="Opened Start.")])
     assert (await client.post("/api/runs", json={"goal": "open start", "computer": "yes"})).status_code == 400
     run = (await client.post("/api/runs", json={"goal": "open start", "computer": True})).json()["id"]
@@ -1101,7 +1208,7 @@ async def test_a_step_awaiting_approval_shows_in_the_status_and_is_answered_from
         ]),
         AIMessage(content="Submitted."),
     ])
-    await client.post("/api/runs", json={"goal": "@Computer submit the form"})
+    await client.post("/api/runs", json={"goal": "submit the form", "computer": True})
     for _ in range(500):
         if approval := (await client.get("/api/status")).json()["approval"]:
             break
@@ -1160,29 +1267,8 @@ async def test_a_run_works_with_the_choices_sent_with_its_message_and_the_runtim
     assert [path for path in settings.data_dir.iterdir() if path.is_file()] == []
 
     for bad in ({"approvals": "always"}, {"agents": ["main"]}, {"agents": {"main": {"temperature": "1"}}},
-                {"agents": {"main": {"model": 4}}}, {"locale": 4}, {"locale": "zh Hant"}):
+                {"agents": {"main": {"model": 4}}}):
         assert (await client.post("/api/runs", json={"goal": "hi", **bad})).status_code == 400
-
-
-async def test_the_computer_agent_writes_to_the_user_in_the_language_of_the_page_that_sent_the_message(
-    client, monkeypatch
-):
-    computer_model, _ = use_script(
-        monkeypatch, [AIMessage("Done."), AIMessage("Done.")], main=[delegate(), AIMessage("Done.")] * 2
-    )
-
-    async def prompt(**sent) -> str:
-        await client.post("/api/runs", json={"goal": "check the screen", **sent})
-        await until_idle(client)
-        return computer_model.received[-1][0].text
-
-    assert tells_language(await prompt(locale="zh-Hant"), "Traditional Chinese")
-    # Without it, as from a page that does not send it, the agent goes by the user's message.
-    assert "The user reads" not in await prompt()
-
-
-def tells_language(prompt: str, language: str) -> bool:
-    return f"\n\nThe user reads {language}: write anything you say to them in {language}.\n" in f"{prompt}\n"
 
 
 @pytest.fixture
@@ -1416,12 +1502,29 @@ async def test_a_search_finds_a_conversation_by_what_was_said_in_it(client, monk
     created = await client.post("/api/runs", json={"goal": "寫一份會議紀錄"})
     await until_idle(client)
     thread = created.json()["thread"]
-    hits = (await client.get("/api/search", params={"q": " 會議 "})).json()
-    assert [(hit["conversation"]["id"], hit["snippet"]) for hit in hits] == [(thread, "寫一份會議紀錄")]
-    assert (await client.get("/api/search", params={"q": "記事本"})).json() == []
-    assert (await client.get("/api/search", params={"q": "  "})).json() == []
+    found = (await client.get("/api/search", params={"q": " 會議 "})).json()
+    assert [(hit["conversation"]["id"], hit["snippet"]) for hit in found["items"]] == [(thread, "寫一份會議紀錄")]
+    assert found["next"] is None
+    nothing = {"items": [], "next": None}
+    assert (await client.get("/api/search", params={"q": "記事本"})).json() == nothing
+    assert (await client.get("/api/search", params={"q": "  "})).json() == nothing
+
+
+async def test_a_search_lists_a_page_at_a_time_and_goes_on_from_its_next(client, monkeypatch):
+    use_script(monkeypatch, [])
+    threads = []
+    for n in range(3):
+        threads.append((await client.post("/api/runs", json={"goal": f"會議紀錄 {n}"})).json()["thread"])
+        await until_idle(client)
+    first = (await client.get("/api/search", params={"q": "會議", "limit": "2"})).json()
+    assert [hit["conversation"]["id"] for hit in first["items"]] == threads[:0:-1] and first["next"]
+    rest = (await client.get("/api/search", params={"q": "會議", "limit": "2", "before": first["next"]})).json()
+    assert [hit["conversation"]["id"] for hit in rest["items"]] == threads[:1] and rest["next"] is None
+    assert (await client.get("/api/search", params={"q": "會議", "before": "x"})).status_code == 400
+    assert (await client.get("/api/search", params={"q": "會議", "limit": "0"})).status_code == 400
 
 
 async def test_a_message_says_the_users_time_zone_and_whether_memory_learns_and_is_used(client):
-    for wrong in ({"timezone": "Mars/Base"}, {"memory": {"learn": "yes"}}, {"memory": {"forget": True}}):
+    for wrong in ({"timezone": "Mars/Base"}, {"memory": {"learn": "yes"}}, {"memory": {"forget": True}},
+                  {"commands": "no"}):
         assert (await client.post("/api/runs", json={"goal": "reply"} | wrong)).status_code == 400

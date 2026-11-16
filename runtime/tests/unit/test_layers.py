@@ -13,8 +13,8 @@ CORE = {
     "tools.tasks",
 }
 OPTIONAL = (
-    "agent.coding_agent", "agent.computer_agent", "agent.review", "computers", "desktop", "execution", "memory",
-    "middleware.desktop", "middleware.memory", "middleware.skills", "prompts.coding", "prompts.computer",
+    "agent.coding_agent", "agent.computer_agent", "agent.review", "computers", "desktop", "memory",
+    "middleware.approvals", "middleware.desktop", "middleware.memory", "middleware.skills", "prompts.coding", "prompts.computer",
     "prompts.memory", "prompts.review", "sandbox", "tools.coding", "tools.desktop",
 )
 

@@ -1,7 +1,7 @@
 """HTTP API for conversations and SSE events, plus the routes of the desktop, memory and sign-in.
 
-Every client reaches the runs through it; only this server runs agents. A client sends its model, locale and
-approval choices with each message."""
+Every client reaches the runs through it; only this server runs agents. A client sends its model and approval
+choices with each message."""
 
 import asyncio
 import contextlib
@@ -16,6 +16,7 @@ from urllib.parse import quote
 
 from PIL import Image
 from starlette.applications import Starlette
+from starlette.datastructures import QueryParams
 from starlette.exceptions import HTTPException
 from starlette.middleware import Middleware
 from starlette.requests import Request
@@ -26,34 +27,45 @@ from computer_use.agent.main_agent import SUBAGENTS, run_turn
 from computer_use.auth import Authenticate, build_authenticator
 from computer_use.agent.models import MAIN_AGENT, efforts, offered, starting
 from computer_use.agent.title import MAX_CHARS, Titles, title_model
-from computer_use.adapters import build_code_runner, build_computer, build_control, build_screen_judge, build_stores
+from computer_use.adapters import (
+    build_code_runner, build_computer, build_control, build_file_store, build_screen_judge, build_stores,
+    build_windows_tools,
+)
 from computer_use.computers import Computer
 from computer_use.config import APPROVALS, FOLLOW, RunChoices, Settings
 from computer_use.desktop.control import ApprovalFile, ControlSyncError, DesktopBusy, RunLock
 from computer_use.desktop.routes import desktop_routes
 from computer_use.desktop.webrtc import ScreenShare
-from computer_use.agent.history import can_continue, thread_of
+from computer_use.agent.history import can_continue
+from computer_use.attachments import MAX_KEPT, Uploads
 from computer_use.routes import body
 from computer_use.runner import ConversationBusy, Runner
 from computer_use.sandbox import CodeRunnerError
 from computer_use.memory.routes import memory_routes
 from computer_use.storage import (
-    ALL, MAX_PAGE, PAGE, TURN, Runs, RunSummary, supported,
+    ALL, HITS, MAX_PAGE, PAGE, TURN, Runs, RunSummary, cursor_of, page_limit, supported,
 )
+from computer_use.tools.common import MEDIA_TYPES
 
 RUN_ID = re.compile(r"[\w-]+")
-SCREENSHOT = re.compile(r"[\w-]+\.png")
-LANGUAGE_TAG = re.compile(r"[A-Za-z]{2,8}(-[A-Za-z0-9]{1,8})*")
+# A run's files by extension: screenshots and what the user attached.
+FILE_TYPES = {extension: media_type for media_type, extension in MEDIA_TYPES.items()}
+# Any extension a file was kept under; one a model does not read is sent as bytes to download, never shown in place.
+RUN_FILE = re.compile(r"[\w-]+\.([a-z0-9]{1,10})")
+ANY = "application/octet-stream"
+PICTURES = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp"}
 # Fixed so each thumbnail is made once and cached.
 THUMBNAIL_WIDTHS = (160, 192, 400)
-# A screenshot never changes once written, so the browser keeps what it got.
-IMMUTABLE = {"Cache-Control": "max-age=31536000, immutable"}
+# A run's file never changes once written, so the browser keeps what it got; no shared cache may, as it shows a desktop
+# or what the user attached. A PDF is only ever downloaded, never shown in place.
+IMMUTABLE = {"Cache-Control": "private, max-age=31536000, immutable", "X-Content-Type-Options": "nosniff"}
+DOWNLOAD = {"Content-Disposition": "attachment"}
 KEEPALIVE_SECONDS = 15
 NOT_CONTINUABLE = "this conversation cannot be continued: no supported record"
 
 
-def thumbnail(png: bytes, width: int) -> bytes:
-    with Image.open(io.BytesIO(png)) as image:
+def thumbnail(data: bytes, width: int) -> bytes:
+    with Image.open(io.BytesIO(data)) as image:
         height = max(1, round(image.height * width / image.width))
         small = image.convert("RGB").resize((width, height), Image.LANCZOS)
     out = io.BytesIO()
@@ -74,13 +86,15 @@ AGENTS = (MAIN_AGENT, *(each.agent for each in SUBAGENTS))
 
 def create_app(settings: Settings, max_steps: int, computer: Computer | None = None) -> Starlette:
     store, projects, memory = build_stores(settings)
+    uploads = Uploads(build_file_store(settings))
     authenticator = build_authenticator(settings)
     control = build_control(settings)
     computer = computer if computer is not None else build_computer(settings)
     code_runner = build_code_runner(settings)
+    windows = build_windows_tools(settings, control, computer)
     start_turn = partial(
         run_turn, settings, computer=computer, control=control, code_runner=code_runner, memory=memory,
-        judge=build_screen_judge(settings),
+        judge=build_screen_judge(settings), windows=windows,
     )
     runner = Runner(store, start_turn, Titles(settings))
     run_lock = RunLock(settings.run_lock_path)
@@ -140,8 +154,13 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
         return run
 
     async def erase(thread: str, user: str) -> list[str]:
+        """Deletes the conversation's records, then its files on the code runner."""
         deleted = await runner.delete(thread, user)
         supported_runs.difference_update((user, run) for run in deleted)
+        if code_runner is not None:
+            # A runner out of reach keeps them only in memory, until it restarts.
+            with contextlib.suppress(CodeRunnerError):
+                await code_runner.delete(thread)
         return deleted
 
     async def runs_of(request: Request) -> list[RunSummary]:
@@ -185,9 +204,6 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             for chosen in agents.values()
         ):
             raise HTTPException(400, "agents must map an agent to its model and effort")
-        locale = data.get("locale")
-        if locale is not None and not (isinstance(locale, str) and re.fullmatch(LANGUAGE_TAG, locale)):
-            raise HTTPException(400, 'locale must be a language tag, such as "zh-Hant"')
         timezone = data.get("timezone")
         if timezone is not None and not (isinstance(timezone, str) and known_zone(timezone)):
             raise HTTPException(400, 'timezone must be an IANA time zone, such as "Asia/Taipei"')
@@ -195,6 +211,9 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
         if not (isinstance(memory, dict) and set(memory) <= {"learn", "use"}
                 and all(isinstance(value, bool) for value in memory.values())):
             raise HTTPException(400, "memory must say learn and use, each true or false")
+        commands = data.get("commands", True)
+        if not isinstance(commands, bool):
+            raise HTTPException(400, "commands must be true or false")
         return RunChoices(
             {
                 agent: {key: value for key, value in chosen.items() if agent != MAIN_AGENT or value != FOLLOW}
@@ -202,10 +221,10 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
                 if agent in AGENTS
             },
             approvals,
-            locale,
             timezone,
             memory.get("learn", False),
             memory.get("use", False),
+            commands,
         )
 
     def steps_of(data: dict) -> int:
@@ -237,8 +256,11 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             "control": asdict(control.read()),
             "approval": asdict(pending) if (pending := await awaiting(request)) else None,
             "computer": {"connected": connected, "detail": detail},
-            # None when there is no coding agent.
             "code_runner": asdict(await code_runner.status()) if code_runner else None,
+            # None when no Windows Tools host is set; connected while its lease is held.
+            "windows_tools": (
+                {"connected": windows.lease.target is not None, "detail": windows.lease.problem} if windows else None
+            ),
             "ice_servers": ice_servers,
         })
 
@@ -246,16 +268,19 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
         """Who the page is signed in as, and how it signed in; a request that proves nobody never gets here (401)."""
         return JSONResponse({**asdict(request.state.identity), "login": authenticator.login})
 
+    def limit_of(params: QueryParams, default: int) -> int:
+        limit = params.get("limit", str(default))
+        if not limit.isdigit() or int(limit) < 1:
+            raise HTTPException(400, "limit must be a whole number from 1")
+        return int(limit)
+
     async def list_conversations(request: Request) -> JSONResponse:
         """A page of the asker's conversations, most recent first. `?project=` an id, empty for none, absent for all;
         `?before=` a page's `next`; `?limit=` up to 100."""
         params = request.query_params
         project = params.get("project", ALL) or None
-        limit = params.get("limit", str(PAGE))
-        if not limit.isdigit() or int(limit) < 1:
-            raise HTTPException(400, "limit must be a whole number from 1")
         try:
-            page = await mine(request).conversations(project, params.get("before"), int(limit))
+            page = await mine(request).conversations(project, params.get("before"), limit_of(params, PAGE))
         except ValueError:
             raise HTTPException(400, "before must be a page's next") from None
         return JSONResponse({"items": [asdict(each) for each in page.items], "next": page.next})
@@ -263,16 +288,24 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
     async def conversation_runs(request: Request) -> JSONResponse:
         """A conversation's runs, oldest first, by its id or any run's id; 404 if not the asker's."""
         runs, id = mine(request), request.path_params["thread"]
-        thread = await thread_of(runs, id) if RUN_ID.fullmatch(id) else None
+        thread = await runs.thread(id) if RUN_ID.fullmatch(id) else None
         listed = await runs.runs(thread) if thread else []
         if not listed:
             raise HTTPException(404, "no such conversation")
         return JSONResponse([asdict(each) for each in listed])
 
     async def search(request: Request) -> JSONResponse:
-        # Conversations by what was said in them; the page matches their names itself, from the list.
-        query = request.query_params.get("q", "").strip()
-        return JSONResponse([asdict(hit) for hit in await mine(request).search(query)] if query else [])
+        """A page of the asker's conversations whose name or words contain `?q=`, most recent first; `?before=` a
+        page's `next`; `?limit=` up to 100."""
+        params = request.query_params
+        query, limit = params.get("q", "").strip(), page_limit(limit_of(params, HITS))
+        try:
+            # One more than the page, to know whether another follows.
+            hits = await mine(request).search(query, limit + 1, params.get("before")) if query else []
+        except ValueError:
+            raise HTTPException(400, "before must be a page's next") from None
+        after = cursor_of(hits[limit - 1].conversation) if len(hits) > limit else None
+        return JSONResponse({"items": [asdict(hit) for hit in hits[:limit]], "next": after})
 
     async def download(request: Request) -> Response:
         thread, path = request.path_params["thread"], request.path_params["path"]
@@ -287,7 +320,10 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             raise HTTPException(400, str(error)) from None
         except CodeRunnerError:
             raise HTTPException(503, "code runner is unavailable") from None
-        return Response(data, media_type="application/octet-stream", headers={
+        # A picture is shown in the reply that links it: as an image of its own type, never one that runs (SVG).
+        extension = path.rsplit(".", 1)[-1].lower()
+        media_type = PICTURES.get(extension, ANY)
+        return Response(data, media_type=media_type, headers={
             "Content-Disposition": f"attachment; filename*=UTF-8''{quote(path.rsplit('/', 1)[-1], safe='')}",
             "Cache-Control": "private, no-store",
             "X-Content-Type-Options": "nosniff",
@@ -305,13 +341,20 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             raise HTTPException(404, NOT_CONTINUABLE)
         goal = goal.strip()
         choices = choices_of(data)
-        desktop = data.get("computer", False)  # for the desktop, as a message that mentions @Computer is
+        desktop = data.get("computer", False)  # sent straight to the desktop, as the CLI's run is
         if not isinstance(desktop, bool):
             raise HTTPException(400, "computer must be true or false")
         queued = data.get("queue", False)  # to wait for the run in progress to end, rather than steer it
         if not isinstance(queued, bool):
             raise HTTPException(400, "queue must be true or false")
-        if thread is not None:  # sent while the conversation's run works: it goes to that run
+        try:
+            attached = data.get("attachments", [])
+            media = await uploads.blocks(me(request), attached, coding=code_runner is not None)
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        # Sent while the conversation's run works: it goes to that run. A message with attachments only starts a run,
+        # so one sent then finds the conversation busy.
+        if thread is not None and not media:
             try:
                 sent = runner.send(thread, goal, choices, queued)
             except ConversationBusy as error:
@@ -327,7 +370,9 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
         try:
             run = await runner.start(
                 goal, steps, thread=thread, force_computer=desktop, take_control=take_control,
-                choices=choices, project=project, user=me(request),
+                choices=choices, project=project, user=me(request), media=media,
+                # The run keeps its own copies; until it has, and for a message turned away, the uploads stay.
+                kept=partial(uploads.delete, me(request), attached),
             )
         except ConversationBusy as error:
             return busy("conversation", error.run)
@@ -341,6 +386,32 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             traceback.print_exception(error)
             return JSONResponse({"error": f"{type(error).__name__}: {error}"}, 500)
         return JSONResponse({"id": run, "thread": thread or run}, 201)
+
+    async def upload(request: Request) -> JSONResponse:
+        """Keeps a file the user is about to attach, sent as its bytes with its type and `?name=`: its id, which a
+        message's `attachments` name."""
+        if int(request.headers.get("content-length") or 0) > MAX_KEPT:
+            raise HTTPException(413, f"a file must be at most {MAX_KEPT // 2**20} MB")
+        data = bytearray()
+        async for chunk in request.stream():
+            data += chunk
+            if len(data) > MAX_KEPT:
+                raise HTTPException(413, f"a file must be at most {MAX_KEPT // 2**20} MB")
+        mime_type = request.headers.get("content-type", "").split(";", 1)[0].strip()
+        try:
+            upload_id = await uploads.put(me(request), request.query_params.get("name", ""), mime_type, bytes(data))
+        except ValueError as error:
+            raise HTTPException(400, str(error)) from None
+        return JSONResponse({"id": upload_id}, 201)
+
+    async def uploaded(request: Request) -> Response:
+        """An upload as it was kept, for the page to show at full size before the message goes."""
+        try:
+            mime_type, data = await uploads.get(me(request), request.path_params["upload"])
+        except FileNotFoundError:
+            raise HTTPException(404, "no such upload") from None
+        mime_type = mime_type if mime_type in MEDIA_TYPES else ANY
+        return Response(data, media_type=mime_type, headers=IMMUTABLE | ({} if mime_type.startswith("image/") else DOWNLOAD))
 
     async def delete_conversation(request: Request) -> JSONResponse:
         """Erases a conversation's runs, records and screenshots for good."""
@@ -506,26 +577,31 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
 
         return StreamingResponse(stream(), media_type="text/event-stream", headers={"Cache-Control": "no-cache"})
 
-    async def screenshot(request: Request) -> Response:
-        """A screenshot of a run, or with `?w=` a thumbnail that wide."""
+    async def run_file(request: Request) -> Response:
+        """A file of a run (a screenshot, or what the user attached), or with `?w=` an image's thumbnail that wide."""
         run, name, runs = await run_of(request), request.path_params["name"], mine(request)
-        if not SCREENSHOT.fullmatch(name):
-            raise HTTPException(404, "no such screenshot")
+        if not (named := RUN_FILE.fullmatch(name)):
+            raise HTTPException(404, "no such file")
+        media_type = FILE_TYPES.get(named[1], ANY)
         width = request.query_params.get("w")
-        if width is not None and (not width.isdigit() or int(width) not in THUMBNAIL_WIDTHS):
-            raise HTTPException(400, f"w must be one of {', '.join(map(str, THUMBNAIL_WIDTHS))}")
+        if width is not None and (
+            not media_type.startswith("image/") or not width.isdigit() or int(width) not in THUMBNAIL_WIDTHS
+        ):
+            raise HTTPException(400, f"w must be one of {', '.join(map(str, THUMBNAIL_WIDTHS))}, for an image")
         # Made on first request and kept as a file of the run; many are never asked for.
         wanted = name if width is None else f"thumbs/{width}/{name}.webp"
         try:
             data = await runs.get_file(run, wanted)
         except FileNotFoundError:
             try:
-                png = await runs.get_file(run, name)
+                image = await runs.get_file(run, name)
             except FileNotFoundError:
-                raise HTTPException(404, "no such screenshot") from None
-            data = await asyncio.to_thread(thumbnail, png, int(width))
+                raise HTTPException(404, "no such file") from None
+            data = await asyncio.to_thread(thumbnail, image, int(width))
             await runs.put_file(run, wanted, data)
-        return Response(data, media_type="image/png" if width is None else "image/webp", headers=IMMUTABLE)
+        if width is not None:
+            return Response(data, media_type="image/webp", headers=IMMUTABLE)
+        return Response(data, media_type=media_type, headers=IMMUTABLE | ({} if media_type.startswith("image/") else DOWNLOAD))
 
     async def choose_approvals(request: Request) -> JSONResponse:
         """Sets at once how the run in progress answers steps that need approval; models apply from the next run."""
@@ -546,6 +622,9 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             cleanup.push_async_callback(share.close)
             if code_runner is not None:
                 cleanup.push_async_callback(code_runner.close)
+            if windows is not None:
+                await windows.lease.start()
+                cleanup.push_async_callback(windows.lease.close)
             cleanup.push_async_callback(runner.close)
             yield
 
@@ -563,9 +642,11 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             Route("/api/conversations/{thread}/runs", conversation_runs),
             Route("/api/conversations/{thread}/files/{path:path}", download),
             Route("/api/runs", new_run, methods=["POST"]),
+            Route("/api/uploads", upload, methods=["POST"]),
+            Route("/api/uploads/{upload}", uploaded),
             Route("/api/search", search),
             Route("/api/runs/{run}/events", events),
-            Route("/api/runs/{run}/files/{name}", screenshot),
+            Route("/api/runs/{run}/files/{name}", run_file),
             Route("/api/runs/{run}/stop", stop_run, methods=["POST"]),
             Route("/api/runs/{run}/messages/{message}", withdraw_message, methods=["DELETE"]),
             Route("/api/runs/{run}/approvals", choose_approvals, methods=["POST"]),

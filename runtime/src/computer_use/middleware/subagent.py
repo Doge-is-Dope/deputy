@@ -1,15 +1,16 @@
-"""Subagent turn handling: steering and message logging.
+"""Subagent turn handling: steering, message logging, and the hand-over at the model call limit.
 
-Desktop tasks also handle approvals, takeover, reconnection and screenshot
-pruning (middleware.desktop). Input validation and dispatch belong to desktop.executor."""
+Desktop tasks also handle approvals, takeover and reconnection
+(middleware.desktop). Input validation and dispatch belong to desktop.executor."""
 
 import asyncio
 
-from langchain.agents.middleware import AgentMiddleware, hook_config
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain.agents.middleware import AgentMiddleware, ModelResponse, hook_config
+from langchain_core.messages import AIMessage, BaseMessage, HumanMessage, ToolMessage
 
 from computer_use.agent.inbox import SUBAGENT, Inbox
 from computer_use.agent.trajectory import Trajectory
+from computer_use.middleware.common import prune_screenshots
 from computer_use.prompts import notes
 
 
@@ -49,6 +50,8 @@ class SubagentMiddleware(AgentMiddleware):
         return None
 
     async def awrap_model_call(self, request, handler):
+        # An agent keeps only its latest images, as with screenshots: one it looked at is in its folder still.
+        request = request.override(messages=prune_screenshots(request.messages))
         try:
             return await handler(request)
         except asyncio.CancelledError:
@@ -63,3 +66,40 @@ class SubagentMiddleware(AgentMiddleware):
     async def held(self, request) -> ToolMessage | None:
         """Why the call must not run yet, as its result, or None once it may: no call is held here."""
         return None
+
+
+def in_words(message: BaseMessage) -> BaseMessage:
+    """An agent's turn with its tool calls dropped: only what it wrote."""
+    if not isinstance(message, AIMessage):
+        return message
+    return message.model_copy(update={"content": message.text, "tool_calls": [], "invalid_tool_calls": []})
+
+
+class HandOverAtLimit(AgentMiddleware):
+    """Once a task has used its `limit` of model calls, one more asks the agent for a hand-over: what whoever continues
+    needs that the screen will not show. The model call limit then ends the task. That call's reply is words only, so
+    no step runs past the limit."""
+
+    def __init__(self, limit: int, log: Trajectory):
+        super().__init__()
+        self.limit = limit
+        self.log = log
+        self.calls = 0
+        self.asked = False  # whether the task reached its hand-over
+
+    async def abefore_model(self, state, runtime) -> dict | None:
+        if self.calls < self.limit or self.asked:
+            return None
+        self.asked = True
+        message = HumanMessage(content=notes.HAND_OVER)
+        await self.log.input(message, "handover")
+        return {"messages": [message]}
+
+    async def awrap_model_call(self, request, handler):
+        self.calls += 1
+        response = await handler(request)
+        if not self.asked:
+            return response
+        if isinstance(response, ModelResponse):
+            return ModelResponse([in_words(each) for each in response.result], response.structured_response)
+        return in_words(response)

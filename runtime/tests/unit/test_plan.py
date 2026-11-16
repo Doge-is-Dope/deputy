@@ -6,7 +6,6 @@ from types import SimpleNamespace as NS
 import pytest
 
 from computer_use.agent.blackboard import Blackboard
-from computer_use.agent.history import latest_plan
 from computer_use.agent.inbox import Inbox
 from computer_use.agent.plan import MAX_STEPS, Plan, PlanError, Step
 from computer_use.agent.session import Session
@@ -80,12 +79,23 @@ def test_finishing_a_step_the_plan_does_not_have_is_answered_and_changes_nothing
 
 def test_a_snapshot_shows_the_tasks_at_work_and_needs_hold_nothing_back():
     plan = written(FIND, SUM)
-    snapshot = plan.snapshot({"sum": ["t1", "t2"]})
+    snapshot = plan.snapshot({"find": ["t1"], "sum": ["t1", "t2"]})
     assert snapshot["steps"] == [
-        {"id": "find", "title": "Find the reports", "done_when": "", "needs": [], "status": "pending", "tasks": []},
-        {"id": "sum", "title": "Add them up", "done_when": "A total", "needs": ["find"], "status": "in_progress",
+        {"id": "find", "title": "Find the reports", "done_when": "", "needs": [], "status": "in_progress",
+         "tasks": ["t1"]},
+        {"id": "sum", "title": "Add them up", "done_when": "A total", "needs": ["find"], "status": "pending",
          "tasks": ["t1", "t2"]},
     ]
+
+
+def test_a_step_a_task_is_on_is_in_progress_once_the_steps_it_needs_are_done():
+    plan = written(FIND, SUM, Step("send", "Send it", needs=("gone",)))
+    on_all = {"find": ["t1"], "sum": ["t1"], "send": ["t2"]}
+    assert statuses(plan.snapshot(on_all)) == {"find": "in_progress", "sum": "pending", "send": "in_progress"}
+
+    plan.finish(["find"])
+
+    assert statuses(plan.snapshot(on_all)) == {"find": "completed", "sum": "in_progress", "send": "in_progress"}
 
 
 def test_a_task_on_a_step_that_is_done_does_not_make_it_in_progress():
@@ -99,18 +109,6 @@ def test_each_snapshot_is_newer_than_the_last():
     assert [plan.snapshot({})["version"] for _ in range(3)] == [1, 2, 3]
 
 
-def test_a_restored_plan_keeps_what_was_done_and_counts_on():
-    plan = written(FIND, SUM, SEND)
-    plan.finish(["find"])
-
-    restored = Plan.restored(plan.snapshot({"sum": ["t1"]}))
-
-    assert restored.steps == plan.steps
-    next_one = restored.snapshot({})
-    assert statuses(next_one) == {"find": "completed", "sum": "pending", "send": "pending"}
-    assert next_one["version"] == 2
-
-
 async def conversation(tmp_path, turns: int) -> tuple:
     store = file_runs(tmp_path).of(LOCAL_USER)
     logs, thread = [], None
@@ -120,28 +118,6 @@ async def conversation(tmp_path, turns: int) -> tuple:
         thread = thread or log.run
         logs.append(log)
     return store, thread, logs
-
-
-async def test_the_latest_plan_is_the_highest_version_in_any_of_the_turns_logs(tmp_path):
-    store, thread, (first, second) = await conversation(tmp_path, 2)
-    plan = written(FIND)
-    newer_in_the_first_log = [plan.snapshot({}), plan.snapshot({}), plan.snapshot({})]
-    second.plan(newer_in_the_first_log[1])
-    first.plan(newer_in_the_first_log[2])
-    second.plan(newer_in_the_first_log[0])
-
-    assert (await latest_plan(store, thread))["version"] == 3
-
-
-async def test_a_plan_a_task_logged_counts_and_a_conversation_without_one_has_none(tmp_path):
-    store, thread, (first,) = await conversation(tmp_path, 1)
-    assert await latest_plan(store, thread) is None
-
-    task = Trajectory(store, await store.create())
-    task.start_task(thread, "s", first.run, "t1", "coding", "brief", "title")
-    task.plan(written(FIND).snapshot({}))
-
-    assert (await latest_plan(store, thread))["version"] == 1
 
 
 class Running:
@@ -176,7 +152,7 @@ async def test_a_conversation_with_nothing_on_it_reads_empty(tmp_path):
 
 async def test_a_finished_turns_log_is_read_once_however_often_the_board_is(tmp_path):
     store, thread, (first,) = await conversation(tmp_path, 1)
-    first.end("replied", "", None)
+    first.end("replied", "")
     await store.flush(first.run)
     reads = []
     events = store.events
@@ -218,11 +194,11 @@ async def test_done_false_on_a_finished_step_leaves_it_done_and_only_reopen_open
     assert statuses(plan.snapshot({})) == {"find": "pending"}
 
 
-def ended(plan: Plan, steps: tuple, outcome, tasks=None, planned=True) -> NS:
+def ended(plan: Plan, steps: tuple, outcome, tasks=None) -> NS:
     """A task on `steps` that has ended with `outcome`, the plan being `plan`, and `tasks` still running."""
     job = NS(plan_steps=steps, plan_note="")
     running = NS(on_steps=lambda: tasks or {})
-    session = NS(blackboard=NS(plan=plan), background=running, show_plan=lambda: None, planned=planned)
+    session = NS(blackboard=NS(plan=plan), background=running, show_plan=lambda: None)
     Session.task_changed(session, job, outcome)
     return job
 
@@ -248,8 +224,8 @@ def test_a_reply_marks_nothing_done_and_only_steps_nobody_is_on_are_named():
     assert statuses(plan.snapshot({})) == {"find": "completed", "sum": "pending", "send": "pending"}
 
 
-def test_a_plan_restored_from_an_earlier_session_is_not_this_sessions_work_to_finish():
-    assert ended(written(FIND), (), REPLIED, planned=False).plan_note == ""
+def test_a_step_waiting_on_another_with_a_task_on_it_is_not_named_as_left():
+    assert ended(written(FIND, SUM), ("find",), REPLIED, tasks={"sum": ["t2"]}).plan_note == notes.plan_left(["find"])
 
 
 def test_a_plan_with_every_step_done_or_none_at_all_says_nothing():

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 
 from computer_use_cli import render
-from computer_use_cli.client import ApiError, Client, Follow
+from computer_use_cli.client import MAX_FILES, ApiError, Client, Follow
 
 # Default model-call budget per desktop task; --max-steps overrides it.
 MAX_STEPS = 60
@@ -60,7 +60,7 @@ def follow(client: Client, run: str) -> int:
                 if kind == "end" and task:
                     print(f"      {starts[log]['agent']} {event['stop_reason']}: {starts[log]['goal']}", flush=True)
                     if starts[log]["agent"] == "computer":  # how the agent ended, or that it was stopped or failed
-                        desktop = event.get("computer") or event["stop_reason"]
+                        desktop = event.get("agent_stop_reason") or event["stop_reason"]
                 elif (text := render.line(event)) is not None:
                     print(text, flush=True)
                 if kind == "end" and not task:
@@ -87,13 +87,26 @@ def follow(client: Client, run: str) -> int:
     return REPLIED if desktop == "replied" else OTHER
 
 
-def send(client: Client, goal: str, args: argparse.Namespace, thread: str | None = None, project: str | None = None
-         ) -> int:
-    """Send a goal to the desktop and follow the run it starts."""
+def send(client: Client, goal: str, args: argparse.Namespace, thread: str | None = None, project: str | None = None,
+         attach: list[Path] | None = None) -> int:
+    """Send a goal to the desktop, with the files `attach` names, and follow the run it starts."""
+    if attach and len(attach) > MAX_FILES:
+        print(f"Not started: a message takes at most {MAX_FILES} files", file=sys.stderr)
+        return OTHER
+    try:
+        attachments = [client.upload(file) for file in attach] if attach else None
+    except OSError as error:
+        print(f"Not started: cannot read {error.filename}: {error.strerror}", file=sys.stderr)
+        return OTHER
+    except ApiError as error:
+        if error.status == 0:
+            raise
+        print(f"Not started: {error}", file=sys.stderr)
+        return OTHER
     try:
         started = client.start(
             goal, thread=thread, project=project, max_steps=args.max_steps, computer=True,
-            agents=choices(args.main, args.computer),
+            agents=choices(args.main, args.computer), commands=not args.no_commands, attachments=attachments,
         )
     except ApiError as error:
         if error.status == 0:
@@ -106,7 +119,7 @@ def send(client: Client, goal: str, args: argparse.Namespace, thread: str | None
 
 def cmd_run(client: Client, args: argparse.Namespace) -> int:
     """A goal for the desktop: the main agent always hands it to the computer-use agent, then checks the result."""
-    return send(client, args.goal, args, thread=args.thread, project=args.project)
+    return send(client, args.goal, args, thread=args.thread, project=args.project, attach=args.attach)
 
 
 def cmd_resume(client: Client, args: argparse.Namespace) -> int:
@@ -125,7 +138,6 @@ def cmd_resume(client: Client, args: argparse.Namespace) -> int:
 
 
 def png_size(png: bytes) -> tuple[int, int]:
-    """A PNG's width and height, from its header."""
     return struct.unpack(">II", png[16:24])
 
 
@@ -194,7 +206,7 @@ def cmd_status(client: Client, args: argparse.Namespace) -> int:
         print(f"Running: {item['run']} in conversation {item['thread']}.")
     if approval := status.get("approval"):
         print(f"Waiting for your approval: {approval['consequence']}")
-    busy = status["active"] or status["running"] or control["owner"] != "agent" or not control.get("ready", True)
+    busy = status["active"] or status["running"] or control["owner"] != "agent"
     return BUSY if args.idle and busy else 0
 
 
@@ -260,11 +272,15 @@ def build_parser() -> argparse.ArgumentParser:
         command.add_argument("--main", nargs="+", metavar="MODEL [EFFORT]", help="the main agent's model and effort")
         command.add_argument("--computer", nargs="+", metavar="MODEL [EFFORT]",
                              help="the computer-use agent's model and effort")
+        command.add_argument("--no-commands", action="store_true",
+                             help="mouse and keyboard only: no commands run on Windows")
 
     run = sub.add_parser("run", help="Let the agent carry out a goal on the desktop")
     run.add_argument("goal")
     run.add_argument("--thread", help="an earlier run's conversation to continue with this goal")
     run.add_argument("--project", help="the project the web page lists the conversation under, e.g. eval")
+    run.add_argument("--attach", action="append", type=lambda path: Path(path).expanduser(), metavar="FILE",
+                     help=f"a file to send with the goal; repeat for more, up to {MAX_FILES}")
     runs(run)
     resume = sub.add_parser("resume", help="Send a run's message again, in its conversation")
     resume.add_argument("run", nargs="?", help="the run's id (default: the latest)")

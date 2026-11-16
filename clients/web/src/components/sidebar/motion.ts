@@ -4,10 +4,13 @@
 // short, and the list below snapped down by that at the end. No blur: with the rows' fading masks it repaints the
 // whole list every frame and stutters. Clipped 2px out from its edge, so a row's focus ring, which reaches 2px past
 // the row and so past the list's edge, is not cut off at the sides, nor at the top on the first row
-// (overflow-clip-margin; Safari ignores it and clips at the edge, as before).
+// (overflow-clip-margin; Safari ignores it and clips at the edge). The height it moves over is no more than
+// the room the list has on screen (--fold-room, the screen's height where a list does not say): a list longer than
+// that would spend most of its time moving out of sight, and look like a jump. At rest Base UI sets the height to
+// auto, which min() does not take, so the declaration drops out and the list has its own height.
 export const FOLD_DURATION = 300 // its duration-300
 export const FOLD =
-  "h-(--collapsible-panel-height) overflow-clip [overflow-clip-margin:2px] transition-[height,opacity] duration-300 ease-(--ease-drawer) data-ending-style:h-0 data-ending-style:opacity-0 data-starting-style:h-0 data-starting-style:opacity-0 motion-reduce:transition-none"
+  "h-[min(var(--collapsible-panel-height),var(--fold-room,100svh))] overflow-clip [overflow-clip-margin:2px] transition-[height,opacity] duration-300 ease-(--ease-drawer) data-ending-style:h-0 data-ending-style:opacity-0 data-starting-style:h-0 data-starting-style:opacity-0 motion-reduce:transition-none"
 
 // It settles into its new place on the drawer's curve, the project unseen there until it lands.
 export const DROP = { duration: 200, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }

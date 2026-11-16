@@ -141,7 +141,7 @@ async def test_each_user_sees_and_changes_only_their_own_conversations(settings,
 
         assert [each["id"] for each in (await listed_runs(api, alice))] == [run]
         assert (await listed_runs(api, bob)) == []
-        assert (await api.get("/api/search", params={"q": "notes"}, headers=bob)).json() == []
+        assert (await api.get("/api/search", params={"q": "notes"}, headers=bob)).json()["items"] == []
         for method, path, body in (
             ("GET", f"/api/runs/{run}/events", None),
             ("GET", f"/api/conversations/{thread}/files/report.csv", None),

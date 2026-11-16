@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useCopy } from "@/hooks/use-copy"
 import { type Pending } from "@/lib/api"
+import { sentWith } from "@/lib/attachments"
 import { useNow } from "@/hooks/use-now"
 import { formatDuration, problemReport, type Problem } from "@/lib/format"
 import { useT } from "@/lib/i18n"
@@ -82,8 +83,14 @@ const WORD = /[\p{L}\p{N}\p{So}]/u
 
 // No replies seen being written, for a conversation drawn from its log alone.
 const NONE: ReadonlySet<number> = new Set()
-// Nothing sent to steer it.
 const NO_MESSAGES: Pending[] = []
+// Rows that come from a call: what the worked line counts as work.
+const WORK: ReadonlySet<Item["kind"]> = new Set([
+  "task",
+  "agents",
+  "held",
+  "commentary",
+])
 
 // How wide each line of a reply still loading is drawn: in paragraphs, as a reply's are, each one's last short. A turn
 // draws the first three; a conversation opening repeats them down the view, cut off at its end.
@@ -232,7 +239,6 @@ export function RunThread({
   thread,
   sent = null,
   dropped = false,
-  continued = false,
   latest = false,
   visible = true,
   loaded,
@@ -245,6 +251,7 @@ export function RunThread({
   draft = "",
   answering = false,
   steering = NO_MESSAGES,
+  sentMessage,
   streamed = NONE,
   onOpenShot,
   onOpenLive,
@@ -256,7 +263,6 @@ export function RunThread({
   thread: Thread
   sent?: string | null // what the user sent, drawn with the agent thinking under it until the log comes
   dropped?: boolean // its log stopped coming and waits to connect again
-  continued?: boolean // carries on the run before with the same goal, so the goal is not shown again
   latest?: boolean // the conversation's last run, whose last reply keeps its buttons showing
   visible?: boolean // the conversation is shown: it stays hidden until all its runs have come
   loaded: boolean
@@ -268,6 +274,7 @@ export function RunThread({
   takingOver?: boolean // the run waits for the user to take over the desktop, which the composer asks
   draft?: string // the reply the main agent is writing, not logged yet
   steering?: Pending[] // sent to steer the session, drawn at once, until its log has them
+  sentMessage?: string | null // the message sent from this composer, null for the opening goal
   answering?: boolean // that reply is its final one, as its model said from its start
   streamed?: ReadonlySet<number> // its logged replies this page saw being written, by their model event's place
   onOpenShot: (name: string) => void
@@ -351,8 +358,7 @@ export function RunThread({
   const taskGroup = (
     task: Task,
     full: boolean,
-    onFull: (full: boolean) => void,
-    agent = false
+    onFull: (full: boolean) => void
   ) => (
     <TaskGroup
       key={task.key}
@@ -368,18 +374,12 @@ export function RunThread({
       onFull={onFull}
       onOpenShot={onOpenShot}
       onOpenLive={onOpenLive}
-      agent={agent}
     />
   )
   const group = (item: Extract<Item, { kind: "task" | "agents" }>) =>
     item.kind === "task" ? (
       // One agent alone is a line of its own, as each of several is: which agent, and what it was given.
-      taskGroup(
-        item.task,
-        opened.has(item.key),
-        (full) => open(item.key, full),
-        true
-      )
+      taskGroup(item.task, opened.has(item.key), (full) => open(item.key, full))
     ) : (
       <AgentsGroup
         key={item.key}
@@ -392,7 +392,7 @@ export function RunThread({
         opened={(key) => opened.has(`agent-${key}`)}
         onOpen={(key, full) => open(`agent-${key}`, full)}
         onOpenLive={onOpenLive}
-        task={(task, full, onFull) => taskGroup(task, full, onFull, true)}
+        task={taskGroup}
       />
     )
 
@@ -405,7 +405,14 @@ export function RunThread({
   const rows = items.map((item) => {
     switch (item.kind) {
       case "message":
-        return <UserMessage key={item.id} text={item.text} time={item.time} />
+        return (
+          <UserMessage
+            key={item.id}
+            text={item.text}
+            time={item.time}
+            sentHere={sentMessage === item.id}
+          />
+        )
       case "reply":
         return (
           <Reply
@@ -519,16 +526,10 @@ export function RunThread({
             : answer >= 0 && answer === items.length - 1
               ? answer
               : -1
-  // The session's work: what it did and said before its final reply, or so far (a turn of work, words on the way, a
-  // message meanwhile, a reply with more after it); not a reply alone, or what it recalled. Once the final reply has
-  // come, or starts, the work folds under the worked line.
+  // The calls before the final reply, or so far; replies and messages alone are not work. Once the final reply comes,
+  // everything before it folds under the worked line.
   const work = items.filter(
-    (item, index) =>
-      item.kind !== "memory" &&
-      item.kind !== "question" &&
-      (final < 0
-        ? item !== lastReply || index < items.length - 1
-        : index < final)
+    (item, index) => WORK.has(item.kind) && (final < 0 || index < final)
   )
   const fold = final > 0 && work.length > 0
   // Words said with a question are no work to account for.
@@ -556,8 +557,8 @@ export function RunThread({
           ...rows.slice(final),
         ]
       : rows),
-    // What the main agent is writing, where it will stay once written. Without the line break a model ends its words with, which its logged reply drops
-    // (lib/thread.ts) and which would be a blank line until then.
+    // What the main agent is writing, where it will stay once written. Without the line break a model ends its words
+    // with, which its logged reply drops (lib/thread.ts) and which would be a blank line until then.
     words ? (
       <Reply
         key={`written-${written.length}`}
@@ -570,10 +571,15 @@ export function RunThread({
     // the same key as once its log has it, there in the conversation.
     ...sending
       .filter((_, index) => !(index === 0 && openQuestion(thread)))
-      .map((message) => <UserMessage key={message.id} text={message.text} />),
+      .map((message) => (
+        <UserMessage
+          key={message.id}
+          text={message.text}
+          sentHere={sentMessage === message.id}
+        />
+      )),
     // The main agent working out what to say, until the first of its words comes. Last of all, under the work under way,
-    // and
-    // folding open and shut in its place rather than coming and going, so nothing above it moves.
+    // and folding open and shut in its place rather than coming and going, so nothing above it moves.
     // Kept for what was just sent too, whose run the status may not list as working yet: gone and back, it would blink.
     active || sent !== null ? (
       <ThinkingRow
@@ -593,12 +599,17 @@ export function RunThread({
       className={cn("space-y-6", answersQuestion && "-mt-4")}
       data-settled={settled || undefined}
     >
-      {continued ? (
-        <p className="flex dashed-rule items-center gap-3 text-xs text-muted-foreground">
-          {t.run.continued}
-        </p>
-      ) : answersQuestion ? null : (
-        <UserMessage text={goal!} time={thread.started ?? undefined} />
+      {answersQuestion ? null : (
+        <UserMessage
+          text={goal!}
+          time={thread.started ?? undefined}
+          sentHere={sentMessage === null}
+          run={run}
+          // Until its log comes, what went with it from here.
+          attachments={
+            thread.goal === null ? sentWith(run) : thread.attachments
+          }
+        />
       )}
 
       {all}

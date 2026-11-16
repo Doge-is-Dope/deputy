@@ -27,7 +27,7 @@ export function Queue({
   const shut = hidden || messages.length === 0
   return (
     // Its room opens and folds as the question row's does, on the same curve, so as one comes the other goes and the
-    // conversation above hardly moves. The card's foot reaches under the composer (-mb-6 here, pb-6 on the card), and
+    // conversation above hardly moves. The card's foot reaches under the composer (-mb-6, in the card's pb-7.5), and
     // only there does it clip, so the card sinks into the composer and shows nowhere else.
     <div
       inert={shut}
@@ -42,7 +42,7 @@ export function Queue({
           and from the icon beside it (28px rows, 6px more at either end), its mark 12px from the sides. */}
         <ul
           className={cn(
-            "mx-3.5 rounded-t-[1.25rem] glass pt-1.5 pb-7.5 transition-[translate,opacity] ease-(--ease-drawer) motion-reduce:translate-y-0 motion-reduce:delay-0 motion-reduce:[transition-duration:150ms]",
+            "mx-3.5 rounded-t-2xl glass pt-1.5 pb-7.5 transition-[translate,opacity] ease-(--ease-drawer) motion-reduce:translate-y-0 motion-reduce:delay-0 motion-reduce:[transition-duration:150ms]",
             shut
               ? "translate-y-full opacity-0 [transition-duration:300ms,150ms]"
               : "[transition-delay:100ms] [transition-duration:300ms,250ms]"

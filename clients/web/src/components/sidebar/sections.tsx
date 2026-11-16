@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useRef,
   useState,
   type ReactNode,
   type Ref,
@@ -17,56 +18,41 @@ import {
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
 import { useT } from "@/lib/i18n"
 import { ChevronDownIcon } from "@/components/icons"
-import { carriedBy, RECENTS } from "@/components/sidebar/drag"
+import { carriedBy, RECENTS, TAKES } from "@/components/sidebar/drag"
 import { FOLD } from "@/components/sidebar/motion"
 import type { Lists } from "@/hooks/use-api"
 
-/** Accessible loading placeholders. `inset` aligns them with project conversations. */
-export function LoadingRows({
-  ref,
-  inset = false,
-  className,
-}: {
-  ref?: Ref<HTMLLIElement>
-  inset?: boolean
-  className?: string
-}) {
+function LoadingRows({ ref }: { ref?: Ref<HTMLLIElement> }) {
   const t = useT()
   return (
     <li
       ref={ref}
       role="status"
-      className={cn(
-        "flex flex-col gap-0.5 motion-safe:animate-pulse",
-        className
-      )}
+      className="flex flex-col gap-0.5 motion-safe:animate-pulse"
     >
       <span className="sr-only">{t.common.loading}</span>
       {Array.from({ length: 3 }, (_, index) => (
         <SidebarMenuSkeleton
           key={index}
-          className={cn("h-8 pointer-coarse:h-10", inset && "pl-10")}
+          className="h-8 pl-row-text pointer-coarse:h-10"
         />
       ))}
     </li>
   )
 }
 
-/** Collapsible section heading. Highlights when it can accept a dropped conversation. */
 export function SectionLabel({
   label,
   open,
-  lit = false,
   onOpen,
 }: {
   label: string
   open: boolean
-  lit?: boolean
   onOpen?: (open: boolean) => void // none: it does not fold, and is a heading only
 }) {
   if (!onOpen)
     return (
-      <SidebarGroupLabel className="w-full text-sm font-normal text-muted-foreground">
+      <SidebarGroupLabel className="w-full pl-row-text text-sm font-normal text-muted-foreground">
         {label}
       </SidebarGroupLabel>
     )
@@ -75,10 +61,7 @@ export function SectionLabel({
       render={<button type="button" />}
       aria-expanded={open}
       onClick={() => onOpen(!open)}
-      className={cn(
-        "group/label w-full gap-1 text-sm font-normal text-muted-foreground [&>svg]:size-4",
-        lit && "bg-sidebar-accent"
-      )}
+      className="group/label w-full gap-1 pl-row-text text-sm font-normal text-muted-foreground [&>svg]:size-4"
     >
       {label}
       <ChevronDownIcon
@@ -121,13 +104,28 @@ export function RecentsGroup({
     observer.observe(end)
     return () => observer.disconnect()
   }, [end, more, load, scroller])
+  const group = useRef<HTMLDivElement | null>(null)
   return (
-    <SidebarGroup ref={setNodeRef} className="pt-0 pb-2">
+    <SidebarGroup
+      ref={(node) => {
+        setNodeRef(node)
+        group.current = node
+      }}
+      className="pt-0 pb-2"
+    >
       <SectionLabel
         label={t.sidebar.recents}
         open={open}
-        lit={isOver && carried !== undefined && carried.project !== null}
-        onOpen={onOpen}
+        onOpen={(open) => {
+          // The room under its label, down to the end of what scrolls: all its fold moves over (FOLD).
+          const label = group.current?.firstElementChild
+          if (label && scroller.current)
+            group.current!.style.setProperty(
+              "--fold-room",
+              `${scroller.current.getBoundingClientRect().bottom - label.getBoundingClientRect().bottom}px`
+            )
+          onOpen(open)
+        }}
       />
       <Collapsible open={open}>
         <CollapsibleContent className={FOLD}>
@@ -144,6 +142,16 @@ export function RecentsGroup({
           </SidebarMenu>
         </CollapsibleContent>
       </Collapsible>
+      {/* A conversation carried out of a project, over the recents: a line around them, on the rows' column. */}
+      {isOver && carried !== undefined && carried.project !== null && (
+        <span
+          aria-hidden
+          className={cn(
+            "pointer-events-none absolute inset-x-2 top-0 bottom-2",
+            TAKES
+          )}
+        />
+      )}
     </SidebarGroup>
   )
 }

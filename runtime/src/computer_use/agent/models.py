@@ -58,7 +58,7 @@ EFFORTS = {
     # developers.openai.com/api/docs/models/gpt-6.1-sol (2026-10-18): "none" and "minimal" are not supported.
     "openai:gpt-6.1-sol": ("low", "medium", "high", "xhigh", "max"),
     "openai:gpt-6.1-terra": ("none", "low", "medium", "high", "xhigh", "max"),
-    # platform.claude.com/docs/en/about-claude/models (2026-10-20); langchain-anthropic 1.7.5 has no profile for it.
+    # platform.claude.com/docs/en/about-claude/models (2026-10-20); langchain-anthropic 1.7.6 lists no efforts for it.
     "anthropic:claude-haiku-5-5": ("low", "medium", "high", "xhigh", "max"),
 }
 # The efforts assumed of a model nothing lists: those every reasoning model of both providers takes.

@@ -26,10 +26,9 @@ def lines_of_log(log: Path) -> list[dict]:
 
 def read_events(run: Path) -> list[dict]:
     """A copied run's complete events, as `computer-use export` writes them: of every log of its session (a folder
-    each, its turns' and its tasks'), in the order written, each with the id of its log ("log"); or, for a version
-    exported before turns and tasks had logs of their own, its one steps.jsonl."""
-    if (run / "steps.jsonl").exists() or not run.is_dir():
-        return lines_of_log(run)
+    each, its turns' and its tasks'), in the order written, each with the id of its log ("log")."""
+    if not run.is_dir():
+        return []
     logged = [(event["time"], n, i, event | {"log": log.name})
               for n, log in enumerate(sorted(path for path in run.iterdir() if path.is_dir()))
               for i, event in enumerate(lines_of_log(log))]
@@ -120,7 +119,7 @@ def thumb(path: Path) -> str:
 
 
 def said(events: list[dict]) -> list[str]:
-    """What the computer-use agent told the user before its tool calls, in order."""
+    """What the task agents told the user before their tool calls, in order."""
     return [
         " ".join(event["text"].split())
         for event in events
@@ -192,22 +191,21 @@ TEMPLATE = """<!doctype html>
 body { margin:0; background:var(--bg); color:var(--fg); -webkit-font-smoothing:antialiased;
   font:14px/1.6 -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", "PingFang TC", "Microsoft JhengHei", sans-serif }
 main { max-width:960px; margin:0 auto; padding:56px 24px 96px }
-button, select, input { font:inherit; color:inherit }
-.muted { color:var(--muted) } .faint { color:var(--faint) }
+select { font:inherit; color:inherit }
+.faint { color:var(--faint) }
 header.top { display:flex; align-items:flex-start; justify-content:space-between; gap:16px }
 h1 { font-size:28px; font-weight:600; letter-spacing:-0.02em; margin:0 }
 #sub { margin:8px 0 0; color:var(--muted) } #sub div + div { margin-top:2px }
 #sub .k { color:var(--faint); margin-right:6px } #sub .side { display:inline-block; width:54px; color:var(--faint) } #sub .agent { display:inline-block; white-space:nowrap; margin-right:20px }
-select, input[type="datetime-local"] { background:transparent; border:1px solid var(--line); border-radius:999px;
+select { background:transparent; border:1px solid var(--line); border-radius:999px;
   padding:6px 14px; cursor:pointer }
 .select { position:relative; display:inline-block; flex:none }
 .select select { appearance:none; -webkit-appearance:none; padding:7px 40px 7px 16px; max-width:100% }
 .select { max-width:100%; min-width:0 }
 .select::after { content:""; position:absolute; right:17px; top:50%; width:6px; height:6px; pointer-events:none;
   border-right:1.5px solid var(--muted); border-bottom:1.5px solid var(--muted); transform:translateY(-70%) rotate(45deg) }
-select:hover, input[type="datetime-local"]:hover { border-color:var(--faint) }
-select:focus, input:focus, button:focus { outline:none }
-button:focus-visible { outline:2px solid var(--faint); outline-offset:2px }
+select:hover { border-color:var(--faint) }
+select:focus { outline:none }
 .versions { display:flex; flex-direction:column; gap:8px; margin:24px 0 0 }
 .versions label > span:first-child { width:44px; flex:none }
 .versions label { display:flex; align-items:center; gap:10px; min-width:0; max-width:100%; font-size:13px; color:var(--faint) }
@@ -235,8 +233,7 @@ button:focus-visible { outline:2px solid var(--faint); outline-offset:2px }
 .status { display:inline-flex; align-items:center; gap:7px; white-space:nowrap }
 .status::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--none) }
 .status.pass::before { background:var(--pass) } .status.fail::before { background:var(--fail) }
-.status .num { color:var(--faint); font-size:12px; font-variant-numeric:tabular-nums }
-.delta { font-variant-numeric:tabular-nums; text-align:right } .list-head .delta { text-align:right }
+.delta { font-variant-numeric:tabular-nums; text-align:right }
 [data-tip] { position:relative }
 [data-tip]:hover::after { content:attr(data-tip); position:absolute; left:50%; transform:translateX(-50%);
   bottom:calc(100% + 6px); z-index:2; padding:4px 8px; border-radius:6px; background:var(--fg); color:var(--bg);
@@ -273,7 +270,6 @@ code { font:12px ui-monospace, SFMono-Regular, Menlo, monospace }
   .stat dd { font-size:24px }
   .verdict { margin-top:36px }
   .list-head, .row > summary { grid-template-columns:var(--cols-narrow); gap:10px }
-  .status .num { display:none }
   .runs { grid-template-columns:minmax(0, 1fr) }
   .versions label { width:100% } .versions .select { flex:1; width:auto }
 }
@@ -407,14 +403,13 @@ function verdict(cols, sides, pct) {
   return `<div class="verdict"><h2>After is <span class="${tone}">${word}</span></h2><p>${why.join(" · ")}</p></div>`
 }
 
-function status(run, numbers = true) {
+function status(run) {
   const kind = outcome(run)
-  const num = numbers && run.calls != null ? `<span class="num">${run.calls} calls · ${Math.round(run.seconds || 0)}s</span>` : ""
-  return `<span class="status ${kind}">${WORDS[kind]}${num}</span>`
+  return `<span class="status ${kind}">${WORDS[kind]}</span>`
 }
 
 function panel(run) {
-  const head = `<header><span><b>${role(run.side)}</b> <span class="faint">${esc(run.version)} · #${run.attempt} · ${label(run.started)}</span> · ${status(run, false)}</span></header>`
+  const head = `<header><span><b>${role(run.side)}</b> <span class="faint">${esc(run.version)} · #${run.attempt} · ${label(run.started)}</span> · ${status(run)}</span></header>`
   if (run.setup) return `<div class="run">${head}<p class="facts">The setup did not finish (${esc(run.setup)}); not run.</p></div>`
   const figure = (shot, caption) => shot ? `<figure><a href="${esc(shot.href)}" target="_blank"><img src="${shot.src}" alt="${caption}" loading="lazy"></a><figcaption>${caption}</figcaption></figure>` : ""
   return `<div class="run">${head}
@@ -479,15 +474,15 @@ function render() {
     const any = [...bySide.values()].flat().sort((x, y) => x.started.localeCompare(y.started)).at(-1)
     const cells = sides.map((s) => {
       const run = counted(bySide.get(s) || [])
-      return run ? `<span>${status(run, false)}</span>` : `<span class="faint">–</span>`
+      return run ? `<span>${status(run)}</span>` : `<span class="faint">–</span>`
     }).join("")
     // After against Before: how many more or fewer model calls, and how much more or less time; only where both runs
     // count, as in the numbers above.
     const [a, b] = sides.map((s) => counted(bySide.get(s) || []))
     // On hover, the two values: "28 → 22" calls, "158 → 138" seconds.
-    const tip = (key, x, y) => `${Math.round(x)} → ${Math.round(y)}`
+    const tip = (x, y) => `${Math.round(x)} → ${Math.round(y)}`
     const delta = (key) => a?.verdict && b?.verdict
-      ? `<span class="delta ${tone(a[key], b[key])}"><span data-tip="${tip(key, a[key], b[key])}">${change(a[key], b[key]) || "0%"}</span></span>`
+      ? `<span class="delta ${tone(a[key], b[key])}"><span data-tip="${tip(a[key], b[key])}">${change(a[key], b[key]) || "0%"}</span></span>`
       : `<span class="delta faint">–</span>`
     const deltas = two ? delta("calls") + delta("seconds") : ""
     // One column per side, its latest run first.

@@ -135,25 +135,22 @@ export async function forgetPersonalMemories() {
   }
 }
 
-// A project's rules, opened from its menu or from a line in the conversation: which project (null: shut), the rule to
-// show, and whether to edit it. The dialog lives beside the settings, outside the sidebar's sheet on a phone.
+// A project's rules, opened from its menu or from a line in the conversation: which project (null: shut) and the rule
+// to show. The dialog lives beside the settings, outside the sidebar's sheet on a phone.
 export type OpenedProjectMemory = {
   project: string | null
   item: string | null
-  editing: boolean
 }
 const projectMemory = store<OpenedProjectMemory>({
   project: null,
   item: null,
-  editing: false,
 })
 
 export function openProjectMemory(
   project: string | null,
-  item: string | null = null,
-  editing = false
+  item: string | null = null
 ) {
-  projectMemory.set({ project, item, editing })
+  projectMemory.set({ project, item })
 }
 
 export const useOpenedProjectMemory = projectMemory.use

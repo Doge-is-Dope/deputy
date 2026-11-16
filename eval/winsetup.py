@@ -22,8 +22,8 @@ SETTLE_SECONDS = 2.0  # the screen must stay the same this long before the task 
 SETTLE_TIMEOUT = 30.0
 HOLDER = "eval setup"  # what the run lock names while the script has the desktop, as /api/status shows it
 
-# Like the `config` steps of WAA and OSWorld tasks. $docs and $desktop are the user's Documents and Desktop folders,
-# wherever they are redirected (OneDrive); $ev is C:\ev, where the tasks keep their files (step_script).
+# $docs and $desktop are the user's Documents and Desktop folders, wherever they are redirected (OneDrive); $ev is
+# C:\ev, where the tasks keep their files (step_script).
 SETUP_SCRIPT = """\
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'

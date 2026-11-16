@@ -2,22 +2,16 @@
 
 import base64
 import json
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
+from dataclasses import dataclass, field
 from operator import itemgetter
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage, messages_from_dict
 
 from computer_use.middleware.common import pruned, without_screenshots
-from computer_use.tools.common import image_blocks, is_image
+from computer_use.tools.common import for_model, is_media, is_kept, screenshot_blocks
 from computer_use.events import shown_args
-from computer_use.storage import MAIN, TASK, TURN, RunId, Runs, Thread, supported
-
-
-async def thread_of(store: Runs, run: RunId) -> Thread | None:
-    """The conversation a run belongs to, its first run's id; None for a run that is missing, not started, or in an
-    unsupported format."""
-    events = await store.events(run, messages=False)
-    return events[0]["thread"] if supported(events) else None
+from computer_use.storage import MAIN, TASK, TURN, Event, RunId, RunSummary, Runs, Thread, supported
 
 
 async def has_title(store: Runs, thread: Thread) -> bool:
@@ -26,18 +20,21 @@ async def has_title(store: Runs, thread: Thread) -> bool:
 
 
 async def can_continue(store: Runs, thread: Thread) -> bool:
-    return await thread_of(store, thread) == thread
+    return await store.thread(thread) == thread
 
 
-async def with_images(store: Runs, run: RunId, message: BaseMessage) -> BaseMessage:
+async def with_media(store: Runs, run: RunId, message: BaseMessage) -> BaseMessage:
+    """The message as a model takes it, each image or file it names read back from the run's files; a file only code
+    opens is left out (the coding agent's folder has it)."""
+    message = for_model(message)
     if not isinstance(message.content, list):
         return message
     blocks = list(message.content)
     for index, block in enumerate(blocks):
-        if is_image(block) and "file" in block:
-            png = await store.get_file(run, block["file"])
+        if is_media(block) and not is_kept(block) and "file" in block:
+            data = await store.get_file(run, block["file"])
             rest = {key: value for key, value in block.items() if key != "file"}
-            blocks[index] = rest | {"base64": base64.b64encode(png).decode()}
+            blocks[index] = rest | {"base64": base64.b64encode(data).decode()}
     return message.model_copy(update={"content": blocks})
 
 
@@ -57,34 +54,69 @@ def in_call_order[T](items: list[T], message: Callable[[T], BaseMessage] = lambd
     return result
 
 
+@dataclass(frozen=True)
+class Log:
+    """A run of a conversation as it was read: a turn's events whole, a task's without their messages."""
+
+    summary: RunSummary
+    events: list[Event]
+
+
+async def read_logs(store: Runs, thread: Thread) -> list[Log]:
+    """Every run of the conversation, oldest first, each read once. A task's messages are left out: what takes a
+    conversation up reads only the main agent's."""
+    return [Log(summary, await store.events(summary.id, messages=summary.kind == TURN))
+            for summary in await store.runs(thread)]
+
+
+@dataclass(frozen=True)
+class Earlier:
+    """A conversation as a new session takes it up, from one read of its logs; empty for a new conversation."""
+
+    logs: Sequence[Log] = ()
+    messages: list[BaseMessage] = field(default_factory=list)  # every message the main agent saw
+    untold: Sequence[dict] = ()  # the tasks the main agent was never told stopped
+    project: str | None = None  # the conversation's, as its first turn says
+
+
+async def take_up(store: Runs, thread: Thread) -> Earlier:
+    """Raises ValueError if the conversation is missing or uses an unsupported log format."""
+    logs = await read_logs(store, thread)
+    first = next((log for log in logs if log.summary.id == thread), None)
+    if first is None or not supported(first.events) or first.events[0]["thread"] != thread:
+        raise ValueError(f"conversation {thread} is missing or uses an unsupported log format")
+    return Earlier(logs, await messages_of(store, logs), untold(logs), logs[0].summary.project)
+
+
 async def load_conversation(store: Runs, thread: Thread) -> list[BaseMessage]:
+    return await messages_of(store, await read_logs(store, thread))
+
+
+async def messages_of(store: Runs, logs: Iterable[Log]) -> list[BaseMessage]:
     """Every message the main agent saw, oldest first. Screenshots its next model call would prune are replaced before
     they are read: a later turn only adds screenshots, so one pruned once stays pruned."""
-    placed: list[tuple[RunId, BaseMessage]] = []
-    for summary in await store.runs(thread):
-        if summary.kind != TURN:
-            continue
-        placed += [
-            (summary.id, messages_from_dict([event["message"]])[0])
-            for event in await store.events(summary.id) if event.get("agent") == MAIN and "message" in event
-        ]
+    placed = [
+        (log.summary.id, messages_from_dict([event["message"]])[0])
+        for log in logs if log.summary.kind == TURN
+        for event in log.events if event.get("agent") == MAIN and "message" in event
+    ]
     placed = in_call_order(placed, itemgetter(1))
-    carrying = [index for index, (_, message) in enumerate(placed) if image_blocks(message)]
+    carrying = [index for index, (_, message) in enumerate(placed) if screenshot_blocks(message)]
     dropped = set(carrying[:pruned(len(carrying))])
     return [
-        without_screenshots(message) if index in dropped else await with_images(store, run, message)
+        await with_media(store, run, without_screenshots(message) if index in dropped else message)
         for index, (run, message) in enumerate(placed)
     ]
 
 
-async def untold(store: Runs, thread: Thread) -> list[dict]:
+def untold(logs: Iterable[Log]) -> list[dict]:
     """The tasks that stopped before they ended and that the main agent was never told of: a stop ended their session,
     the user stopped one and the session ended before the main agent heard, or the runtime died (`open`: the log has
     no end). Each as its log's start event, with `open` and `by`. A task is known by its log, or by its id within its
     session: each session numbers its tasks from t1, and a stop is told in a later session than the task's."""
     told, stopped = set(), []
-    for summary in await store.runs(thread):
-        events = await store.events(summary.id)
+    for log in logs:
+        events = log.events
         if not supported(events):
             continue
         start = events[0]
@@ -144,15 +176,6 @@ def action_lines(events: Iterable[dict]) -> list[str]:
             lines.append(f"{said}{event['tool']} {args}{asked} -> {event['status']}: {outcome}")
             thought = ""
     return lines
-
-
-async def latest_plan(store: Runs, thread: Thread) -> dict | None:
-    """The newest plan snapshot in a conversation's logs, its tasks' included; None if it has no plan."""
-    snapshots = [
-        event for summary in await store.runs(thread)
-        for event in await store.events(summary.id, messages=False) if event["type"] == "plan"
-    ]
-    return max(snapshots, key=itemgetter("version"), default=None)
 
 
 def user_messages(events: list[dict]) -> list[str]:

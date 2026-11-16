@@ -15,7 +15,7 @@ from pydantic import ValidationError
 from computer_use.agent.review import Verdict
 from computer_use.agent.trajectory import Trajectory
 from computer_use.computers import ComputerError
-from computer_use.desktop.actions import CONFIRMABLE, KEYBOARD
+from computer_use.desktop.actions import ACTIONS, KEYBOARD
 from computer_use.desktop.control import Approval, ApprovalFile, Control
 from computer_use.desktop.executor import Executor
 from computer_use.desktop.screen import mark
@@ -57,7 +57,8 @@ class Confirmations:
         """Why the call must not run, as its result for the agent; or None once it may: it needs no approval, the user
         approved it, or its arguments are wrong, which the tool itself reports without sending anything."""
         call = request.tool_call
-        if call["name"] not in CONFIRMABLE or request.tool is None:
+        # A tool that takes the flag is one that can be held: the desktop's (actions.CONFIRMABLE) and any beside them.
+        if request.tool is None or "needs_confirmation" not in request.tool.tool_call_schema.model_fields:
             return None
         try:
             args = request.tool.tool_call_schema.model_validate(call["args"]).model_dump()
@@ -110,7 +111,7 @@ class Confirmations:
         if shown is None:
             return None
         points = [tuple(args[key]) for key in ("start_coordinate", "coordinate") if args.get(key)]
-        if not points and name not in KEYBOARD:
+        if not points and name in ACTIONS and name not in KEYBOARD:
             try:
                 points = [await self.executor.computer.cursor_position()]
             except ComputerError:  # the screen still shows what the step would act on

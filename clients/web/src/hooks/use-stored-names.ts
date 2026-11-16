@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react"
 
-/** A list of project names kept in this browser under `key`; a browser that keeps nothing keeps it for the visit. Set
- * one name in or out, or the whole list. */
+/** A list of names (project ids, section names) kept in this browser under `key`; a browser that keeps nothing keeps
+ * it for the visit. Set one name in or out, or the whole list. */
 export function useStoredNames(key: string) {
   const [names, setNames] = useState<string[]>(() => {
     try {

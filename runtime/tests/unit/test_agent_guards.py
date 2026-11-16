@@ -8,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from computer_use.agent.history import in_call_order, load_conversation
 from computer_use.middleware.common import KEEP_SCREENSHOTS, PRUNE_EVERY, prune_screenshots
-from computer_use.tools.common import image_blocks
+from computer_use.tools.common import screenshot_blocks
 from computer_use.agent.trajectory import Trajectory
 from computer_use.agent.usage import usage_of
 from computer_use.storage import MAIN
@@ -100,14 +100,29 @@ def test_prune_removes_the_oldest_screenshots_in_batches_so_the_prompt_prefix_ra
         return [HumanMessage(content=[{"type": "text", "text": str(n)}, IMAGE]) for n in range(screens)]
 
     def kept(screens):
-        return sum(bool(image_blocks(m)) for m in prune_screenshots(conversation(screens), keep=3, every=25))
+        return sum(bool(screenshot_blocks(m)) for m in prune_screenshots(conversation(screens), keep=3, every=25))
 
     assert [kept(n) for n in (2, 3, 27, 28, 52, 53)] == [2, 3, 27, 3, 27, 3]
     # Between batches, a new turn leaves every earlier message as the previous call sent it.
     assert prune_screenshots(conversation(30), 3, 25)[:30] == prune_screenshots(conversation(31), 3, 25)[:30]
     screens = conversation(28)
-    assert [bool(image_blocks(m)) for m in prune_screenshots(screens, 3, 25)] == [False] * 25 + [True] * 3
-    assert all(image_blocks(m) for m in screens)
+    assert [bool(screenshot_blocks(m)) for m in prune_screenshots(screens, 3, 25)] == [False] * 25 + [True] * 3
+    assert all(screenshot_blocks(m) for m in screens)
+
+
+def test_prune_keeps_what_the_user_attached_however_many_screenshots_follow():
+    asked = HumanMessage(content=[
+        {"type": "text", "text": "Fill this in."},
+        {"type": "image", "base64": "AAAA", "mime_type": "image/jpeg", "filename": "form.jpg"},
+        {"type": "file", "base64": "JVBERi0=", "mime_type": "application/pdf", "filename": "form.pdf"},
+    ])
+    screens = [HumanMessage(content=[{"type": "text", "text": str(n)}, IMAGE]) for n in range(30)]
+
+    kept = prune_screenshots([asked, *screens], KEEP_SCREENSHOTS, PRUNE_EVERY)
+
+    assert kept[0] == asked
+    assert sum(bool(screenshot_blocks(m)) for m in kept) < KEEP_SCREENSHOTS + PRUNE_EVERY
+    assert screenshot_blocks(asked) == []
 
 
 async def test_a_continued_conversation_reads_only_the_screenshots_its_next_call_keeps(tmp_path):
@@ -141,7 +156,7 @@ async def test_a_continued_conversation_reads_only_the_screenshots_its_next_call
     loaded = await load_conversation(store, first)
 
     assert loaded == prune_screenshots(everything, KEEP_SCREENSHOTS, PRUNE_EVERY)
-    assert len(read) == KEEP_SCREENSHOTS and sum(bool(image_blocks(m)) for m in loaded) == KEEP_SCREENSHOTS
+    assert len(read) == KEEP_SCREENSHOTS and sum(bool(screenshot_blocks(m)) for m in loaded) == KEEP_SCREENSHOTS
     for added in range(1, 7):  # the turn's own screenshots, up to past the next batch
         turn = [HumanMessage(content=[IMAGE])] * added
         assert prune_screenshots(loaded + turn, KEEP_SCREENSHOTS, PRUNE_EVERY) == prune_screenshots(
@@ -321,14 +336,14 @@ async def test_the_end_event_carries_the_tokens_and_cost_by_kind_in_all_and_by_a
         await log.model(AIMessage(content="It is saved.", usage_metadata={  # the main agent's
             "input_tokens": 100_000, "output_tokens": 10_000, "total_tokens": 110_000,
         }), MAIN)
-        log.end("replied", "It is saved.", "replied")
+        log.end("replied", "It is saved.")
         ends += [event for event in read_events(runs_dir(tmp_path) / log.run) if event["type"] in ("end", "model")]
 
     priced, unpriced = [event for event in ends if event["type"] == "end"]
     assert [event.get("model") for event in ends if event["type"] == "model"][:2] == [
         "openai:gpt-6.1-sol", "openai:gpt-6-luna"
     ]
-    assert (priced["stop_reason"], priced["computer"], priced["summary"]) == ("replied", "replied", "It is saved.")
+    assert (priced["stop_reason"], priced["summary"]) == ("replied", "It is saved.")
     assert priced["usage"] == {"input": 1_100_000, "cached": 200_000, "cache_write": 100_000, "output": 60_000,
                                "reasoning": 40_000}
     # gpt-6.1-sol: 700k plain x $2 + 200k cached x $0.10 + 100k written x $2.50 + 50k output x $10 per million;

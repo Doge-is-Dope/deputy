@@ -26,11 +26,16 @@ class RunOutput:
 class CodeRunner(Protocol):
     """Each conversation (`thread`) has its own working folder in the sandbox, which its tasks share; each task runs
     its commands on its own, one at a time, so tasks of one conversation run side by side. Refused requests raise
-    ValueError; connection or server failures raise CodeRunnerError and end the task."""
+    ValueError; connection or server failures raise CodeRunnerError and end the task. File paths may be relative
+    or absolute within the conversation's folder. An attachment's `source` is
+    its run id (ordered by time): has/put preserve a file from that run or a later one, including the agent's edits."""
 
     async def status(self) -> Status: ...
     async def run(self, thread: str, task: str, script: str, seconds: float) -> RunOutput: ...  # a script, with bash
     async def write(self, thread: str, path: str, content: str) -> str: ...  # a file in the working folder
+    async def has(self, thread: str, path: str, source: str | None = None) -> bool: ...  # from this run or a later one
+    async def put(self, thread: str, path: str, data: bytes, source: str | None = None) -> bool: ...  # whether written
     async def read(self, thread: str, path: str) -> bytes: ...  # FileNotFoundError when missing
     async def stop(self, task: str) -> None: ...  # the task's command running, if any
+    async def delete(self, thread: str) -> None: ...  # the conversation's working folder and its files, if any
     async def close(self) -> None: ...

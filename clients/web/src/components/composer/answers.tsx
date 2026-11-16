@@ -38,7 +38,6 @@ export function useAnswerKeys(
   }, [on])
 }
 
-/** One answer to what is asked: its words, and what it does. */
 export type AnswerChoice = {
   label: ReactNode
   onClick: () => void
@@ -52,7 +51,6 @@ export type Ask = {
   accept: AnswerChoice & { byEnter?: boolean }
 }
 
-/** A question's answers side by side, declining (Esc) before accepting (⏎), as the composer and the live view ask. */
 export function AnswerPair({
   decline,
   accept,
@@ -83,7 +81,7 @@ export function AnswerPair({
   )
 }
 
-/** An answer in the composer's corner, the size of its send button, with the key that gives it on a keyboard if any. */
+/** As tall as the composer's send button with its margin; the key hint hides on touch screens. */
 function Answer({
   primary = false,
   shortcut,

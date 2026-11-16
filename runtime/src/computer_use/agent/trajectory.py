@@ -15,7 +15,7 @@ from computer_use.agent.failures import error_code
 from computer_use.agent.usage import PRICES, cost_breakdown, no_tokens, usage_of
 from computer_use.events import NoteCode, NoteData, NoteEvent, PlanSnapshot
 from computer_use.storage import FORMAT, MAIN, TASK, TURN, RunId, Runs
-from computer_use.tools.common import is_image
+from computer_use.tools.common import extension_of, is_media, is_screenshot
 
 Listener = Callable[[RunId, dict], None]  # called with a run's id and each event as it is written
 
@@ -35,9 +35,8 @@ class Trajectory:
         self.store = store
         self.run = run
         self.listeners = listeners
-        # The computer-use agent's actions and model calls, then the main agent's.
-        self.actions, self.calls = 0, 0
-        self.main_actions, self.main_calls = 0, 0
+        # The task agent's actions, then the main agent's.
+        self.actions, self.main_actions = 0, 0
         self.cut_calls = 0  # model calls a stop cut off, whose usage never came
         # Tokens by (agent name, model), in the order first used; and the model and name each agent works with now.
         self.agent_tokens: dict[tuple[str, str], dict[str, int]] = {}
@@ -81,7 +80,7 @@ class Trajectory:
         })
 
     def _named(self, agent: str | None, name: str) -> str:
-        """Files are named after the action they come with: the main agent's apart from the computer-use agent's."""
+        """Files are named after the action they come with: the main agent's apart from the task agent's."""
         return f"main-{self.main_actions:03d}-{name}" if agent == MAIN else f"{self.actions:03d}-{name}"
 
     def _free(self, name: str) -> str:
@@ -94,20 +93,21 @@ class Trajectory:
         return free
 
     async def _record(self, message: BaseMessage, name: str) -> dict:
-        """The message as the model gets it, each image saved as a file named after `name`; names are reserved before
-        any write. A message without an id gets one first, so the graph keeps it instead of assigning another.
+        """The message as the model gets it, each image or file saved as a file named after `name`; names are reserved
+        before any write. A message without an id gets one first, so the graph keeps it instead of assigning another.
         """
         message.id = message.id or str(uuid.uuid4())
         self.recorded.add(message.id)
         record = message_to_dict(message)
         content = record["data"].get("content")
-        images = [index for index, block in enumerate(content) if is_image(block)] if isinstance(content, list) else []
+        images = [index for index, block in enumerate(content) if is_media(block)] if isinstance(content, list) else []
         name = self._free(name) if images else name
         files = []
         for number, index in enumerate(images, 1):
-            file = f"{name}.png" if number == 1 else f"{name}-{number}.png"
-            self.files.add(file)
             block = content[index]
+            extension = extension_of(block)
+            file = f"{name}.{extension}" if number == 1 else f"{name}-{number}.{extension}"
+            self.files.add(file)
             files.append((file, base64.b64decode(block["base64"])))
             content[index] = {key: value for key, value in block.items() if key != "base64"} | {"file": file}
         for file, data in files:
@@ -115,7 +115,14 @@ class Trajectory:
         return record
 
     async def input(self, message: BaseMessage, name: str, agent: str | None = None) -> None:
-        self._event("input", agent, message=await self._record(message, self._named(agent, name)))
+        """A message an agent was given; what the user attached to it is named for the page in `attachments`."""
+        record = await self._record(message, self._named(agent, name))
+        content = record["data"].get("content")
+        attached = [
+            {"file": block["file"], "name": block["filename"]}
+            for block in (content if isinstance(content, list) else []) if is_media(block) and "filename" in block
+        ]
+        self._event("input", agent, message=record, **({"attachments": attached} if attached else {}))
 
     def uses(self, model: str, agent: str | None = None, name: str | None = None) -> None:
         """The model an agent works with from here on, by which its tokens are priced; a subagent is `name`d as in the
@@ -152,18 +159,21 @@ class Trajectory:
             for (name, model), tokens in self.agent_tokens.items() if any(tokens.values())
         ]
 
-    def end(self, stop_reason: str, summary: str, computer: str | None, error: Exception | None = None,
-            by: str | None = None) -> None:
+    def end(self, stop_reason: str, summary: str, error: Exception | None = None, *, by: str | None = None,
+            agent_stop_reason: str | None = None) -> None:
         """How the run ended, with the tokens used and, when prices are known and no call was cut off by a stop, what
-        they cost. A failed run records the exception and its code; `by` says who stopped a task."""
+        they cost. A failed run records the exception and its code; a task records who stopped it (`by`) and how its
+        agent ended (`agent_stop_reason`), once it has."""
         event = {
-            "type": "end", "stop_reason": stop_reason, "computer": computer, "summary": summary,
+            "type": "end", "stop_reason": stop_reason, "summary": summary,
             "usage": self.usage(), "cost": None if self.cut_calls else self.cost(), "agents": self.by_agent(),
         }
         if error is not None:
             event |= {"error": f"{type(error).__name__}: {error}", "error_code": error_code(error)}
         if by is not None:
             event["by"] = by
+        if agent_stop_reason is not None:
+            event["agent_stop_reason"] = agent_stop_reason
         self._write(event)
 
     def note(self, text: str, code: NoteCode | None = None, **data: Unpack[NoteData]) -> None:
@@ -220,10 +230,6 @@ class Trajectory:
         calls = [{"name": call["name"], "args": call["args"]} for call in message.tool_calls]
         usage = None if cut else usage_of(message)
         if usage is not None:
-            if agent == MAIN:
-                self.main_calls += 1
-            else:
-                self.calls += 1
             self._count(usage, agent)
         record = await self._record(message, self._named(agent, "model"))
         model = {"model": self.models[agent]} if agent in self.models else {}
@@ -241,7 +247,7 @@ class Trajectory:
             self.actions += 1
         record = await self._record(result, self._named(agent, call["name"]))
         content = record["data"]["content"]
-        screenshot = next((block["file"] for block in content if is_image(block)), None) if isinstance(content, list) else None
+        screenshot = next((block["file"] for block in content if is_screenshot(block)), None) if isinstance(content, list) else None
         artifact = result.artifact if isinstance(result.artifact, dict) else {}
         self._event(
             "action", agent,

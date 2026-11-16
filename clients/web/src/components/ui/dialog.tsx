@@ -45,21 +45,23 @@ function DialogContent({
       <DialogPrimitive.Popup
         data-slot="dialog-content"
         className={cn(
-          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 rounded-xl bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-200 ease-(--ease-out) outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 motion-reduce:data-open:zoom-in-100 data-closed:animate-out data-closed:duration-150 data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:data-closed:zoom-out-100",
+          "fixed top-1/2 left-1/2 z-50 grid w-full max-w-[calc(100%-2rem)] -translate-x-1/2 -translate-y-1/2 gap-4 bg-popover p-4 text-sm text-popover-foreground ring-1 ring-foreground/10 duration-200 ease-(--ease-out) outline-none sm:max-w-sm data-open:animate-in data-open:fade-in-0 data-open:zoom-in-95 motion-reduce:data-open:zoom-in-100 data-closed:animate-out data-closed:duration-150 data-closed:fade-out-0 data-closed:zoom-out-95 motion-reduce:data-closed:zoom-out-100",
+          // With a close button, concentric with its corner (12) 8px in: 20.
+          showCloseButton ? "rounded-2xl" : "rounded-xl",
           className
         )}
         {...props}
       >
         {children}
-        {/* Its middle 28px in from the top and the right, level with a title row of h-8 under p-3 (the settings') or pt-3
-            (a dialog with a title and a list under it). */}
+        {/* 8px from the corner, so its icon's right edge is on the 16px column the dialog's words end on, and its middle
+            26px down, level with a title row of h-8 under pt-2.5 or a search field of h-13. */}
         {showCloseButton && (
           <DialogPrimitive.Close
             data-slot="dialog-close"
             render={
               <Button
                 variant="ghost"
-                className="absolute top-2.5 right-2.5"
+                className="absolute top-2 right-2"
                 size="icon"
               />
             }
@@ -78,7 +80,7 @@ function DialogTitle({ className, ...props }: DialogPrimitive.Title.Props) {
   return (
     <DialogPrimitive.Title
       data-slot="dialog-title"
-      className={cn("font-heading text-base font-medium", className)}
+      className={cn("text-base font-medium", className)}
       {...props}
     />
   )

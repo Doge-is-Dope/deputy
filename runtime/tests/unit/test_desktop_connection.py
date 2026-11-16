@@ -1,31 +1,15 @@
-"""Desktop ownership follows its own transport, never an optional helper's health."""
-
-import json
+"""Desktop control goes back to the agent only on a desktop that answers."""
 
 import httpx
 import pytest
 
-from computer_use.adapters import build_control
 from computer_use.computers import ComputerError, Status
 from computer_use.config import Settings
 from computer_use.desktop.control import ControlSyncError, hand_over
 from computer_use.server import create_app
 
 
-def test_stale_helper_acknowledgement_cannot_gate_desktop_input(tmp_path, monkeypatch):
-    monkeypatch.setenv("CU_WINDOWS_AGENT_CONNECTION", str(tmp_path / "missing-helper.json"))
-    settings = Settings(_env_file=None, data_dir=tmp_path, database_url="", code_runner_url="")
-    control = build_control(settings)
-    state = control.write("agent", "returned by user")
-    (tmp_path / "windows-agent-control.json").write_text(json.dumps({
-        "owner": state.owner, "since": state.since, "ready": False,
-        "updated": 0, "error": "Windows agent connection lost",
-    }))
-    assert control.read().allows_input("agent")
-
-
-async def test_missing_helper_configuration_cannot_break_startup_or_return(tmp_path, computer, monkeypatch):
-    monkeypatch.setenv("CU_WINDOWS_AGENT_CONNECTION", str(tmp_path / "missing-helper.json"))
+async def test_control_goes_back_and_forth_through_the_api(tmp_path, computer):
     settings = Settings(_env_file=None, data_dir=tmp_path, database_url="", code_runner_url="")
     app = create_app(settings, 10, computer)
     async with app.router.lifespan_context(app), httpx.AsyncClient(
@@ -35,7 +19,7 @@ async def test_missing_helper_configuration_cannot_break_startup_or_return(tmp_p
             assert (await client.post("/api/control", json={"owner": "user"})).status_code == 200
             response = await client.post("/api/control", json={"owner": "agent"})
             assert response.status_code == 200
-            assert response.json()["owner"] == "agent" and response.json()["ready"]
+            assert response.json()["owner"] == "agent"
         status = (await client.get("/api/status")).json()
         assert status["control"]["owner"] == "agent" and status["computer"]["connected"]
 
@@ -73,4 +57,4 @@ async def test_http_return_requires_a_fresh_desktop_observation(settings, comput
 
         computer.screenshot = capture
         returned = await client.post("/api/control", json={"owner": "agent"})
-        assert returned.status_code == 200 and returned.json()["ready"] and observed == [True]
+        assert returned.status_code == 200 and returned.json()["owner"] == "agent" and observed == [True]

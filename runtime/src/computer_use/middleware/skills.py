@@ -1,7 +1,6 @@
 """Skills: know-how an agent reads only when its work calls for it. An agent has them by carrying this middleware. Each
-is a folder holding a SKILL.md, whose frontmatter names and describes it, and any files its instructions point to: in
-computer_use/skills/shared for every such agent, in computer_use/skills/<agent> for that one. The agent's system prompt
-lists them; read_skill reads one."""
+is a folder holding a SKILL.md, whose frontmatter names and describes it, and any files its instructions point to, in
+the agent's own folder, computer_use/skills/<agent>. The agent's system prompt lists them; read_skill reads one."""
 
 import re
 from dataclasses import dataclass
@@ -18,7 +17,6 @@ from computer_use.middleware.common import with_section
 from computer_use.prompts.skills import section
 
 SKILLS = Path(__file__).parent.parent / "skills"
-SHARED = "shared"
 # YAML between "---" lines at the top of a SKILL.md.
 FRONTMATTER = re.compile(r"^---\s*\n(.*?)\n---\s*\n", re.DOTALL)
 
@@ -50,15 +48,6 @@ def catalog(folder: Path) -> tuple[Skill, ...]:
         if name != path.parent.name or not description:
             raise ValueError(f"{path}: the frontmatter needs the folder's name as name, and a description")
         skills.append(Skill(name, description, path.parent))
-    return tuple(skills)
-
-
-def skills_of(agent: str, folder: Path) -> tuple[Skill, ...]:
-    """The skills every agent shares and `agent`'s own, by name. One name in both would leave which is meant unknown."""
-    skills = sorted((*catalog(folder / SHARED), *catalog(folder / agent)), key=lambda skill: skill.name)
-    names = [skill.name for skill in skills]
-    if len(set(names)) < len(names):
-        raise ValueError(f"{folder}: {agent}'s skills and the shared ones must not share a name: {', '.join(names)}")
     return tuple(skills)
 
 
@@ -95,7 +84,7 @@ class SkillsMiddleware(AgentMiddleware):
 
     def __init__(self, agent: str, folder: Path = SKILLS):
         super().__init__()
-        skills = skills_of(agent, folder)
+        skills = catalog(folder / agent)
         self.section = section((skill.name, skill.description) for skill in skills) if skills else ""
         self.tools = [read_skill_tool(skills)] if skills else []
 

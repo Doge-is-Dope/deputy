@@ -4,7 +4,7 @@ import { Toaster as Sonner, type ToasterProps } from "sonner"
 import { useAppearance } from "@/lib/appearance"
 
 /** Use the app theme and font. Stack up to three notices for 3 seconds;
- * expand and pause on interaction, dismiss by swiping sideways. Merge caller styles. */
+ * expand and pause on interaction, dismiss by swiping sideways. */
 function Toaster({ style, ...props }: ToasterProps) {
   const { resolved } = useAppearance()
   const root = useRef<HTMLElement>(null)

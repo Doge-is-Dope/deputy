@@ -15,6 +15,10 @@ jobs:
     # Kernel 6.8: mongod 8.3 refuses to start on kernels 6.19 to 7.0.13 (SERVER-121912), ubuntu-24.04's is 7.0.0.
     runs-on: ubuntu-22.04
     timeout-minutes: 10
+    env:
+      # Landlock lets runner commands read Python and its virtual environment under /usr.
+      UV_PYTHON_INSTALL_DIR: /usr/local/share/uv-python
+      UV_PROJECT_ENVIRONMENT: /usr/local/share/uv-test-venv
     defaults:
       run:
         working-directory: runtime
@@ -33,6 +37,8 @@ jobs:
           done
           docker logs mongo
           exit 1
+      - name: Prepare Python directories for Code Runner tests
+        run: sudo install -d -o "$(id -u)" -g "$(id -g)" "$UV_PYTHON_INSTALL_DIR" "$UV_PROJECT_ENVIRONMENT"
       - uses: astral-sh/setup-uv@v10.3.2
         with:
           version: "0.13.5"

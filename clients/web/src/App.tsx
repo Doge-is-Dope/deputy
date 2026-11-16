@@ -11,9 +11,17 @@ import { toast } from "sonner"
 
 import { AppSidebar } from "@/components/sidebar/app-sidebar"
 import { Composer } from "@/components/composer/composer"
+import {
+  messageOrigin,
+  tileOrigins,
+  type SentMessage,
+} from "@/components/conversation/message-send"
 import { LiveView } from "@/components/desktop/live-view"
-import { RunView, type AskedQuestion } from "@/components/conversation/run-view"
-import { ENTER_KEY } from "@/lib/keys"
+import {
+  RunView,
+  type AskedQuestion,
+  type PlanReport,
+} from "@/components/conversation/run-view"
 import { preloadMarkdown } from "@/components/markdown/markdown"
 import { Button } from "@/components/ui/button"
 import { Toaster } from "@/components/ui/sonner"
@@ -41,12 +49,14 @@ import { NEW_TASK, setDraft } from "@/hooks/use-drafts"
 import { useConversationActions } from "@/hooks/use-conversation-actions"
 import { useSeen } from "@/hooks/use-seen"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { usePresence } from "@/hooks/use-presence"
 import { useStoredWidth } from "@/hooks/use-stored-width"
 import { ResizeHandle } from "@/components/resize-handle"
-import { runningOf, waitingOf } from "@/lib/api"
+import { runningOf, waitingOf, waitingSession } from "@/lib/api"
 import { conversationOf, nameOf } from "@/lib/conversations"
 import { connectionOf, greeting } from "@/lib/format"
 import { useT } from "@/lib/i18n"
+import { reducedMotion } from "@/lib/motion"
 import { HandIcon, MonitorIcon, PlanIcon, TrashIcon } from "@/components/icons"
 
 // The banner that another conversation waits for the user: one wait at a time, as one run at a time has the desktop.
@@ -109,23 +119,13 @@ export default function App() {
     listed,
   } = useThreadRuns(opened, listsChanged)
   const thread = openedThread ?? opened
+  const [sentMessage, setSentMessage] = useState<SentMessage | null>(null)
+  if (sentMessage && sentMessage.thread !== thread) setSentMessage(null)
   // From the lists, or from its own runs when it is beyond the pages they hold (one opened from search).
   const conversation =
     conversations?.find((each) => each.id === thread) ??
     conversationOf(threadTurns ?? []) ??
     undefined
-  // A run that carries on the one before it with the same goal (「從這裡繼續」) does not repeat that goal.
-  const continued = useMemo(
-    () =>
-      new Set(
-        threadRuns
-          ?.filter(
-            (run, index, all) => index > 0 && run.goal === all[index - 1].goal
-          )
-          .map((run) => run.id)
-      ),
-    [threadRuns]
-  )
   // Each conversation keeps its own draft, which its composer reads and writes.
   const draftKey = thread ?? NEW_TASK
   // Desktop panel and mobile sheet start closed; takeover opens the active view.
@@ -167,11 +167,9 @@ export default function App() {
   const {
     input,
     current,
-    takesMessages,
     approval,
     steering,
     queued,
-    handover,
     asking,
     started,
     start,
@@ -191,7 +189,6 @@ export default function App() {
     thread,
     project,
     status,
-    isMobile,
     liveOpen,
     open,
     showLive: (focus = false) => {
@@ -289,9 +286,7 @@ export default function App() {
 
   // Notify once for waits in other conversations. Dismiss on opening or when the wait ends.
   const waitingId = waiting?.id ?? null
-  const waitingThread = waiting
-    ? (runningOf(status, { run: waiting.run })?.thread ?? null)
-    : null
+  const waitingThread = waitingSession(status)?.thread ?? null
   const waitingFor = !waiting
     ? null
     : waiting.for === "approval"
@@ -310,7 +305,9 @@ export default function App() {
   const announced = useRef<string | null>(null)
   useEffect(() => {
     if (!waitingId || !waitingThread || !waitingFor) {
-      toast.dismiss(WAITING_NOTICE)
+      // Nothing to take down before a wait was ever announced. A dismissal lands on the next frame, so one made as the
+      // page opens would take down the notice the first status brings, which has the same id.
+      if (announced.current !== null) toast.dismiss(WAITING_NOTICE)
       return
     }
     if (waitingThread === thread) {
@@ -459,6 +456,9 @@ export default function App() {
   const hasKeyboard = window.matchMedia("(pointer: fine)").matches
   const recommended = hasKeyboard ? (asked?.recommended ?? null) : null
   const many = hasKeyboard && asked?.multiple === true
+  // The answer the agent expects typed, when Enter takes no option: the empty composer shows it to take or change.
+  const suggestion =
+    !approval && !many && recommended === null ? (asked?.suggestion ?? "") : ""
 
   const takeover = asking && {
     text: say.composer.takeover.ask(asking.reason),
@@ -469,16 +469,42 @@ export default function App() {
   const composer = (
     <Composer
       draftKey={draftKey}
-      onSubmit={(goal, queue) => {
+      onSubmit={(goal, queue, clear, attachments) => {
         void preloadMarkdown()
-        return start(goal, queue)
+        const draft = input.current
+        const typed = draft?.value
+        const address = window.location.hash
+        return start(
+          goal,
+          queue,
+          (sent) => {
+            // It moves from the draft into the conversation only while that draft and conversation are still the ones
+            // it was sent from, and not to wait in the composer. Otherwise it arrives as any message does.
+            const origin =
+              draft &&
+              draft.value === typed &&
+              window.location.hash === address &&
+              !(queue && sent.message) &&
+              !reducedMotion()
+                ? messageOrigin(draft)
+                : null
+            if (origin)
+              setSentMessage({
+                thread: sent.thread,
+                run: sent.id,
+                message: sent.message ?? null,
+                origin,
+                tiles: tileOrigins(draft!),
+              })
+            clear()
+          },
+          attachments
+        )
       }}
       // Unread messages continue in the next run.
       onStop={stop}
       running={running}
-      takesMessages={takesMessages}
       blocked={blocked}
-      handover={handover}
       approval={approval}
       onAnswer={answer}
       takeover={takeover}
@@ -510,15 +536,16 @@ export default function App() {
         approval
           ? say.composer.approval.placeholder
           : many
-            ? say.run.question.pressEnterMany(ENTER_KEY)
+            ? say.run.question.pressEnterMany
             : recommended !== null
-              ? say.run.question.pressEnter(ENTER_KEY)
+              ? say.run.question.pressEnter
               : asked !== null
-                ? asked.placeholder || say.run.question.placeholder
+                ? suggestion || say.run.question.placeholder
                 : thread
                   ? say.home.placeholderNext
                   : say.home.placeholderNew
       }
+      suggestion={suggestion}
       autoFocus={!thread}
       ref={input}
     />
@@ -534,23 +561,41 @@ export default function App() {
       onScreenFocused={() => setFocusScreen(false)}
       approval={approval}
       onAnswer={answer}
-      {...(isMobile || cramped
+      // On a phone it is a sheet over the page, with its own way out; elsewhere the toggle stays in reach. Where the
+      // page has no room beside it, it already covers the conversation, so there is nothing to expand.
+      {...(isMobile
         ? { onClose: () => setLiveOpen(false) }
-        : { expanded, onExpand: () => setExpanded((value) => !value) })}
+        : !cramped && {
+            expanded,
+            onExpand: () => setExpanded((value) => !value),
+          })}
       className="size-full"
     />
   )
   // The conversation's plan, as its view reports it: shown beside the conversation unless hidden, or opened over it.
-  const [plan, setPlan] = useState({ has: false, docked: true })
+  const [plan, setPlan] = useState<PlanReport>({
+    has: false,
+    docked: true,
+    written: 0,
+  })
   const [planHidden, setPlanHidden] = useState(false)
   const [planOpen, setPlanOpen] = useState(false)
-  // Another conversation has a plan of its own, or none: until its view says, none, and none opened over it.
+  // How many of the view's new plans have been shown: each once, beside the conversation if hidden, or over it.
+  const [popped, setPopped] = useState(0)
+  // Another conversation: none opened over it, and its view counts new plans afresh.
   const [planOf, setPlanOf] = useState(thread)
   if (planOf !== thread) {
     setPlanOf(thread)
     setAsked(null)
-    setPlan({ has: false, docked: plan.docked })
+    setPlan({ ...plan, written: 0 })
     setPlanOpen(false)
+    setPopped(0)
+  } else if (plan.written !== popped) {
+    setPopped(plan.written)
+    if (plan.written) {
+      if (plan.docked) setPlanHidden(false)
+      else setPlanOpen(true)
+    }
   }
   // Opened over the conversation, it closes once the run being read has none: scrolling back does not open it again.
   if (planOpen && !plan.has) setPlanOpen(false)
@@ -580,23 +625,10 @@ export default function App() {
   const openLive = useCallback(() => setLiveOpen(true), [setLiveOpen])
   const showPanel = !isMobile && panelOpen
   // The panel slides in from the window's edge and back out, as the sidebar does. Closed, it stays mounted until it
-  // is out of sight, then goes; opened again on its way out, it turns back from where it is.
-  const panel = useRef<HTMLDivElement>(null)
-  const [panelMounted, setPanelMounted] = useState(false)
-  if (showPanel && !panelMounted) setPanelMounted(true)
-  const panelClosing = panelMounted && !showPanel
-  useEffect(() => {
-    if (!panelClosing) return
-    let closing = true
-    const sliding = panel.current?.getAnimations() ?? []
-    Promise.all(sliding.map((animation) => animation.finished)).then(
-      () => closing && setPanelMounted(false),
-      () => {}
-    )
-    return () => {
-      closing = false
-    }
-  }, [panelClosing])
+  // is out of sight (its duration-300), then goes; opened again on its way out, it turns back from where it is.
+  const [panelMounted, panelClosing] = usePresence(showPanel, 300)
+  // Closed while expanded, it goes as it is and opens beside the conversation the next time.
+  if (!panelMounted && expanded) setExpanded(false)
 
   return (
     <SidebarProvider
@@ -627,7 +659,7 @@ export default function App() {
           {/* On a phone, the sidebar is a sheet with no rail to open it from, so its toggle is here, where the header
             would hold it. Elsewhere it is at the top of the sidebar. */}
           {isMobile && (
-            <SidebarTrigger className="absolute top-1.5 left-2.5 z-20" />
+            <SidebarTrigger className="touch-target absolute top-1.5 left-2.5 z-20" />
           )}
           {/* Beside the panel, which covers it when expanded or cramped: it keeps its width then, so nothing reflows. It
             draws the divider while covered, so the panel sweeps over the line when it expands rather than carrying it
@@ -641,10 +673,15 @@ export default function App() {
             style={{ marginRight: showPanel ? liveShown : 0 }}
             inert={showPanel && covering}
           >
-            <header className="flex h-12 shrink-0 items-center gap-2 px-2.5">
+            {/* Room at its end for the live view's toggle while that lies over this column. */}
+            <header
+              className={cn(
+                "flex h-12 shrink-0 items-center gap-2 pl-2.5 transition-[padding] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
+                showPanel ? "pr-2.5" : "pr-13.5"
+              )}
+            >
               {/* Over the panel, so it fades out there as the panel covers it rather than being cut by its edge, and
-                back in near the end as the panel shrinks away. Only while the panel is shown: closed, a narrow window
-                still needs the toggle to open it. */}
+                back in near the end as the panel shrinks away. */}
               <div
                 className={cn(
                   "relative z-20 ml-auto flex items-center gap-2 transition-[opacity,filter,scale] ease-(--ease-out)",
@@ -665,7 +702,12 @@ export default function App() {
                           size="icon"
                           aria-label={say.run.plan}
                           aria-pressed={planShown}
-                          className="transition-[opacity,scale,background-color] duration-200 ease-(--ease-out) starting:scale-90 starting:opacity-0"
+                          // It grows in for a plan just written here; switching to a conversation, it is simply there.
+                          className={cn(
+                            "touch-target transition-[opacity,scale,background-color] duration-200 ease-(--ease-out)",
+                            plan.written > 0 &&
+                              "starting:scale-90 starting:opacity-0"
+                          )}
                           onClick={() =>
                             plan.docked
                               ? setPlanHidden(!planHidden)
@@ -681,55 +723,6 @@ export default function App() {
                     </TooltipContent>
                   </Tooltip>
                 )}
-                <Tooltip>
-                  <TooltipTrigger
-                    render={
-                      <Button
-                        variant={liveOpen ? "secondary" : "ghost"}
-                        size="icon"
-                        aria-label={
-                          connection
-                            ? say.home.liveViewWith(connection.label)
-                            : say.home.liveView
-                        }
-                        aria-pressed={liveOpen}
-                        onClick={() => {
-                          if (liveOpen) setExpanded(false)
-                          setLiveOpen(!liveOpen)
-                        }}
-                      />
-                    }
-                  >
-                    <span className="relative size-5 shrink-0">
-                      <MonitorIcon
-                        className={cn(
-                          "size-5",
-                          // Its screen lit in the same color, so it shows at a glance; the stand's lines have no inside.
-                          yours &&
-                            "text-takeover-glow [fill-opacity:0.22] dark:[fill-opacity:0.3]",
-                          // Cut out the lines around the dot so the button's own background shows through.
-                          connection &&
-                            "[mask-image:radial-gradient(circle_at_80%_20%,transparent_6px,black_6.5px)]"
-                        )}
-                        style={yours ? { fill: "currentColor" } : undefined}
-                      />
-                      {connection && (
-                        <span
-                          aria-hidden
-                          className={cn(
-                            "absolute top-0 right-0 size-2 rounded-full",
-                            connection.connected
-                              ? "bg-success"
-                              : "bg-destructive"
-                          )}
-                        />
-                      )}
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent>
-                    {liveOpen ? say.home.hideLiveView : say.home.showLiveView}
-                  </TooltipContent>
-                </Tooltip>
               </div>
             </header>
 
@@ -742,10 +735,10 @@ export default function App() {
                 goals={goals}
                 going={going}
                 started={fresh}
-                continued={continued}
+                sentMessage={sentMessage}
                 listed={listed}
                 status={status}
-                asking={asking?.run ?? null}
+                asking={asking ? current : null}
                 steering={steered}
                 offline={offline}
                 composer={composer}
@@ -794,7 +787,6 @@ export default function App() {
             the line slides in with it: the column's edge follows on the main thread and can fall behind, under it. */}
           {panelMounted && (
             <div
-              ref={panel}
               data-slot="live-panel"
               inert={panelClosing}
               className={cn(
@@ -819,6 +811,53 @@ export default function App() {
               {liveView}
             </div>
           )}
+          {/* The live view's toggle, at the window's corner whether it is open or not, over the panel: pressed twice in
+            one place it opens and closes it. The panel's own corner button sits beside it. */}
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Button
+                  variant={liveOpen ? "secondary" : "ghost"}
+                  size="icon"
+                  className="touch-target absolute top-1.5 right-2.5 z-20"
+                  aria-label={
+                    connection
+                      ? say.home.liveViewWith(connection.label)
+                      : say.home.liveView
+                  }
+                  aria-pressed={liveOpen}
+                  onClick={() => setLiveOpen(!liveOpen)}
+                />
+              }
+            >
+              <span className="relative size-5 shrink-0">
+                <MonitorIcon
+                  className={cn(
+                    "size-5",
+                    // Its screen lit in the same color, so it shows at a glance; the stand's lines have no inside.
+                    yours &&
+                      "text-takeover-glow [fill-opacity:0.22] dark:[fill-opacity:0.3]",
+                    // Cut out the lines around the dot so the button's own background shows through.
+                    connection &&
+                      "[mask-image:radial-gradient(circle_at_80%_20%,transparent_6px,black_6.5px)]"
+                  )}
+                  style={yours ? { fill: "currentColor" } : undefined}
+                />
+                {connection && (
+                  <span
+                    aria-hidden
+                    className={cn(
+                      "absolute top-0 right-0 size-2 rounded-full",
+                      connection.connected ? "bg-success" : "bg-destructive"
+                    )}
+                  />
+                )}
+              </span>
+            </TooltipTrigger>
+            <TooltipContent>
+              {liveOpen ? say.home.hideLiveView : say.home.showLiveView}
+            </TooltipContent>
+          </Tooltip>
         </div>
       </SidebarInset>
 
@@ -827,7 +866,6 @@ export default function App() {
           <SheetContent
             side="right"
             className="p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-none"
-            showCloseButton={false}
           >
             <SheetHeader className="sr-only">
               <SheetTitle>{say.home.liveView}</SheetTitle>

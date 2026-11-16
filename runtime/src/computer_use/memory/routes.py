@@ -1,5 +1,3 @@
-"""The page's routes for memory."""
-
 from collections.abc import Callable
 from dataclasses import asdict, replace
 

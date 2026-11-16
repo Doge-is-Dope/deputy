@@ -70,7 +70,7 @@ export const zhHant = {
     newProject: "新增 Project",
     newInProject: "在這個 Project 新增對話",
     noChats: "尚無對話",
-    // Under a project's first five conversations, for five more, as ChatGPT's projects list theirs.
+    // Under a project's first five conversations, for five more.
     showMore: "顯示更多",
     projectName: "Project 名稱",
     create: "建立",
@@ -91,7 +91,7 @@ export const zhHant = {
   chats: {
     search: "搜尋",
     none: "沒有符合的結果",
-    // The search's sections, as ChatGPT's ⌘K lists them.
+    // The search's sections.
     actions: "快速動作",
     chats: "對話",
   },
@@ -153,33 +153,39 @@ export const zhHant = {
     queue: "排隊",
     // Takes back a message waiting above the composer, before the agent reads it.
     withdraw: "刪除",
-    // The list typing @ opens: what a message can be sent to. Their names stay in English in every language, as the
-    // runtime looks for them.
-    mention: {
-      list: "提及",
-      computer: "操作 Windows 電腦",
-    },
-    // Asked before a task takes the desktop from the user who is using it.
-    handover: {
-      title: "讓 Agent 接管桌面？",
-      keep: "保留控制權",
-      start: "交給 Agent 並開始",
+    // Photos and files added to the message being written, which upload at once.
+    attachments: {
+      add: "加入照片或檔案",
+      remove: (name: string) => `移除 ${name}`,
+      uploading: "上傳中",
+      retry: "重新上傳",
+      open: (name: string) => `查看 ${name}`,
+      // On a phone, a message's attachments past their first row, folded away.
+      more: (count: number) => `還有 ${count} 個附件`,
+      fold: "收起",
+      // Files dragged over the page.
+      drop: "放開即可加入",
+      dropHint: "最多 5 個檔案，每個 20 MB 以內",
+      size: "檔案不能超過 20 MB",
+      // A file card's kind, for a name with no extension.
+      file: "檔案",
+      // An upload that failed: one that can go if tried again, and one that cannot be read at all.
+      failed: (name: string) => `「${name}」上傳失敗，請重試`,
+      unreadable: (name: string) => `無法讀取「${name}」`,
+      many: (count: number) => `一則訊息最多附加 ${count} 個檔案`,
+      folder: "無法附加資料夾，請先壓縮成 zip",
     },
     // A step the agent waits for the user to approve; what they write meanwhile declines it, as the reason.
     approval: {
       ask: (consequence: string) => `允許 Agent：${consequence}？`,
       approve: "允許",
       decline: "拒絕",
-      placeholder: "或告訴 Agent 改怎麼做",
-      // Sends what is written as the reason to decline the step.
+      placeholder: "或告訴 Agent 該怎麼改",
     },
-    // On the stop button, as Enter is pressed while a run from the command line works: it takes no message until it
-    // ends.
-    afterTask: "任務結束後就能送出",
     // The agent asking the user to take over, for something only they can do (a password, a code); skipping hands the
     // desktop straight back, for it to carry on without.
     takeover: {
-      ask: (reason: string) => `Agent 請你接管：${reason}`,
+      ask: (reason: string) => `Agent 需要你接手：${reason}`,
       skip: "略過",
       skipFailed: "沒有略過成功",
     },
@@ -202,11 +208,10 @@ export const zhHant = {
       double_click: "雙擊",
       triple_click: "三連擊",
     } as Record<string, string>,
-    atCursor: "游標位置",
     screenshot: "截圖",
-    zoom: (region: string) => `放大檢視 ${region}`,
-    drag: (from: string, to: string) => `拖曳 ${from} → ${to}`,
-    move: (to: string) => `移動游標到 ${to}`,
+    zoom: "放大檢視",
+    drag: "拖曳",
+    move: "移動游標",
     mouseDown: "按住左鍵",
     mouseUp: "放開左鍵",
     cursorPosition: "查詢游標位置",
@@ -222,6 +227,7 @@ export const zhHant = {
     code: {
       run: "執行指令",
       write: (path: string) => `寫入 ${path}`,
+      view: (path: string) => `查看 ${path}`,
     },
     // What a group of steps did, each kind once: "點擊、輸入文字、按鍵".
     kinds: {
@@ -237,6 +243,7 @@ export const zhHant = {
       takeover: "請你接管",
       run: "執行指令",
       write: "寫入檔案",
+      view: "查看圖片",
     },
     kindList: (kinds: string[]) => kinds.join("、"),
   },
@@ -265,8 +272,8 @@ export const zhHant = {
       pickMany: "可選多項",
       picked: (count: number) => `已選 ${count} 項`,
       list: (labels: string[]) => labels.join("、"),
-      pressEnterMany: (key: string) => `按 ${key} 送出已選項目，或輸入你的回答`,
-      pressEnter: (key: string) => `按 ${key} 選建議答案，或輸入你的回答`,
+      pressEnterMany: "選好答案後送出，或自己輸入",
+      pressEnter: "選一個答案，或自己輸入",
     },
     // What the main agent remembered (under its reply) and the rules a task was given (in the task).
     memory: {
@@ -283,7 +290,6 @@ export const zhHant = {
     // Work handed over, as one group: how long it has worked, and how it stands.
     work: {
       working: "正在工作",
-      worked: "已工作",
       failed: "沒有完成",
       stopped: "已停止",
       // The user has the desktop, the agent waiting for it; once it is back, how long they had it.
@@ -304,8 +310,6 @@ export const zhHant = {
         desktop: "等待桌面連線",
       },
       live: "打開即時畫面",
-      details: "顯示這一步的細節",
-      full: "顯示每一步的畫面",
     },
     // More than one agent at work at once: one line for them all, then a line per agent.
     agents: {
@@ -330,11 +334,11 @@ export const zhHant = {
       batched: "沒有執行：需要確認的步驟要單獨送出",
       unexplained: "沒有執行：沒有說明這一步會做什麼",
       desktopBusy: "沒有執行：另一段對話正在使用桌面",
-      // A third task for one step of the plan, or for one message without a plan (agent/main_agent.py).
+      // A third task for one step of the plan, or for one message without a plan (middleware/chat.py).
       taskLimit: "沒有執行：同一件事最多交給電腦兩次",
-      // A computer task handed over while another still used the computer (agent/main_agent.py).
+      // A computer task handed over while another still used the computer (agent/computer_agent.py).
       computerInUse: "沒有執行：另一件工作正在用電腦",
-      // A task handed over while the most tasks at once already ran (agent/background.py).
+      // A task handed over while the most tasks at once already ran (agent/handover.py).
       tooManyTasks: "沒有執行：已經有六件工作在進行",
     },
     // The details menu under a run's last reply: how long the run took and what it cost; an item opens a dialog of each
@@ -345,6 +349,7 @@ export const zhHant = {
       took: "用時",
       unknown: "未知", // a model without a known price, or a call a stop cut off (agent/trajectory.py cut)
       details: "用量細節",
+      total: "總計",
       input: "輸入",
       cached: "快取讀取",
       cacheWrite: "快取寫入",
@@ -360,8 +365,7 @@ export const zhHant = {
       unanswered: "沒有回覆，這一步沒有執行",
     },
     enlarge: (label: string) => `放大：${label}`,
-    agentAsks: "Agent 請你接管",
-    continued: "從中斷處繼續",
+    agentAsks: "Agent 需要你接手",
     // Over the work a session did before its final reply, folded once that reply came.
     workedFor: (time: string) => `已工作 ${time}`,
     // Why a run failed (ErrorCode), said to whoever used it: what went wrong and what they can do. The code and the
@@ -402,6 +406,7 @@ export const zhHant = {
     expand: "放大即時畫面",
     shrink: "縮小即時畫面",
     exitFullscreen: "結束全螢幕",
+    holdFullscreen: "長按全螢幕",
     close: "關閉即時畫面",
     connecting: "連線中…",
     // Who has control, in two parts: the first rolls over when control changes hands, the rest stays. A space
@@ -434,12 +439,17 @@ export const zhHant = {
     modes: { system: "跟隨系統", light: "淺色", dark: "深色" },
     theme: "主題",
     defaultTheme: "預設",
-    // A theme's three colors, named as the ChatGPT desktop app names them in its own Appearance settings.
+    // A theme's three colors: the accent, the surface (background) and the ink (foreground).
     accent: "強調色",
     background: "背景",
     foreground: "前景",
     windowsDesktop: "Windows 桌面",
     codeRunner: "程式執行環境",
+    windowsCommands: "Windows 指令",
+    runCommands: {
+      label: "讓 agent 執行指令",
+      description: "搜尋檔案等工作，通常比逐步點選更快、更穩定",
+    },
     connected: "已連線",
     disconnected: "未連線",
     connecting: "連線中…",
@@ -450,8 +460,8 @@ export const zhHant = {
     effort: "推理強度",
     byDefault: "（預設）",
     resetModels: "重設",
-    // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and the two switches
-    // Claude's own memory settings have, one for writing and one for reading.
+    // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and its two switches, one
+    // for writing and one for reading.
     memory: "記憶",
     memoryModes: {
       learn: {
@@ -479,7 +489,7 @@ export const zhHant = {
     saveMemory: "儲存",
     permissions: "權限",
     // How a step the agent flags for approval is answered (agent/review.py), each with one general line and no
-    // examples, as Claude's permission modes say theirs. Both name the same steps, the risky ones the agent flags
+    // examples. Both name the same steps, the risky ones the agent flags
     // (computer_agent.py), so the lines differ only in who decides.
     approvals: "執行前確認",
     approvalModes: {

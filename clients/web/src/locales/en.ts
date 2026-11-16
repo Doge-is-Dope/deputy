@@ -85,7 +85,7 @@ export const en: Messages = {
   chats: {
     search: "Search",
     none: "No matches",
-    // The search's sections, as ChatGPT's ⌘K lists them.
+    // The search's sections.
     actions: "Quick actions",
     chats: "Chats",
   },
@@ -140,14 +140,25 @@ export const en: Messages = {
     send: "Send",
     queue: "Queue",
     withdraw: "Delete",
-    mention: {
-      list: "Mentions",
-      computer: "Use the Windows computer",
-    },
-    handover: {
-      title: "Hand the desktop to the agent?",
-      keep: "Keep control",
-      start: "Hand over and start",
+    attachments: {
+      add: "Add photos or files",
+      remove: (name: string) => `Remove ${name}`,
+      uploading: "Uploading",
+      retry: "Upload again",
+      open: (name: string) => `View ${name}`,
+      more: (count: number) => `${count} more`,
+      fold: "Show less",
+      // Files dragged over the page.
+      drop: "Drop to attach",
+      dropHint: "Up to 5 files, each up to 20 MB",
+      size: "A file can be at most 20 MB",
+      // A file card's kind, for a name with no extension.
+      file: "File",
+      // An upload that failed: one that can go if tried again, and one that cannot be read at all.
+      failed: (name: string) => `${name} didn't upload. Try again.`,
+      unreadable: (name: string) => `Couldn't read ${name}`,
+      many: (count: number) => `A message can have at most ${count} files`,
+      folder: "Can't attach a folder. Zip it first.",
     },
     approval: {
       ask: (consequence) => `Allow the agent to: ${consequence}?`,
@@ -155,9 +166,8 @@ export const en: Messages = {
       decline: "Decline",
       placeholder: "Or tell the agent what to do instead",
     },
-    afterTask: "You can send once this task ends",
     takeover: {
-      ask: (reason) => `The agent asks you to take over: ${reason}`,
+      ask: (reason) => `The agent needs you to take over: ${reason}`,
       skip: "Skip",
       skipFailed: "Couldn't skip",
     },
@@ -179,11 +189,10 @@ export const en: Messages = {
       double_click: "Double-click",
       triple_click: "Triple-click",
     },
-    atCursor: "at the pointer",
     screenshot: "Take a screenshot",
-    zoom: (region) => `Zoom in on ${region}`,
-    drag: (from, to) => `Drag ${from} → ${to}`,
-    move: (to) => `Move the pointer to ${to}`,
+    zoom: "Zoom in",
+    drag: "Drag",
+    move: "Move the pointer",
     mouseDown: "Press the left button",
     mouseUp: "Release the left button",
     cursorPosition: "Find the pointer",
@@ -199,6 +208,7 @@ export const en: Messages = {
     code: {
       run: "Run a command",
       write: (path) => `Write ${path}`,
+      view: (path) => `View ${path}`,
     },
     // What a group of steps did, each kind once: "Clicked, typed text, pressed keys".
     kinds: {
@@ -214,6 +224,7 @@ export const en: Messages = {
       takeover: "asked you to take over",
       run: "ran commands",
       write: "wrote files",
+      view: "looked at images",
     },
     kindList: (kinds: string[]) => {
       const list = kinds.join(", ")
@@ -245,10 +256,8 @@ export const en: Messages = {
       pickMany: "Choose any",
       picked: (count: number) => `${count} selected`,
       list: (labels: string[]) => labels.join(", "),
-      pressEnterMany: (key: string) =>
-        `Press ${key} to send your choices, or type your own`,
-      pressEnter: (key: string) =>
-        `Press ${key} for the recommended answer, or type your own`,
+      pressEnterMany: "Pick your answers and send, or type your own",
+      pressEnter: "Pick an answer, or type your own",
     },
     // What the main agent remembered (under its reply) and the rules a task was given (in the task).
     memory: {
@@ -264,7 +273,6 @@ export const en: Messages = {
     },
     work: {
       working: "Working",
-      worked: "Worked",
       failed: "Didn't finish",
       stopped: "Stopped",
       paused: "You're in control; the agent is paused",
@@ -281,8 +289,6 @@ export const en: Messages = {
         desktop: "Waiting for the desktop",
       },
       live: "Open the live view",
-      details: "Show this step's details",
-      full: "Show every step's screen",
     },
     agents: {
       working: (count: number) =>
@@ -317,6 +323,7 @@ export const en: Messages = {
       took: "Time",
       unknown: "Unknown",
       details: "Usage details",
+      total: "Total",
       input: "Input",
       cached: "Cache read",
       cacheWrite: "Cache write",
@@ -332,8 +339,7 @@ export const en: Messages = {
       unanswered: "No answer, so this step didn't run",
     },
     enlarge: (label) => `Enlarge: ${label}`,
-    agentAsks: "The agent asks you to take over",
-    continued: "Continued from where it stopped",
+    agentAsks: "The agent needs you to take over",
     workedFor: (time) => `Worked for ${time}`,
     errors: {
       "E-DESKTOP":
@@ -372,6 +378,7 @@ export const en: Messages = {
     expand: "Expand the live view",
     shrink: "Shrink the live view",
     exitFullscreen: "Exit full screen",
+    holdFullscreen: "Hold for full screen",
     close: "Close the live view",
     connecting: "Connecting…",
     agent: "Your agent has\u00a0",
@@ -407,6 +414,12 @@ export const en: Messages = {
     foreground: "Foreground",
     windowsDesktop: "Windows desktop",
     codeRunner: "Code runner",
+    windowsCommands: "Windows commands",
+    runCommands: {
+      label: "Let the agent run commands",
+      description:
+        "Often quicker and more reliable than clicking, for tasks such as searching files",
+    },
     connected: "Connected",
     disconnected: "Not connected",
     connecting: "Connecting…",
@@ -417,8 +430,8 @@ export const en: Messages = {
     effort: "Reasoning effort",
     byDefault: " (Default)",
     resetModels: "Reset",
-    // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and the two switches
-    // Claude's own memory settings have, one for writing and one for reading.
+    // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and its two switches, one
+    // for writing and one for reading.
     memory: "Memory",
     memoryModes: {
       learn: {

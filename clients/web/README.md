@@ -1,47 +1,32 @@
 # Computer Use Web
 
-The React, TypeScript and Vite front end for conversations and live desktop control. It talks to the runtime over HTTP and WebRTC.
+The web app for chatting with the agent and watching or controlling the desktop live: React, TypeScript and Vite, talking to the runtime over HTTP and WebRTC.
 
-## Local development
+## Development
 
-Use Node.js 24 and Bun 1.4.4 (pinned in `package.json`). From `clients/web/`:
+Use Node.js 24 and Bun 1.4.4. From `clients/web/`:
 
 ```bash
 bun install --frozen-lockfile
+bun run dev
 ```
 
-Start the runtime and the dev server as in the [main README](../../README.md#quick-start). The dev server proxies `/api` to `http://127.0.0.1:8000`; set `CU_API_URL` to point it elsewhere:
-
-```bash
-CU_API_URL=http://127.0.0.1:8000 bun run dev
-```
-
-For a runtime on another computer, the browser must also reach the TURN servers in `/api/status` (`ice_servers`); `CU_API_URL` alone is not enough.
+Start the runtime first ([main README](../../README.md#quick-start)). The dev server runs on port 5173 and passes `/api` to `http://127.0.0.1:8000`, or to `CU_API_URL`. For the live view of a runtime on another computer, the browser must reach its TURN server.
 
 ## Code layout
 
-| Path | Responsibility |
-| --- | --- |
-| `src/App.tsx` | The page: switching, sending, stopping and control actions |
-| `src/components/conversation/` | Messages, replies, delegated work and the plan card |
-| `src/components/sidebar/` | Projects, recents, conversation rows and dragging |
-| `src/components/desktop/` | The live desktop view |
-| `src/components/markdown/` | Agent replies as markdown |
-| `src/components/composer/` | The message composer and its questions |
-| `src/components/memory/` | Rules, citations and memory notices |
-| `src/components/settings/` | The settings dialog; add a page to `PAGES` in `settings-dialog.tsx` |
-| `src/components/ui/` | Shared shadcn components |
-| `src/components/` | Icons, the screenshot viewer and other shared parts |
-| `src/hooks/use-api.ts` | Status, sidebar lists and run queries |
-| `src/hooks/use-run-events.ts` | Run event streams |
-| `src/hooks/use-route.ts` | The open conversation and project, from the URL hash |
-| `src/hooks/use-live.ts` | The live view's WebRTC connection |
-| `src/lib/api.ts` | API types and requests |
-| `src/lib/conversation-lists.ts` | Sidebar pages, and the latest conversations a shut project's status comes from |
-| `src/lib/conversations.ts` | Grouping runs into conversations |
-| `src/lib/thread.ts`, `format.ts` | Turning events into conversation items; formatting text |
-| `src/lib/memory.ts`, `settings.ts` | Memory data; settings navigation |
-| `src/lib/appearance.ts`, `themes.ts`, `src/index.css` | Appearance, themes and global styles |
+| Path              | What it holds                                                                                |
+| ----------------- | -------------------------------------------------------------------------------------------- |
+| `src/App.tsx`     | The page and its actions                                                                     |
+| `src/components/` | The interface: conversation, composer, sidebar, live desktop view, settings and shared parts |
+| `src/hooks/`      | Data from the runtime, event streams, routing and the live connection                        |
+| `src/lib/`        | API types, turning run events into a conversation, and formatting                            |
+| `src/locales/`    | English and Traditional Chinese text                                                         |
+| `src/index.css`   | Global styles and themes                                                                     |
+
+## Attachments
+
+The composer takes up to five files from the plus button, a paste or a drop anywhere on the page, with a new message or an answer to the agent's question: each up to 20 MB (a PDF over 5 MB or 100 pages only the coding agent opens). Each uploads as soon as it is added, a photo over 2048 on the long side or over 5 MB shrunk first (`src/lib/attachments.ts`), and the message goes once all are up. Attachments go with a new message, not while the agent works. A picture the coding agent links in its reply is shown there and opens full size. `Caddyfile` caps a request at 24 MB.
 
 ## Checks and build
 
@@ -51,8 +36,4 @@ bun run test
 bun run build
 ```
 
-`bun run build` checks types and writes `dist/`. `bun run preview` serves it with the same `/api` proxy; the runtime does not serve the front end.
-
-The image (`Dockerfile`, `Caddyfile`) builds `dist/` and serves it with `/api` passed on to the runtime; compose runs it on port 8080. Front-end work stays on the dev server at 5173.
-
-KaTeX is overridden to 0.19.1 until the math plugins accept a patched version. Shared UI state variants live in `src/components/ui/variants.css`, so styling does not need the shadcn CLI.
+`bun run build` checks types and writes `dist/`. The Docker image serves `dist/` and passes `/api` to the runtime; compose runs it on port 8080.

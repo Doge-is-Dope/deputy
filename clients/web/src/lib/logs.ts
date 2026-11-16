@@ -52,6 +52,22 @@ function agentsOf(ends: EndEvent[]): AgentUsage[] {
   }))
 }
 
+/** `last` while `now` is the same logs with the same events: what is merged from it need not be merged again. */
+export function sameLogs(
+  last: readonly SessionLog[] | undefined,
+  now: readonly SessionLog[]
+): readonly SessionLog[] {
+  const same =
+    last?.length === now.length &&
+    now.every(
+      (log, at) =>
+        log.id === last[at].id &&
+        log.events === last[at].events &&
+        log.streamed === last[at].streamed
+    )
+  return same ? last : now
+}
+
 /**
  * A session's logs as the one list of events the conversation shows (lib/thread.ts), in the order they were written:
  * its first turn's start, the main agent's turns, and each task's work tagged with the task's id (`task`), between

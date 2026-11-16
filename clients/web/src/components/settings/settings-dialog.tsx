@@ -31,7 +31,6 @@ export type SettingsPage =
   | "memory"
   | "account"
 
-// What this browser keeps, then what the runtime runs with, in one list.
 // Pages are named in the interface's language. A page is its entry here: its icon, and what it shows. The search
 // finds them by name too.
 export const PAGES: {
@@ -84,16 +83,20 @@ export function SettingsDialog({
         initialFocus={popup}
         className="flex h-[min(40rem,calc(100dvh-2rem))] flex-col gap-0 overflow-hidden p-0 max-sm:h-dvh max-sm:max-w-full max-sm:rounded-none sm:max-w-4xl md:flex-row"
       >
-        <aside className="flex shrink-0 flex-col gap-3 border-b p-3 md:w-52 md:gap-2 md:border-r md:border-b-0 md:bg-sidebar">
-          <DialogTitle className="flex h-8 items-center px-2">
+        {/* pt-2.5: the title's middle level with the close button's, 26px down. The title starts where the icons' lines
+            do (pl-row-text), as the sidebar's headings do over theirs. */}
+        <aside className="flex shrink-0 flex-col gap-3 border-b p-3 pt-2.5 md:w-52 md:gap-2 md:border-r md:border-b-0 md:bg-sidebar">
+          <DialogTitle className="flex h-8 items-center pr-2.5 pl-row-text">
             {t.settings.title}
           </DialogTitle>
           {/* On a narrow screen the pages scroll sideways in a row, with no scrollbar track under them (Windows keeps
               one in view); the scrolling clips both ways, so py-1 leaves the focus ring room above and below. A page
-              half out of view is not scrolled to on focus, so it is brought in whole, its ring inside the padding. */}
+              half out of view is not scrolled to on focus, so it is brought in whole, its ring inside the padding.
+              The row fades out at its end, with the page there half in view, so it reads as going on; the room after
+              the last page keeps that one clear of the fade. */}
           <nav
             aria-label={t.settings.pages}
-            className="-mx-3 -my-1 flex scroll-px-3 [scrollbar-width:none] gap-1 overflow-x-auto px-3 py-1 md:m-0 md:flex-col md:gap-0.5 md:overflow-visible md:p-0"
+            className="-mx-3 -my-1 flex scroll-px-3 [scrollbar-width:none] overflow-x-auto py-1 pr-11 pl-3 max-md:[mask-image:linear-gradient(to_right,black_calc(100%-2.75rem),transparent)] md:m-0 md:flex-col md:gap-0.5 md:overflow-visible md:p-0"
           >
             {PAGES.map(({ id, icon: Icon }) => (
               <button
@@ -108,11 +111,11 @@ export function SettingsDialog({
                   })
                 }
                 className={cn(
-                  "flex h-8 shrink-0 items-center gap-2 rounded-md px-2.5 outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring md:h-9 md:px-2",
+                  "flex h-8 shrink-0 items-center gap-2 rounded-md pr-2.5 pl-row-icon outline-none hover:bg-sidebar-accent focus-visible:ring-2 focus-visible:ring-sidebar-ring max-md:px-2.25 md:gap-2.5",
                   id === page && "bg-sidebar-accent"
                 )}
               >
-                <Icon className="size-4 shrink-0" />
+                <Icon className="size-4 shrink-0 md:size-5" />
                 {t.settings[id]}
               </button>
             ))}

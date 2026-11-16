@@ -1,10 +1,12 @@
 """The Windows desktop agent."""
 
-import re
-from collections.abc import Callable, Iterable
+from collections.abc import Awaitable, Callable, Iterable
+from dataclasses import dataclass
 
 from langchain_core.messages import HumanMessage
+from langchain_core.tools import BaseTool
 
+from computer_use.agent.background import Refusal
 from computer_use.agent.inbox import SUBAGENT, Inbox
 from computer_use.agent.models import MAIN_AGENT, build_chat_model, chosen
 from computer_use.agent.review import Verdict, action_records, review_step
@@ -12,21 +14,25 @@ from computer_use.agent.subagent import Result, Subagent, TaskContext
 from computer_use.agent.trajectory import Trajectory
 from computer_use.computers import Computer, ComputerError
 from computer_use.config import Approvals
-from computer_use.desktop.control import ApprovalFile, Control
+from computer_use.desktop.control import ApprovalFile, Control, DesktopBusy, RunLock, release_input
 from computer_use.desktop.executor import ActionResult, Executor
 from computer_use.desktop.judge import ScreenJudge
-from computer_use.execution.approvals import MAX_DECLINES
-from computer_use.execution.desktop import DesktopExecution
+from computer_use.middleware.approvals import MAX_DECLINES, Confirmations
 from computer_use.middleware.chat import Mention
+from computer_use.middleware.desktop import DesktopMiddleware
 from computer_use.middleware.skills import SkillsMiddleware
+from computer_use.native.execution import Commands
+from computer_use.native.lease import WindowsTools
 from computer_use.prompts import notes
 from computer_use.prompts.computer import (
-    ABOUT, DESKTOP_ASKED, DESKTOP_HANDED, FIRST_SCREEN, LAST_SCREEN, stopped, system_prompt, typed_on,
+    ABOUT, DESKTOP_ASKED, DESKTOP_BUSY, DESKTOP_HANDED, FIRST_SCREEN, LAST_SCREEN, computer_in_use, desktop_offline,
+    SYSTEM_PROMPT, stopped, typed_on,
 )
 from computer_use.prompts.review import review_context
 from computer_use.storage import MAIN
 from computer_use.tools.common import image_block
-from computer_use.tools.desktop import content
+from computer_use.tools.desktop import content, desktop_tools, takeover_tool
+from computer_use.tools.native import command_tools
 
 
 def text_entry_screens(events: Iterable[dict], limit: int = 2) -> list[tuple[int, str]]:
@@ -78,11 +84,13 @@ class ComputerAgent(Subagent):
         control: Control,
         approvals: Callable[[], Approvals],
         judge: ScreenJudge | None = None,
+        windows: WindowsTools | None = None,
     ):
         super().__init__(context, log, taught)
         self.computer = computer
         self.control = control
         self.judge = judge
+        self.windows = windows if context.choices.commands else None
         # Read per step, so a change the user makes mid-run applies.
         self.approvals = approvals
 
@@ -95,20 +103,18 @@ class ComputerAgent(Subagent):
             self.stop_reason = "error"
             self.log.note(f"Stopped: the desktop could not be used: {error}", "unusable")
             reply, after = "", ActionResult(False, f"No screenshot: {error}")
-        actions = await self.steps()
-        result = [{"type": "text", "text": self.report(reply, actions)}]
+        screens = []
         if self._start is not None:
             for number, filename in text_entry_screens(await self.events_since(self._start)):
                 try:
                     png = await self.log.store.get_file(self.log.run, filename)
                 except FileNotFoundError:
                     continue
-                result.extend([{"type": "text", "text": typed_on(number)}, image_block(png)])
-        result.append({"type": "text", "text": after.text})
+                screens += [{"type": "text", "text": typed_on(number)}, image_block(png)]
+        screens.append({"type": "text", "text": after.text})
         if after.frame is not None:
-            result.append(image_block(after.frame.png))
-        # The artifact, which the model does not see, keeps the task's parts for the blackboard of later tasks.
-        return result, {"stop_reason": self.stop_reason, "reply": reply, "actions": actions}
+            screens.append(image_block(after.frame.png))
+        return await self.result(reply, content=screens)
 
     def how(self) -> str:
         return stopped(self.stop_reason, self.context.max_steps, MAX_DECLINES)
@@ -122,10 +128,6 @@ class ComputerAgent(Subagent):
         ]
 
     async def _run(self, task: str, told: Inbox) -> tuple[str, ActionResult]:
-        def announce(reason: str) -> None:
-            url = self.context.settings.web_url
-            self.log.note(f"Agent requests a takeover: {reason}\nOpen {url}", "takeoverRequested")
-
         board = await self.context.blackboard.read(self.task_id)
         today = notes.today(self.context.choices.timezone)
         text = f"{self.opening(task, board)}\n\n{today}"
@@ -140,22 +142,39 @@ class ComputerAgent(Subagent):
             main = build_chat_model(chosen(settings, MAIN_AGENT, self.context.choices.agents), settings)
             return await review_step(main, context, step, png, sources)
 
-        async with DesktopExecution(
-            self.computer, self.control, ApprovalFile(self.context.settings.approval_path), self.log, review,
-            lambda: self.approvals() == "auto", announce, self.context.settings.web_url, told, self.judge,
-        ) as execution:
-            executor = execution.executor
+        executor = Executor(self.computer, self.control, self.judge)  # fresh for each task, so nothing carries over
+        tools, guard = self._equipped(executor, told, review)
+        try:
+            if self.windows is not None:
+                await self.windows.ensure()
             start = self._start = HumanMessage(content=content(await executor.observe(f"{text}\n\n{FIRST_SCREEN}")))
             await self.log.input(start, "observe")
             choice = chosen(self.context.settings, self.agent, self.context.choices.agents)
             self.log.uses(choice.model, name=self.agent)
             reply = await self.invoke(
                 build_chat_model(choice, self.context.settings),
-                execution.tools,
-                system_prompt(self.context.choices.locale), execution.middleware, start,
+                tools,
+                SYSTEM_PROMPT, guard, start,
                 middleware=[SkillsMiddleware(self.agent)],
             )
             return reply, await self._after(executor)
+        finally:  # let go of whatever the task left held down, after its last screen
+            await release_input(self.control, self.computer, "agent")
+
+    def _equipped(
+        self, executor: Executor, told: Inbox, review: Callable[[str, bytes | None], Awaitable[Verdict]],
+    ) -> tuple[list[BaseTool], DesktopMiddleware]:
+        """A task's tools, and the guard that holds, stops and re-observes around them."""
+        settings = self.context.settings
+        confirm = Confirmations(ApprovalFile(settings.approval_path), self.control, executor, self.log, review,
+                                lambda: self.approvals() == "auto")
+        commands = command_tools(Commands(self.windows, executor)) if self.windows else []
+
+        def announce(reason: str) -> None:
+            self.log.note(f"Agent requests a takeover: {reason}\nOpen {settings.web_url}", "takeoverRequested")
+
+        tools = [*desktop_tools(executor), *commands, takeover_tool(self.control, self.computer, announce)]
+        return tools, DesktopMiddleware(executor, self.control, self.log, settings.web_url, confirm, told)
 
     async def _after(self, executor: Executor) -> ActionResult:
         try:
@@ -164,9 +183,37 @@ class ComputerAgent(Subagent):
             return ActionResult(False, f"No screenshot: {error}")
 
 
-# "@Computer" anywhere in a message, in any case, as a word of its own: not part of a longer word or of an email
-# address (me@computer.org). The page offers it in a list as the user types @.
-MENTION = Mention(
-    ComputerAgent.agent, re.compile(r"(?<![A-Za-z0-9_])@computer(?![A-Za-z0-9_])", re.IGNORECASE), DESKTOP_ASKED,
-    DESKTOP_HANDED,
-)
+@dataclass(frozen=True)
+class DesktopResource:
+    """The desktop a task holds while it runs: a hand-over starts it only while the computer is free and connected,
+    and the task keeps the run lock until it ends."""
+
+    computer: Computer
+    lock: RunLock
+
+    def in_use(self, task: str) -> Refusal:
+        return computer_in_use(task), "computerInUse"
+
+    async def unavailable(self) -> Refusal | None:
+        status = await self.computer.status()
+        return None if status.connected else (desktop_offline(status.detail), "disconnected")
+
+    def acquire(self, run: str) -> Refusal | None:
+        if self.lock.held:  # a message for the desktop took it as its run began
+            return None
+        try:
+            self.lock.acquire(run)
+        except DesktopBusy:
+            return DESKTOP_BUSY, "desktopBusy"
+        return None
+
+    def taken_by(self, run: str) -> None:
+        self.lock.name(run)
+
+    def release(self) -> None:
+        if self.lock.held:
+            self.lock.release()
+
+
+# A message sent to the desktop (the API's `computer`, as the CLI's run sends it) goes to the computer agent.
+MENTION = Mention(ComputerAgent.agent, DESKTOP_ASKED, DESKTOP_HANDED)

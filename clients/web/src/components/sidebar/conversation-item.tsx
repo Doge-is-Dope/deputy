@@ -5,7 +5,7 @@ import { cn } from "cn"
 import {
   SidebarMenuButton,
   SidebarMenuItem,
-  useSidebar,
+  useSidebarSheet,
 } from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
 import type { Conversation, Project } from "@/lib/api"
@@ -65,7 +65,7 @@ export const ConversationItem = memo(function ConversationItem({
   onNewProject: (conversation: Conversation) => void // move it into a new project
 }) {
   const t = useT()
-  const { isMobile, setOpenMobile } = useSidebar()
+  const { isMobile, setOpenMobile } = useSidebarSheet()
   // Enter or blur saves a changed, nonempty title; Escape cancels.
   const [draft, setDraft] = useState<string | null>(null)
   // The new name shows until the list has it, or the rename fails.
@@ -96,10 +96,7 @@ export const ConversationItem = memo(function ConversationItem({
         : { color: "bg-unread", label: t.sidebar.unread }
       : null
   const actionable = !active
-  const others = projects.filter(
-    (project) => project.id !== conversation.project
-  )
-  const own = projects.find((project) => project.id === conversation.project)
+  const rename = () => setDraft(given ?? nameOf(conversation))
   // Draggable onto a project or back to the recents (AppSidebar).
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `conversation:${conversation.id}`,
@@ -128,7 +125,9 @@ export const ConversationItem = memo(function ConversationItem({
         {...listeners}
         className={cn(
           "h-8 pointer-coarse:h-10",
-          inset && "pl-10",
+          inset ? "pl-row-nested" : "pl-row-text",
+          // Faint while its chip is carried, coming back as the chip does (HOME).
+          "transition-[width,height,padding,opacity]",
           isDragging && "opacity-50"
         )}
         isActive={selected}
@@ -184,81 +183,111 @@ export const ConversationItem = memo(function ConversationItem({
           onSave={commit}
           onCancel={() => setDraft(null)}
           className={cn(
-            "absolute inset-0 z-10 h-full w-full rounded-md bg-sidebar-accent px-2 text-sm text-sidebar-accent-foreground outline-none",
-            inset && "pl-10"
+            "absolute inset-0 z-10 h-full w-full rounded-md bg-sidebar-accent pr-2 text-sm text-sidebar-accent-foreground outline-none",
+            inset ? "pl-row-nested" : "pl-row-text"
           )}
         />
       )}
       {actionable && draft === null && (
-        // Shown on hover, keyboard focus or while open; always on touch screens.
-        <DropdownMenu>
-          <DropdownMenuTrigger
-            aria-label={t.sidebar.more}
-            className="absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-md text-muted-foreground outline-none group-hover/menu-item:opacity-100 group-has-[:focus-visible]/menu-item:opacity-100 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground data-popup-open:opacity-100 [@media(hover:hover)]:opacity-0"
-          >
-            <EllipsisIcon className="size-[18px]" />
-          </DropdownMenuTrigger>
-          {/* Opens out over the page, not held to the narrow sidebar. */}
-          <DropdownMenuContent align="start" finalFocus={false}>
-            {/* No focus back to the button (finalFocus): the rename input takes it. */}
-            <DropdownMenuItem
-              onClick={() => setDraft(given ?? nameOf(conversation))}
-            >
-              <PencilIcon />
-              {t.sidebar.renameConversation}
-            </DropdownMenuItem>
-            {/* New project first, removal from its own last. */}
-            <DropdownMenuSub>
-              <DropdownMenuSubTrigger>
-                <FolderIcon />
-                {t.sidebar.project}
-              </DropdownMenuSubTrigger>
-              <DropdownMenuContent
-                side="inline-end"
-                align="start"
-                sideOffset={0}
-                alignOffset={-4}
-                className="max-w-60"
-              >
-                <DropdownMenuItem onClick={() => onNewProject(conversation)}>
-                  <FolderPlusIcon />
-                  {t.sidebar.newProject}
-                </DropdownMenuItem>
-                {others.length > 0 && <DropdownMenuSeparator />}
-                {others.map((project) => (
-                  <DropdownMenuItem
-                    key={project.id}
-                    onClick={() => onMove(conversation, project.id)}
-                  >
-                    <FolderIcon />
-                    <span className="truncate">{project.name}</span>
-                  </DropdownMenuItem>
-                ))}
-                {own !== undefined && (
-                  <>
-                    <DropdownMenuSeparator />
-                    <DropdownMenuItem
-                      onClick={() => onMove(conversation, null)}
-                    >
-                      <FolderRemoveIcon />
-                      <span className="truncate">
-                        {t.sidebar.removeFromProject(own.name)}
-                      </span>
-                    </DropdownMenuItem>
-                  </>
-                )}
-              </DropdownMenuContent>
-            </DropdownMenuSub>
-            <DropdownMenuItem
-              variant="destructive"
-              onClick={() => onDelete(conversation)}
-            >
-              <TrashIcon />
-              {t.sidebar.deleteConversation}
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <ConversationMenu
+          conversation={conversation}
+          projects={projects}
+          onRename={rename}
+          onDelete={onDelete}
+          onMove={onMove}
+          onNewProject={onNewProject}
+        />
       )}
     </SidebarMenuItem>
+  )
+})
+
+/** A row's menu: rename, move to a project or out of its own, delete. Shown on hover, keyboard focus or while open;
+ * always on touch screens. Apart from the row and memoized: a drag renders every row again as it starts and ends,
+ * and the menus are most of a row. */
+const ConversationMenu = memo(function ConversationMenu({
+  conversation,
+  projects,
+  onRename,
+  onDelete,
+  onMove,
+  onNewProject,
+}: {
+  conversation: Conversation
+  projects: Pick<Project, "id" | "name">[]
+  onRename: () => void // its name's field opens
+  onDelete: (conversation: Conversation) => void
+  onMove: (conversation: Conversation, project: string | null) => void
+  onNewProject: (conversation: Conversation) => void
+}) {
+  const t = useT()
+  const others = projects.filter(
+    (project) => project.id !== conversation.project
+  )
+  const own = projects.find((project) => project.id === conversation.project)
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger
+        aria-label={t.sidebar.more}
+        className="absolute inset-y-0 right-0 flex w-8 items-center justify-center rounded-md text-muted-foreground outline-none group-hover/menu-item:opacity-100 group-has-[:focus-visible]/menu-item:opacity-100 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring data-popup-open:bg-sidebar-accent data-popup-open:text-sidebar-accent-foreground data-popup-open:opacity-100 [@media(hover:hover)]:opacity-0"
+      >
+        <EllipsisIcon className="size-[18px]" />
+      </DropdownMenuTrigger>
+      {/* Opens out over the page, not held to the narrow sidebar. */}
+      <DropdownMenuContent align="start" finalFocus={false}>
+        {/* No focus back to the button (finalFocus): the rename input takes it. */}
+        <DropdownMenuItem onClick={onRename}>
+          <PencilIcon />
+          {t.sidebar.renameConversation}
+        </DropdownMenuItem>
+        {/* New project first, removal from its own last. */}
+        <DropdownMenuSub>
+          <DropdownMenuSubTrigger>
+            <FolderIcon />
+            {t.sidebar.project}
+          </DropdownMenuSubTrigger>
+          <DropdownMenuContent
+            side="inline-end"
+            align="start"
+            sideOffset={0}
+            alignOffset={-4}
+            className="max-w-60"
+          >
+            <DropdownMenuItem onClick={() => onNewProject(conversation)}>
+              <FolderPlusIcon />
+              {t.sidebar.newProject}
+            </DropdownMenuItem>
+            {others.length > 0 && <DropdownMenuSeparator />}
+            {others.map((project) => (
+              <DropdownMenuItem
+                key={project.id}
+                onClick={() => onMove(conversation, project.id)}
+              >
+                <FolderIcon />
+                <span className="truncate">{project.name}</span>
+              </DropdownMenuItem>
+            ))}
+            {own !== undefined && (
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onClick={() => onMove(conversation, null)}>
+                  <FolderRemoveIcon />
+                  <span className="truncate">
+                    {t.sidebar.removeFromProject(own.name)}
+                  </span>
+                </DropdownMenuItem>
+              </>
+            )}
+          </DropdownMenuContent>
+        </DropdownMenuSub>
+        <DropdownMenuItem
+          variant="destructive"
+          onClick={() => onDelete(conversation)}
+        >
+          <TrashIcon />
+          {t.sidebar.deleteConversation}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   )
 })

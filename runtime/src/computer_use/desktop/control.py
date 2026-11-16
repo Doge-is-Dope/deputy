@@ -39,11 +39,9 @@ class ControlState:
     owner: Owner
     since: float
     reason: str = ""
-    ready: bool = True
 
     def allows_input(self, owner: Owner) -> bool:
-        """Human input needs ownership; agent input also respects an implementation's readiness barrier."""
-        return self.owner == owner and (owner == "user" or self.ready)
+        return self.owner == owner
 
 
 class Control(Protocol):
@@ -51,31 +49,23 @@ class Control(Protocol):
     def write(self, owner: Owner, reason: str = "") -> ControlState: ...
     def locked(self) -> AbstractAsyncContextManager[ControlState]: ...
     async def wait_for_agent(self) -> float | None: ...
-    async def synchronize(self, state: ControlState) -> None: ...
 
 
 class ControlSyncError(ComputerError):
-    """The desktop is unavailable or a work barrier still prevents returning control."""
+    """The desktop cannot be observed, so control is not returned to the agent."""
 
 
 class ControlFile:
-    """Controller-owned desktop state, independent of optional remote tool services."""
+    """Who has the desktop, in a file so every server sharing it sees the same owner."""
 
     def __init__(self, path: Path):
         self.path = path
 
-    def requested(self) -> ControlState:
+    def read(self) -> ControlState:
         try:
             return ControlState(**json.loads(self.path.read_text()))
         except FileNotFoundError:  # never switched: the agent's since the start of time
             return ControlState("agent", 0.0)
-
-    def read(self) -> ControlState:
-        return self.requested()
-
-    async def synchronize(self, state: ControlState) -> None:
-        # Local state needs no acknowledgement; other Controls may enforce work barriers.
-        return
 
     def write(self, owner: Owner, reason: str = "") -> ControlState:
         state = ControlState(owner, time.time(), reason)
@@ -100,7 +90,7 @@ class ControlFile:
             yield self.read()
 
     async def wait_for_agent(self) -> float | None:
-        """Wait for acknowledged agent ownership; return time since the blocked revision, or None if already ready."""
+        """Wait until the agent has the desktop; how long since the user took it, or None if the agent had it."""
         state = self.read()
         if state.allows_input("agent"):
             return None
@@ -200,14 +190,8 @@ async def hand_over(control: Control, computer: Computer, owner: Owner, reason: 
                 raise ControlSyncError("Observe the desktop successfully before returning desktop control.") from error
             if not status.connected:
                 raise ControlSyncError("Reconnect the desktop before returning desktop control.")
-        state = control.write(owner, reason)
+        control.write(owner, reason)
         await let_go(computer)
-        if owner == "agent":
-            try:
-                await control.synchronize(state)
-            except (Exception, asyncio.CancelledError):
-                control.write("user", "desktop control synchronization interrupted")
-                raise
     return control.read()
 
 
@@ -238,7 +222,7 @@ class RunLock:
     """Cross-process lock held only while a run uses the desktop.
 
     The kernel releases it on process exit, including crashes. The file records the
-    run and PID so other processes can display and stop the owner."""
+    run and PID so other processes can show which run has the desktop, and tell a crashed holder's file apart."""
 
     def __init__(self, path: Path):
         self.path = path

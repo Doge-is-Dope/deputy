@@ -13,7 +13,7 @@ from langchain_core.messages import HumanMessage
 
 from computer_use.agent.failures import error_code
 from computer_use.agent.inbox import Inbox
-from computer_use.agent.subagent import Result, StopReason
+from computer_use.agent.subagent import Result
 from computer_use.agent.trajectory import Trajectory
 from computer_use.events import ActionReason
 from computer_use.prompts import notes
@@ -52,7 +52,6 @@ class Job:
     task: asyncio.Task
     title: str = ""
     heard: int = 0  # the user's messages it has heard of, from its brief and what it was told since
-    stopped: bool = False  # the main agent stopped it
     missed: list[str] = field(default_factory=list)  # what it was told and ended before reading
     plan_steps: Sequence[str] = ()  # the ids of the plan's steps it was handed
     plan_note: str = ""  # how the plan stands once it ended, said after its result
@@ -101,7 +100,6 @@ class Background:
         self.asked: list[tuple[Job, str]] = []  # what tasks asked the main agent, which it has not heard yet
         self.starting = asyncio.Lock()  # held while a task is handed over
         self.told: list[HumanMessage] = []  # what to tell the main agent at its next call, without waking it
-        self.latest: dict[str, StopReason | None] = {}  # how each agent's latest task ended
         self._changed = asyncio.Event()
 
     @property
@@ -195,7 +193,6 @@ class Background:
         log's end."""
         jobs = [self.jobs[id]] if id is not None else list(self.jobs.values())
         for job in jobs:
-            job.stopped = True
             job.task.cancel(by)
         await asyncio.gather(*(job.task for job in jobs), return_exceptions=True)
 

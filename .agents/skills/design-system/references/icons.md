@@ -14,7 +14,7 @@ come from**.
   and menu icons by their slot). Never set a stroke width on a drawn path; only a mask's cut has one
   (`OfflineIcon`).
 - Fill only where it carries meaning: the agent's solid pointer (`CursorEnterIcon`, as on the favicon), the stop
-  square, the ellipsis dots (dots, so they stay round at 16px), the provider marks and `ComputerLogo`. No
+  square, the ellipsis dots (dots, so they stay round at 16px), and the provider marks. No
   filled status
   icons: a filled glyph among line icons reads as wrong.
 - Use a `useId()` mask for slashes and cutouts. Keep a flat cut along the slash with equal spacing on both sides,
@@ -32,7 +32,6 @@ come from**.
 | 18px | The sidebar row's "more" ellipsis. |
 | 16px | Step lines and status marks (`TraceIcon`), menu items, provider marks in the usage details, copy buttons, the settings navigation, select chevrons, the notice's close cross. |
 | 14px | Row chevrons that fold a step open, the stacked agent heads. |
-| 1em | The @Computer logo in a message and the composer: the size of the text around it. |
 
 Set a size with a `size-*` class on the icon, or let the container's rule size it; do not pass `width`/`height`.
 
@@ -47,7 +46,7 @@ at 1.33 px for 20px) in grid units:
   swaps in
   place with the plan's status circles.
 - Smaller by nature, and left so: chevrons, the close cross, arrows, the check, the stop square, the ellipsis, the
-  mouse (`ScrollIcon`, narrow), the keyboard (flat). The provider marks and `ComputerLogo` fill all 24, as
+  mouse (`ScrollIcon`, narrow), the keyboard (flat). The provider marks fill all 24, as
   their makers
   draw them.
 

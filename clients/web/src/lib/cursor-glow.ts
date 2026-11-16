@@ -1,6 +1,6 @@
 import { buildFullCanvas, drawingRatio, releaseFullCanvas } from "@/lib/webgl"
 
-/** Recolors the cursor's existing drop shadows; the silhouette and blur stay exactly the same. */
+/** The agent pointer's outline in its 24px SVG. The glow recolors that pointer's drop shadows, keeping their shape. */
 export const CURSOR_PATH = "M3.85 3.85 16.65 8.65 10.89 10.89 8.65 16.65Z"
 
 // The glow's colors: base + amp * cos(phase + offset), a phase that runs on GLOW_SPEED radians a second and grows

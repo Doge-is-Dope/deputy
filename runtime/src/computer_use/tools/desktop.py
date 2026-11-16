@@ -1,6 +1,6 @@
 """Model-facing desktop tools, batches and takeover requests.
 
-Input actions return a fresh screenshot; execution.approvals holds the calls flagged for approval."""
+Input actions return a fresh screenshot; middleware.approvals holds the calls flagged for approval."""
 
 import json
 from collections.abc import Callable
@@ -94,7 +94,7 @@ def desktop_tools(executor: Executor) -> list[BaseTool]:
         """
         return await run("zoom", call_id, region=region)
 
-    # The input tools take needs_confirmation and consequence for `execution.approvals`, after their own arguments; neither
+    # The input tools take needs_confirmation and consequence for `middleware.approvals`, after their own arguments; neither
     # reaches the executor.
     def click_tool(name: str, what: str) -> BaseTool:
         async def click(

@@ -2,8 +2,8 @@ import type { Approvals, Choice, Status } from "@/lib/api"
 import { EFFORTS } from "@/lib/efforts"
 import { store } from "@/lib/store"
 
-// Browser-owned model, effort, approval and memory choices, sent with each message.
-// Reset restores status.defaults. Model changes apply next run; approval changes
+// Browser-owned model, effort, approval, memory and command choices, sent with each message.
+// Reset restores status.defaults. Model and command changes apply next run; approval changes
 // apply to the active run's next flagged step.
 
 /** A subagent's model or effort that is the main agent's, whatever that is (the runtime's config.FOLLOW). */
@@ -19,6 +19,8 @@ export type Choices = {
   agents: Chosen
   approvals: Approvals
   memory: MemoryChoice
+  /** Whether the desktop agent may run commands on Windows, where the runtime has a host for them. */
+  commands: boolean
 }
 
 const AGENTS_KEY = "agents"
@@ -26,12 +28,14 @@ const APPROVALS_KEY = "approvals"
 // Each kept only while it is off: on is how it starts.
 const LEARN_KEY = "memory-learn"
 const USE_KEY = "memory-use"
-const KEYS = [AGENTS_KEY, APPROVALS_KEY, LEARN_KEY, USE_KEY]
+const COMMANDS_KEY = "windows-commands"
+const KEYS = [AGENTS_KEY, APPROVALS_KEY, LEARN_KEY, USE_KEY, COMMANDS_KEY]
 
 function load(): Choices {
   let agents: Chosen = {}
   let approvals: Approvals = "ask"
   const memory = { learn: true, use: true }
+  let commands = true
   try {
     const parsed: unknown = JSON.parse(localStorage.getItem(AGENTS_KEY) ?? "{}")
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
@@ -39,10 +43,11 @@ function load(): Choices {
     if (localStorage.getItem(APPROVALS_KEY) === "auto") approvals = "auto"
     memory.learn = localStorage.getItem(LEARN_KEY) !== "off"
     memory.use = localStorage.getItem(USE_KEY) !== "off"
+    commands = localStorage.getItem(COMMANDS_KEY) !== "off"
   } catch {
     // Nothing stored, or nothing readable: everything as it starts.
   }
-  return { agents, approvals, memory }
+  return { agents, approvals, memory, commands }
 }
 
 const state = store(load())
@@ -57,6 +62,7 @@ function save(next: Choices) {
     for (const [key, on] of [
       [LEARN_KEY, next.memory.learn],
       [USE_KEY, next.memory.use],
+      [COMMANDS_KEY, next.commands],
     ] as const)
       if (on) localStorage.removeItem(key)
       else localStorage.setItem(key, "off")
@@ -133,6 +139,10 @@ export function resetModels() {
 
 export function setApprovals(approvals: Approvals) {
   save({ ...state.get(), approvals })
+}
+
+export function setCommands(commands: boolean) {
+  save({ ...state.get(), commands })
 }
 
 export function setMemory(change: Partial<MemoryChoice>) {

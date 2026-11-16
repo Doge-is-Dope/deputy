@@ -2,7 +2,6 @@
 it, the limit on hand-overs, and every message logged as it arrives."""
 
 import asyncio
-import re
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 
@@ -32,20 +31,17 @@ MENTION_TITLE = 20
 
 @dataclass(frozen=True)
 class Mention:
-    """How the user sends a message to an agent by naming it, and what the main agent hears of it: that it hands the
-    message over in this reply (`asked`), or that the runtime did as it did not (`handed`)."""
+    """The agent a message the user sends straight to it goes to, and what the main agent hears of it: that it hands
+    the message over in this reply (`asked`), or that the runtime did as it did not (`handed`)."""
 
     agent: str
-    words: re.Pattern
     asked: str
     handed: str
 
-    def said(self, message: str) -> bool:
-        return self.words.search(message) is not None
-
-    def title(self, message: str) -> str:
-        """The title of a message the runtime hands over itself: its first words, without the mention."""
-        words = " ".join(self.words.sub("", message).split())
+    @staticmethod
+    def title(message: str) -> str:
+        """The title of a message the runtime hands over itself: its first words."""
+        words = " ".join(message.split())
         return words if len(words) <= MENTION_TITLE else words[:MENTION_TITLE - 1] + "…"
 
 
@@ -100,7 +96,7 @@ class RestartingDraft(AgentMiddleware):
 
 
 class ChatMiddleware(AgentMiddleware):
-    """Handle steering, task reports, delegation limits, messages that name an agent, and logging."""
+    """Handle steering, task reports, delegation limits, a message sent straight to an agent, and logging."""
 
     def __init__(
         self, log: Trajectory, inbox: Inbox, background: Background, given: int, mentioned: set[str], draft: Draft,
@@ -112,22 +108,21 @@ class ChatMiddleware(AgentMiddleware):
         self.inbox = inbox
         self.background = background
         self.given = given  # messages the turn started with, logged already
-        self.mentioned = mentioned  # the ids of the user's messages that name an agent, not handed over yet
+        self.mentioned = mentioned  # the ids of the user's messages sent straight to an agent, not handed over yet
         self.hand_mentioned = hand_mentioned  # hands such messages over when the main agent's reply does not
-        self.date = date  # fixed for the run, appended after the rules and recalled memory
+        self.date = date  # fixed for the session, appended after the rules and recalled memory
         self.notes: list[HumanMessage] = []  # the runtime's words for its next call, after its last calls' results
         self.draft = draft
         self.busy = False  # whether tasks ran when the main agent's model was last called
         self.idle = idle  # its replies written while none ran, whose hand-overs count (over_limit), across turns
         self.calls = calls  # its task tools' calls under way, each to finish even if the turn is stopped
-        self.mention = mention  # how the user names an agent, if they can
+        self.mention = mention  # the agent such messages go to, if any
 
     @hook_config(can_jump_to=["end"])
     async def abefore_model(self, state, runtime) -> dict | None:
         """Inject what arrived since the last call: task reports, the runtime's notes, and the user's messages word for
-        word. A message naming a free agent comes with the runtime's word that it does; one naming an agent at work is
-        the main agent's to pass on. With none, a turn that has just handed work over or told a task something ends
-        there: nothing asks the main agent for more until a task ends or the user writes."""
+        word. With none, a turn that has just handed work over or told a task something ends there: nothing asks the
+        main agent for more until a task ends or the user writes."""
         messages = self.background.reports()
         for message in messages:
             await self.log.input(message, "task-ended", MAIN)
@@ -140,10 +135,6 @@ class ChatMiddleware(AgentMiddleware):
             message = HumanMessage(content=each.text, id=each.id)
             await self.log.input(message, "message", MAIN)
             messages.append(message)
-            if self.names_a_free_agent(each.text):
-                self.mentioned.add(each.id)
-                messages.append(asked := runtime_message(self.mention.asked, "mention_asked"))
-                await self.log.input(asked, "mention-asked", MAIN)
         if sent and (status := await self.background.status()) is not None:
             await self.log.input(status, "task-status", MAIN)
             messages.append(status)
@@ -159,10 +150,6 @@ class ChatMiddleware(AgentMiddleware):
         if any(result.name in (START_TASK, TELL_TASK, ASK_USER) and result.status != "error" for result in results):
             return {"jump_to": "end"}
         return None
-
-    def names_a_free_agent(self, message: str) -> bool:
-        return (self.mention is not None and self.mention.said(message)
-                and self.background.working(self.mention.agent) is None)
 
     async def awrap_model_call(self, request, handler):
         self.busy = self.background.running
@@ -186,7 +173,7 @@ class ChatMiddleware(AgentMiddleware):
         return None
 
     async def to_the_mentioned(self, messages: list[BaseMessage], reply: AIMessage) -> dict | None:
-        """The user's messages that name an agent go to it: by the main agent's reply, or, when the reply hands none
+        """The user's message sent straight to an agent goes to it: by the main agent's reply, or, when the reply hands none
         over (a plan written first is not that reply yet), by the runtime, as they are. The main agent hears so at once
         when its reply called nothing, else after the results of what it called."""
         if {call["name"] for call in reply.tool_calls} == {WRITE_PLAN}:

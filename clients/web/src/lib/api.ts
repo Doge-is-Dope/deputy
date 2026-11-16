@@ -1,11 +1,9 @@
 // The runtime's HTTP API (runtime/src/computer_use/server.py) and the events a run writes to its log.
 
 import { currentChoices } from "@/lib/choices"
-import { locale } from "@/lib/i18n"
 import { answered } from "@/lib/session"
 
 export type Owner = "agent" | "user"
-// How a run ended: the main agent replied, or the run was stopped (from the page or with Ctrl-C) or failed.
 // How a log ended: a turn's ("replied", "cancelled", "error"), or a task's ("ended", "stopped", "error").
 export type StopReason = "replied" | "cancelled" | "error" | "ended" | "stopped"
 // Why a run failed, as the runtime codes it (agent/failures.py, which says what each covers). The page says each in
@@ -38,26 +36,28 @@ export type Status = {
   computer: { connected: boolean; detail: string }
   // Where the coding agent's commands run; null when the runtime has none, and then no coding agent either.
   code_runner: { connected: boolean; detail: string } | null
+  /** Commands on the Windows machine itself; null when no host is set. */
+  windows_tools: { connected: boolean; detail: string } | null
   ice_servers: RTCIceServer[] // for the live view; a TURN server when the runtime runs in Docker
 }
 
 /**
  * A session in progress (agent/session.py): the user's message, the main agent's turns and the tasks they hand over,
- * until it is quiet. Only web runs accept steering messages and report unread inbox entries.
+ * until it is quiet.
  */
 export type Running = {
   run: string // its first turn's log, which names the session
   thread: string
-  goal?: string // the message it began with, for a page that did not send it
+  goal: string // the message it began with, for a page that did not send it
   turn: string | null // the log of the main agent's turn under way, if one is
   tasks: string[] // the logs of its tasks at work
-  pending?: Pending[] // sent while it works, steering it, not read by its agents yet
-  queued?: Pending[] // sent to wait for it to end, which then starts the next session with them
-  read?: string[] // the ids of the messages its agents have read
+  pending: Pending[] // sent while it works, steering it, not read by its agents yet
+  queued: Pending[] // sent to wait for it to end, which then starts the next session with them
+  read: string[] // the ids of the messages its agents have read
 }
 export type Pending = { id: string; text: string }
 
-/** A step the computer-use agent asks the user to approve before it is sent (agent/confirm.py). */
+/** A step the computer-use agent asks the user to approve before it is sent (middleware/approvals.py). */
 export type Approval = {
   id: string // the tool call's: an answer approves only this step
   run: string
@@ -128,9 +128,6 @@ export type NoteCode =
   | "unusable"
   | "runnerUnusable"
   | "takeoverRequested"
-  | "runFinished"
-  | "runStopped"
-  | "runFailed"
   | "goal"
   | "memoryUsed"
 
@@ -166,7 +163,7 @@ export type RunEvent = { time: number; task?: string } & (
       agent?: string // a task's agent
       title?: string // a task's title
       goal: string // a turn's user message, a task's brief
-      computer?: boolean // the message was for the desktop (@Computer, or the command line)
+      computer?: boolean // the message was sent to the desktop (the command line's run)
       approvals?: Approvals // how the user chose, when they sent it, to have its steps approved; each confirm says
       // how it was as that step came up
     }
@@ -182,7 +179,12 @@ export type RunEvent = { time: number; task?: string } & (
       }
     }
   // A message the runtime gave an agent; what it said stays in the runtime, which restores the conversation from it.
-  | { type: "input"; agent?: "main" }
+  | {
+      type: "input"
+      agent?: "main"
+      // What the user attached to the message: files of the run, each with the name it was sent under
+      attachments?: { file: string; name: string }[]
+    }
   // A message the user sent while the run worked, logged once an agent read it (agent/inbox.py)
   | { type: "message"; id: string; text: string; sent: number }
   // The conversation's name, made from its first message in the background (agent/title.py)
@@ -296,18 +298,11 @@ export type BusyReason = "desktop" | "conversation"
 
 export class ApiError extends Error {
   status: number
-  run?: string
   reason?: BusyReason
 
-  constructor(
-    status: number,
-    message: string,
-    run?: string,
-    reason?: BusyReason
-  ) {
+  constructor(status: number, message: string, reason?: BusyReason) {
     super(message)
     this.status = status
-    this.run = run
     this.reason = reason
   }
 }
@@ -315,7 +310,9 @@ export class ApiError extends Error {
 export async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     ...init,
-    headers: init?.body ? { "Content-Type": "application/json" } : undefined,
+    headers:
+      init?.headers ??
+      (init?.body ? { "Content-Type": "application/json" } : undefined),
   })
   answered(response)
   const data = await response.json().catch(() => ({}))
@@ -323,7 +320,6 @@ export async function request<T>(path: string, init?: RequestInit): Promise<T> {
     throw new ApiError(
       response.status,
       data.error ?? response.statusText,
-      data.run,
       data.reason
     )
   }
@@ -371,33 +367,38 @@ export const api = {
     request<{ deleted: string }>(`/api/projects/${project}`, {
       method: "DELETE",
     }),
-  // The conversations whose words hold the query (storage.said), most recently active first, one hit each.
-  search: (query: string, signal?: AbortSignal) =>
-    request<SearchHit[]>(`/api/search?q=${encodeURIComponent(query)}`, {
-      signal,
-    }),
-  // Start or continue a conversation; steer its active web run when one exists, or `queue` the message for the run
-  // after it.
-  // takeControl transfers ownership only after acquiring the desktop.
-  // Send browser choices, locale and time zone with each message.
-  // A new conversation begins in `project` when given; a message into a conversation stays in its own.
+  // A page of the conversations whose name or words hold the query (storage.said), most recently active first, one
+  // hit each; `before` is the page before's `next`.
+  search: (query: string, before?: string | null, signal?: AbortSignal) => {
+    const params = new URLSearchParams({ q: query })
+    if (before) params.set("before", before)
+    return request<Page<SearchHit>>(`/api/search?${params}`, { signal })
+  },
+  // Starts or continues a conversation: a message sent while its run works steers that run, or with `queue` waits for
+  // it to end. A new conversation begins in `project` when given; a message into a conversation stays in its own.
   start: (
     goal: string,
     thread?: string,
-    takeControl = false,
     project?: string,
-    queue = false
+    queue = false,
+    attachments: string[] = []
   ) =>
     post<Started>("/api/runs", {
       goal,
       ...(thread && { thread }),
-      ...(takeControl && { take_control: true }),
+      ...(attachments.length > 0 && { attachments }),
       ...(queue && { queue: true }),
       ...(project && !thread && { project }),
       ...currentChoices(),
-      locale: locale(),
       // Today's date, for the agents, as the user's clock says it.
       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+    }),
+  // Keeps a file the user is about to attach (runtime attachments.py): its id, which `start` then names.
+  upload: (file: Blob, name: string) =>
+    request<{ id: string }>(`/api/uploads?name=${encodeURIComponent(name)}`, {
+      method: "POST",
+      body: file,
+      headers: { "Content-Type": file.type },
     }),
   // Stops the conversation's session in progress: the main agent's turn and every task.
   stop: (thread: string) => post(`/api/conversations/${thread}/stop`),
@@ -447,8 +448,8 @@ export type SearchHit = { conversation: Conversation; snippet: string | null }
 // The run: a new one, or for a message sent while the conversation's run works, that run and the message's id.
 export type Started = { id: string; thread: string; message?: string }
 
-// How the reason starts when someone took the desktop themselves, then the client they did it from (runtime server.py).
-// Any other reason is the agent's own, given when it asked them to take over (agent/tools.py).
+// How the reason starts when someone took the desktop themselves, then the client they did it from
+// (desktop/routes.py). Any other reason is the agent's own, given when it asked them to take over (request_takeover).
 const TAKEN_OVER = "taken over from "
 
 /** Pending approval or requested takeover for the desktop owner.
@@ -514,11 +515,10 @@ export const approvalFor = (status: Status | null, logs: readonly string[]) =>
     ? status.approval
     : null
 
-/** Whether a message is for the desktop: it mentions @Computer, as the runtime reads it (agent/main_agent.py). */
-export const forComputer = (message: string) =>
-  /(?<![A-Za-z0-9_])@computer(?![A-Za-z0-9_])/i.test(message)
-
 export const eventsUrl = (run: string) => `/api/runs/${run}/events`
+/** An upload as it was kept, before its message goes (runtime attachments.py). */
+export const uploadUrl = (id: string) => `/api/uploads/${id}`
+
 // A screenshot, or with a width, a small copy of it for a thumbnail (server.py): a few kilobytes, not a few hundred.
 // A name another log of the session wrote says which (lib/logs.ts): "<log>/<file>".
 export function screenshotUrl(run: string, name: string, width?: number) {

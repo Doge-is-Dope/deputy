@@ -17,9 +17,10 @@ import { useT } from "@/lib/i18n"
 // How long the pointer rests on a thumbnail before it shows, in milliseconds.
 const PEEK_DELAY = 400
 
-// The round buttons over the dark backdrop, light in both themes.
+// The round buttons over the backdrop and, on a narrow screen, over the picture's edge: solid and light in both
+// themes. One that has nowhere to go is not there.
 const ROUND =
-  "rounded-full bg-white/10 text-white hover:bg-white/20 hover:text-white dark:hover:bg-white/20 disabled:opacity-30"
+  "rounded-full bg-white/90 text-black hover:bg-white hover:text-black dark:hover:bg-white disabled:invisible"
 
 /**
  * A screen's thumbnail that shows the screen larger above it while the pointer rests on it;
@@ -75,7 +76,7 @@ export function ScreenshotPeek({
 
 /**
  * A run's screenshots full screen over the page, one at a time: the arrow keys step through
- * them, Escape or a click beside the screen closes it.
+ * them, Escape or a click beside the screen closes it. A picture that is not a run's file says where it is (`src`).
  */
 export function ScreenshotViewer({
   run,
@@ -83,8 +84,8 @@ export function ScreenshotViewer({
   index,
   onIndexChange,
 }: {
-  run: string
-  shots: Shot[]
+  run?: string
+  shots: (Shot & { src?: string })[]
   index: number | null
   onIndexChange: (index: number | null) => void
 }) {
@@ -120,19 +121,20 @@ export function ScreenshotViewer({
           {shot && shown !== null && (
             <>
               <img
-                src={screenshotUrl(run, shot.name)}
+                src={shot.src ?? screenshotUrl(run!, shot.name)}
                 alt={shot.label}
                 className="max-h-[calc(100dvh-7rem)] max-w-[calc(100vw-2rem)] rounded-lg bg-muted shadow-2xl sm:max-w-[calc(100vw-9rem)]"
               />
               <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center gap-2 px-4 pb-4 text-sm text-white">
-                <DialogPrimitive.Title className="min-w-0 truncate">
-                  {shot.label}
-                </DialogPrimitive.Title>
+                {/* Which of how many first, so a long name that is cut never takes it with it. */}
                 {many && (
-                  <DialogPrimitive.Description className="text-white/60 tabular-nums">
+                  <DialogPrimitive.Description className="shrink-0 text-white/60 tabular-nums">
                     {shown + 1} / {shots.length}
                   </DialogPrimitive.Description>
                 )}
+                <DialogPrimitive.Title className="min-w-0 truncate">
+                  {shot.label}
+                </DialogPrimitive.Title>
               </div>
               {many && (
                 <>

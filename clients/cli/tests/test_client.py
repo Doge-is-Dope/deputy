@@ -32,10 +32,23 @@ def test_a_message_sends_only_what_was_given(api, client):
     client.start("open start")
     client.start("open start", thread="r0", project="eval", max_steps=5, computer=True,
                  agents={"main": {"model": "openai:gpt-6-luna"}})
-    first, second = (request["body"] for request in api.sent("POST", "/api/runs"))
+    client.start("open start", computer=True, commands=False, attachments=["u1"])
+    first, second, third = (request["body"] for request in api.sent("POST", "/api/runs"))
     assert first == {"goal": "open start", "computer": False}
     assert second == {"goal": "open start", "computer": True, "thread": "r0", "project_name": "eval", "max_steps": 5,
                       "agents": {"main": {"model": "openai:gpt-6-luna"}}}
+    assert third == {"goal": "open start", "computer": True, "commands": False, "attachments": ["u1"]}
+
+
+def test_an_upload_sends_the_files_bytes_typed_by_its_name(api, client, tmp_path):
+    api.on("POST", "/api/uploads?name=a+b.png", 201, {"id": "u1"})
+    api.on("POST", "/api/uploads?name=data.unknownext", 201, {"id": "u2"})
+    (tmp_path / "a b.png").write_bytes(b"png bytes")
+    (tmp_path / "data.unknownext").write_bytes(b"rows")
+    assert [client.upload(tmp_path / "a b.png"), client.upload(tmp_path / "data.unknownext")] == ["u1", "u2"]
+    picture, other = api.requests
+    assert (picture["headers"]["Content-Type"], picture["body"]) == ("image/png", b"png bytes")
+    assert other["headers"]["Content-Type"] == "application/octet-stream"  # any file: the coding agent opens it
 
 
 def test_events_after_an_index_ask_for_only_those(api, client):

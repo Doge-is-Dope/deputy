@@ -65,7 +65,10 @@ user's next message is the answer."""
 ASK_QUESTION = "The question, in one or two short sentences in the user's language."
 ASK_OPTIONS = "The answers to choose from, the one you recommend first; leave out when you have none to offer."
 ASK_MULTIPLE = "Whether the user may choose several options."
-ASK_PLACEHOLDER = "For an answer the user types: what to enter, or an example, in a few words."
+ASK_SUGGESTION = (
+    "For an answer the user types, when you give no options: the answer you expect, written as the user would send "
+    "it, in their language. The empty message box shows it, for the user to take or change."
+)
 OPTION_LABEL = "The answer, in a few words in the user's language; sent as the user's message when chosen."
 OPTION_REASON = (
     "One short sentence on why to choose it, or what choosing it means. Do not say it is recommended: the card marks "
@@ -96,9 +99,8 @@ READ_BLACKBOARD_TOOL = (
     "has changed, such as before work another task may be doing; not on every step."
 )
 FINISH_STEP_TOOL = (
-    "Report steps of the plan done, as you finish each one and the last one too, so the user sees your progress and "
-    "other tasks know. Only you can tell: nothing marks a step done for you. Do not report one you did not finish or "
-    "that was called off."
+    "Report steps of the plan done, so the user sees your progress and other tasks know. Only you can tell: nothing "
+    "marks a step done for you. Do not report one you did not finish or that was called off."
 )
 FINISHED_STEPS = "The ids of the steps you have finished."
 ASK_TOOL = (
@@ -112,8 +114,8 @@ ASK_QUESTION_TO_MAIN = "The question, with what you found and what you would do,
 PLAN_STEPS = "The whole plan, in order."
 STEP_ID = "A short id of your choosing, such as 1 or 2, that start_task and needs refer to. Keep it when you rewrite."
 STEP_TITLE = (
-    "One short sentence in the user's language saying what the step achieves, in about 7 words (15 Chinese "
-    "characters). No URLs, button names or values: the agent doing it finds those on the screen."
+    "One short sentence in the user's language saying what the step achieves, in about 7 words. No "
+    "URLs, button names or values: the agent doing it finds those on the screen."
 )
 STEP_DONE_WHEN = "How to tell the step is done, in a few words."
 STEP_NEEDS = "The ids of the steps that must be done before this one."
@@ -121,4 +123,4 @@ STEP_DONE = "true if this step is done and no agent reported it."
 STEP_REOPEN = "true if this step is marked done but the work is not."
 
 # What a hand-over's title says: the user sees it for the task, while the agent reads the task itself.
-TITLE = "What the task achieves, for the user to see, in their language, in about 5 words (10 Chinese characters)."
+TITLE = "What the task achieves, for the user to see, in their language, in about 5 words."

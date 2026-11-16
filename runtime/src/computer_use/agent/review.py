@@ -63,7 +63,7 @@ def allows(review: Review, sources: Sequence[str]) -> bool:
 
 
 def action_records(events: Iterable[dict]) -> list[str]:
-    """Each action the computer-use agent sent, as the tool and arguments the runtime recorded, for auto review.
+    """Each action a task's agent sent, as the tool and arguments the runtime recorded, for auto review.
     Only actions whose input went out ("success"; not that a file was saved, say) count: not one that failed, was held
     back or declined, nor a batch that stopped partway."""
     return [

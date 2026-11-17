@@ -3,7 +3,6 @@
 import asyncio
 import re
 import time
-from typing import TYPE_CHECKING
 
 from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field
@@ -13,9 +12,7 @@ from computer_use.agent.usage import usage_of
 from computer_use.config import Choice, Settings
 from computer_use.prompts.title import TITLE_PROMPT
 from computer_use.agent.history import has_title
-
-if TYPE_CHECKING:
-    from computer_use.agent.trajectory import Trajectory
+from computer_use.agent.trajectory import Trajectory
 
 # The title model when the settings name none, and its effort (or the lowest the model takes): a title needs little
 # reasoning.
@@ -72,14 +69,12 @@ async def generate_title(
             raise ValueError(f"unreadable title: {reply.get('parsing_error')}")
         title = clean(parsed.title)
         return (title, usage_of(reply["raw"])) if title else None
-    except asyncio.CancelledError:
-        raise
     except Exception as error:
         print(f"      (no title: {type(error).__name__}: {error})", flush=True)
         return None
 
 
-async def name(settings: Settings, log: "Trajectory", thread: str) -> None:
+async def name(settings: Settings, log: Trajectory, thread: str) -> None:
     """Title the conversation `thread` into this run's log, unless it is named already."""
     store = log.store
     if thread != log.run and await has_title(store, thread):
@@ -102,7 +97,7 @@ class Titles:
         self.settings = settings
         self.tasks: dict[str, asyncio.Task] = {}
 
-    def start(self, log: "Trajectory", thread: str) -> None:
+    def start(self, log: Trajectory, thread: str) -> None:
         """Name the conversation in the background unless it is named or being named. A title that cannot be made is no
         error for the run."""
         if thread in self.tasks:

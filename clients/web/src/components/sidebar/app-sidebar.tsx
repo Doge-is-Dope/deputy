@@ -1,13 +1,13 @@
 import {
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
   type ComponentProps,
-  type Dispatch,
   type ReactNode,
+  type Ref,
   type RefObject,
-  type SetStateAction,
 } from "react"
 import { createPortal } from "react-dom"
 import {
@@ -38,6 +38,7 @@ import {
   SidebarMenuSkeleton,
   SidebarTrigger,
   useSidebar,
+  useSidebarSheet,
 } from "@/components/ui/sidebar"
 import { ResizeHandle } from "@/components/resize-handle"
 import { Collapsible, CollapsibleContent } from "@/components/ui/collapsible"
@@ -100,6 +101,7 @@ import {
 } from "@/components/sidebar/drag"
 import { DROP, FOLD, FOLD_DURATION } from "@/components/sidebar/motion"
 import { useStoredNames } from "@/hooks/use-stored-names"
+import { useStoredWidth } from "@/hooks/use-stored-width"
 import { useSidebarLists } from "@/components/sidebar/use-sidebar-lists"
 
 // 設定 opens with ⌘ , (Ctrl , off a Mac), as in most apps; 新對話 with ⇧ ⌘ O: ⌘ N is the
@@ -150,9 +152,49 @@ function ShortcutItem({
   )
 }
 
+/** The sidebar's edits to a conversation, for its menu in the page's header: the same as its row's menu, so the row
+ * folds and moves as it does from there. */
+export type ConversationEdits = {
+  projects: Pick<Project, "id" | "name">[] // move targets, in the sidebar's order
+  remove: (conversation: Conversation) => void
+  move: (conversation: Conversation, project: string | null) => void
+  bringIn: (conversation: Conversation) => void // into a new project, named in its dialog
+}
+
 // The widths the sidebar can be dragged to.
-export const SIDEBAR_MIN = 200
-export const SIDEBAR_MAX = 480
+const SIDEBAR_MIN = 200
+const SIDEBAR_MAX = 480
+
+/** The sidebar and the strip on its edge that resizes it. The width is held here, so a drag renders this frame and
+ * not the lists inside it, which come in as the same element. */
+function ResizableSidebar({
+  finalFocus,
+  children,
+}: Pick<ComponentProps<typeof Sidebar>, "finalFocus" | "children">) {
+  const t = useT()
+  // Dragged wider or narrower; this browser remembers it.
+  const [width, setWidth] = useStoredWidth("sidebar-width", 256)
+  const { isMobile, state, setOpen } = useSidebar()
+  return (
+    <Sidebar finalFocus={finalFocus} width={width}>
+      {children}
+      {/* Also on the closed rail, so a drag that snapped it shut can open it again, and one from there opens it. */}
+      {!isMobile && (
+        <ResizeHandle
+          from="left"
+          width={width}
+          min={SIDEBAR_MIN}
+          max={SIDEBAR_MAX}
+          onWidth={setWidth}
+          label={t.sidebar.resize}
+          className="-right-1.5"
+          collapsed={state === "collapsed"}
+          onCollapsed={(collapsed) => setOpen(!collapsed)}
+        />
+      )}
+    </Sidebar>
+  )
+}
 
 export function AppSidebar({
   conversations,
@@ -163,8 +205,6 @@ export function AppSidebar({
   openConversation,
   selectedProject,
   isNew,
-  width,
-  onWidth,
   onDelete,
   onRename,
   onMove,
@@ -173,7 +213,9 @@ export function AppSidebar({
   onRenameProject,
   onDeleteProject,
   composer,
+  edits,
 }: {
+  edits: Ref<ConversationEdits> // its edits, for the header's menu
   composer: RefObject<HTMLTextAreaElement | null> // where 新對話 puts the caret
   conversations: Conversation[] | null
   conversationsFailed: boolean // the list could not be loaded; it loads on its own once the runtime is back
@@ -183,8 +225,6 @@ export function AppSidebar({
   openConversation: string | null
   selectedProject: string | null // the project whose home is open
   isNew: (conversation: string, ended: number | null) => boolean // its latest run's end is news to the user
-  width: number
-  onWidth: Dispatch<SetStateAction<number>>
   // Deletes one conversation, or a project with all of its (`project`): true once done.
   onDelete: (
     conversations: string[],
@@ -204,7 +244,8 @@ export function AppSidebar({
   onDeleteProject: (project: string) => Promise<unknown>
 }) {
   const t = useT()
-  const { isMobile, setOpenMobile, state } = useSidebar()
+  // Not the sidebar's open state: opening and closing it on a desktop then renders none of the lists.
+  const { isMobile, setOpenMobile } = useSidebarSheet()
   const [searchOpen, setSearchOpen] = useState(false)
   const { user, login } = useSession()
   const searchedNew = useRef(false) // 新對話 chosen in the search, which hands the focus to the composer as it closes
@@ -366,6 +407,12 @@ export function AppSidebar({
     () => ids.map((id) => ({ id, name: names[id] ?? "" })),
     [ids, names]
   )
+  useImperativeHandle(edits, () => ({
+    projects: choices,
+    remove,
+    move,
+    bringIn,
+  }))
   const isRunning = (conversation: Conversation) =>
     runningOf(status, { thread: conversation.id }) !== null
   const isWaiting = (conversation: Conversation) =>
@@ -465,13 +512,13 @@ export function AppSidebar({
     >
       {/* Closed, it narrows to a rail of its toggle, 新對話 and 搜尋, with the account's circle at its foot, each named
           on hover. Open or closed, they stay in one column, their 20px icons centred 28px from the left edge. */}
-      <Sidebar finalFocus={sheetFocus}>
-        {/* The toggle sits on the page header's line: 36px with its center 24px from the top, like the header's buttons. In the
-            closed rail it is a 32px square like the commands under it, so their tooltips and hover marks line up; the
-            margins keep its icon, and the rows under it, where they were. */}
-        {/* New and search above the list. A hairline under them shows
-            while the list is scrolled, fading in and out, so the top of the list reads as passing under them. */}
-        <SidebarHeader className="relative pt-1 pb-2">
+      <ResizableSidebar finalFocus={sheetFocus}>
+        {/* The toggle sits on the page card's header line: 36px with its center 30px from the top, like the header's
+            buttons. In the closed rail it is a 32px square like the commands under it, so their tooltips and hover marks
+            line up; the margins keep its icon, and the rows under it, where they were. New and search above the list. A
+            hairline under them shows while the list is scrolled, fading in and out, so the top of the list reads as
+            passing under them. */}
+        <SidebarHeader className="relative pt-1 pb-2 md:pt-2.5">
           <SidebarTrigger className="m-0.5 size-9 transition-[width,height,margin] duration-300 ease-(--ease-drawer) group-data-[collapsible=icon]:my-1 group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8" />
           <SidebarMenu className="gap-0.5">
             <ShortcutItem
@@ -660,17 +707,6 @@ export function AppSidebar({
           </div>
         </SidebarContent>
 
-        {!isMobile && state === "expanded" && (
-          <ResizeHandle
-            from="left"
-            width={width}
-            min={SIDEBAR_MIN}
-            max={SIDEBAR_MAX}
-            onWidth={onWidth}
-            label={t.sidebar.resize}
-            className="-right-1.5"
-          />
-        )}
         {/* Who is signed in, opening a menu that names them above the settings and signing out; the gear and 設定
             while the runtime has not said who. Its hairline shows while more of the list is below. */}
         <SidebarFooter className="relative">
@@ -748,7 +784,7 @@ export function AppSidebar({
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>
-      </Sidebar>
+      </ResizableSidebar>
       {/* Outside it too, so ⌘K opens it from anywhere. 新對話 in it puts the caret in the composer, as 新對話 here does. */}
       <SearchDialog
         open={searchOpen}

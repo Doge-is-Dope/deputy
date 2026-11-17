@@ -12,7 +12,6 @@ from computer_use.desktop.control import Control
 from computer_use.desktop.executor import Disconnected, Executor
 from computer_use.events import NoteCode
 from computer_use.middleware.approvals import Confirmations
-from computer_use.middleware.common import prune_screenshots
 from computer_use.middleware.subagent import SubagentMiddleware
 from computer_use.prompts import notes
 from computer_use.prompts.computer import DECIDE_AGAIN, disconnected_for, user_had_control
@@ -106,11 +105,8 @@ class DesktopMiddleware(SubagentMiddleware):
 
     async def awrap_model_call(self, request, handler):
         # Calls of one turn run at once, but a desktop takes input in order; computer_batch is how to send several.
-        pruned = request.override(
-            messages=prune_screenshots(request.messages),
-            model_settings={**request.model_settings, "parallel_tool_calls": False},
-        )
-        return await super().awrap_model_call(pruned, handler)
+        one_call = request.override(model_settings={**request.model_settings, "parallel_tool_calls": False})
+        return await super().awrap_model_call(one_call, handler)
 
     async def held(self, request) -> ToolMessage | None:
         """A step that needs the user's approval runs only once they give it; a refusal is its result, logged in its

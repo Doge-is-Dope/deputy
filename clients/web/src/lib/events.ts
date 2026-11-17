@@ -46,7 +46,7 @@ export function applyEventBatch(
  */
 export async function readEvents(
   body: ReadableStream<Uint8Array>,
-  onEvent: (data: string, id: string) => void,
+  onEvent: (event: RunEvent, id: string) => void,
   onDraft: (text: string, whole: boolean, final: boolean) => void
 ): Promise<boolean> {
   const reader = body.getReader()
@@ -69,7 +69,7 @@ export async function readEvents(
       if (fields.event === "done") return true
       if (fields.event === "draft" || fields.event === "delta")
         onDraft(data.text, fields.event === "draft", data.final === true)
-      else if (fields.data) onEvent(fields.data, fields.id ?? "")
+      else if (fields.data) onEvent(data, fields.id ?? "")
     }
   }
 }

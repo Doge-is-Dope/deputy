@@ -101,7 +101,7 @@ class Uploads:
             except FileNotFoundError:
                 raise ValueError(f"no such upload: {each}") from None
             mime_type = meta["mime_type"]
-            name = unique(checked(meta["name"], mime_type, data), names)
+            name = unique(meta["name"], names)  # checked when it was kept
             readable = mime_type in MEDIA_TYPES
             if not readable and not coding:
                 raise ValueError(f"{name} can be opened only by the coding agent, which this runtime does not have")

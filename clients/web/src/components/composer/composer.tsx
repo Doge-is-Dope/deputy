@@ -29,6 +29,7 @@ import { type Approval, type Decision, type Pending } from "@/lib/api"
 import { type Attachment } from "@/lib/attachments"
 import { useT } from "@/lib/i18n"
 import { isComposing, shortcutLabel } from "@/lib/keys"
+import { reducedMotion } from "@/lib/motion"
 import { Kbd } from "@/components/ui/kbd"
 import { QuestionRow } from "@/components/composer/question-row"
 import { Queue } from "@/components/composer/queue"
@@ -311,12 +312,7 @@ export function Composer({
     }
     const was = placed.current
     placed.current = now
-    if (
-      !was ||
-      was.stacked === stacked ||
-      matchMedia("(prefers-reduced-motion: reduce)").matches
-    )
-      return
+    if (!was || was.stacked === stacked || reducedMotion()) return
     const timing = { duration: 300, easing: "cubic-bezier(0.32, 0.72, 0, 1)" }
     box.animate(
       [
@@ -446,9 +442,7 @@ export function Composer({
       >
         <StopIcon className="size-5" />
       </TooltipTrigger>
-      <TooltipContent>
-        {hint ? blocked : t.composer.stop}
-      </TooltipContent>
+      <TooltipContent>{hint ? blocked : t.composer.stop}</TooltipContent>
     </Tooltip>
   )
 

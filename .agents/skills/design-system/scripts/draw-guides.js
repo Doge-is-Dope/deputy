@@ -1,6 +1,6 @@
-// Draws the columns of the open popup or dialog (or the page) as dashed lines, the way Linear shows its sidebar's
-// alignment, so a screenshot shows at a glance what is on a column and what is not (../references/layout.md). Run in
-// the Browser pane on the Vite dev server (the JavaScript tool) with the popup, dialog or page open, then screenshot.
+// Draws the columns of the open popup or dialog (or the page) as dashed lines, so a screenshot shows at a glance what
+// is on a column and what is not (../references/layout.md). Run in a browser's JavaScript evaluator on the Vite dev
+// server with the popup, dialog or page open, then screenshot.
 // Red: a column two or more edges share, and the first and last line boxes. Blue: an edge 1 to 4px off a column, to fix.
 // __guidesClear() takes the lines away.
 const box =

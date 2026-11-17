@@ -7,12 +7,9 @@ import asyncio
 import time
 import uuid
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
 
 from computer_use.storage import MAIN
-
-if TYPE_CHECKING:
-    from computer_use.agent.trajectory import Trajectory
+from computer_use.agent.trajectory import Trajectory
 
 # The reader name of an agent the main agent hands work to; the main agent reads as MAIN.
 SUBAGENT = "subagent"

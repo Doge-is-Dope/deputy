@@ -1,7 +1,7 @@
 // Lists every rounded shape on screen that sits near the corner of a rounded parent, with the radius it has and the
-// one concentric corners give (outer less the gap, ../references/layout.md), and every odd radius. Run in the Browser
-// pane on the Vite dev server (the JavaScript tool) with the popup, dialog or page open. A hairline's 1px is not
-// counted, so a radius within 1 of the rule passes.
+// one concentric corners give (outer less the gap, ../references/layout.md), and every odd radius. Run in a browser's
+// JavaScript evaluator on the Vite dev server with the popup, dialog or page open. A hairline's 1px is not counted, so
+// a radius within 1 of the rule passes.
 const radius = (el) => {
   const style = getComputedStyle(el)
   const box = el.getBoundingClientRect()

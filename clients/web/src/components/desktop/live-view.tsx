@@ -513,8 +513,10 @@ export function LiveView({
                 // Beside the page's own toggle for the live view, which keeps the corner (App.tsx); in the corner
                 // itself where that is out of sight: on a phone's sheet, and full screen.
                 className={cn(
-                  "touch-target absolute top-1.5 z-10",
-                  onExpand && !fullscreen ? "right-12.5" : "right-2.5"
+                  "touch-target absolute top-1.5 z-10 md:top-2",
+                  onExpand && !fullscreen
+                    ? "right-12.5 md:right-12"
+                    : "right-2.5 md:right-2"
                 )}
                 {...hold.handlers}
                 // A press leaves the keyboard where it was (on the desktop, taken over), and no ring on the button

@@ -35,6 +35,7 @@ const SIDEBAR_KEYBOARD_SHORTCUT: Shortcut = { key: "b" }
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
+  setOpen: (open: boolean) => void // on a desktop
   openMobile: boolean
   setOpenMobile: (open: boolean) => void
   isMobile: boolean
@@ -98,6 +99,7 @@ function SidebarProvider({
   const contextValue = React.useMemo<SidebarContextProps>(
     () => ({
       state,
+      setOpen,
       isMobile,
       openMobile,
       setOpenMobile,
@@ -139,10 +141,13 @@ function Sidebar({
   children,
   dir,
   finalFocus,
+  width,
   ...props
 }: React.ComponentProps<"div"> & {
   // On a phone, where the focus goes as its sheet closes; by default, back to its toggle.
   finalFocus?: React.ComponentProps<typeof SheetContent>["finalFocus"]
+  // Open on a desktop, in px. Set here rather than on the wrapper, so a drag restyles the sidebar alone, not the page.
+  width?: number
 }) {
   const t = useT()
   const { isMobile, state, openMobile, setOpenMobile } = useSidebar()
@@ -177,6 +182,11 @@ function Sidebar({
   return (
     <div
       className="group peer hidden text-sidebar-foreground md:block"
+      style={
+        width === undefined
+          ? undefined
+          : ({ "--sidebar-width": `${width}px` } as React.CSSProperties)
+      }
       data-state={state}
       data-collapsible={state === "collapsed" ? "icon" : ""}
       data-side="left"
@@ -191,7 +201,7 @@ function Sidebar({
         data-side="left"
         className={cn(
           "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] duration-300 ease-(--ease-drawer) data-[side=left]:left-0 md:flex",
-          "group-data-[collapsible=icon]:w-(--sidebar-width-icon) group-data-[side=left]:border-r",
+          "group-data-[collapsible=icon]:w-(--sidebar-width-icon)",
           className
         )}
         {...props}
@@ -253,7 +263,9 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        "relative flex w-full flex-1 flex-col bg-background",
+        // Beside the sidebar, a card 4 from the window's other edges (layout.md). Its edge is drawn over its contents:
+        // a border would push them 1 in.
+        "relative isolate flex w-full flex-1 flex-col bg-background md:my-1 md:mr-1 md:h-[calc(100svh-0.5rem)] md:rounded-2xl md:after:pointer-events-none md:after:absolute md:after:inset-0 md:after:z-30 md:after:rounded-2xl md:after:border md:after:border-border",
         className
       )}
       {...props}

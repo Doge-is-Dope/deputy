@@ -1,4 +1,4 @@
-import { memo, useLayoutEffect, useRef, useState } from "react"
+import { memo, useLayoutEffect, useRef } from "react"
 import { useDraggable } from "@dnd-kit/core"
 import { cn } from "cn"
 
@@ -9,7 +9,6 @@ import {
 } from "@/components/ui/sidebar"
 import { Spinner } from "@/components/ui/spinner"
 import type { Conversation, Project } from "@/lib/api"
-import { nameOf } from "@/lib/conversations"
 import { useT } from "@/lib/i18n"
 import { runHref } from "@/lib/route"
 import {
@@ -32,6 +31,7 @@ import {
 import { NameField } from "@/components/sidebar/name-field"
 import { ConversationName } from "@/components/sidebar/conversation-name"
 import { fold } from "@/components/sidebar/motion"
+import { useRename } from "@/hooks/use-rename"
 
 /** One trailing slot, by priority: needs user, running, unread, then the menu.
  * Memoized, its callbacks taking the conversation, so a sidebar re-render skips unchanged rows. */
@@ -66,26 +66,15 @@ export const ConversationItem = memo(function ConversationItem({
 }) {
   const t = useT()
   const { isMobile, setOpenMobile } = useSidebarSheet()
-  // Enter or blur saves a changed, nonempty title; Escape cancels.
-  const [draft, setDraft] = useState<string | null>(null)
-  // The new name shows until the list has it, or the rename fails.
-  const [given, setGiven] = useState<string | null>(null)
-  if (given !== null && conversation.title === given) setGiven(null)
-  const name = given ?? conversation.title
-  // A user's rename remounts the name, skipping ConversationName's roll-in.
-  const [renames, setRenames] = useState(0)
-  const commit = () => {
-    if (draft === null) return
-    const title = draft.trim()
-    setDraft(null)
-    if (!title || title === (name ?? nameOf(conversation))) return
-    setGiven(title)
-    setRenames((count) => count + 1)
-    // As the runtime saved it: spaces collapsed, length capped.
-    void onRename(conversation.id, title).then((renamed) =>
-      setGiven(renamed?.title ?? null)
-    )
-  }
+  const {
+    draft,
+    setDraft,
+    title: name,
+    renames,
+    start: rename,
+    cancel,
+    commit,
+  } = useRename(conversation, onRename)
   const mark = active
     ? needsYou
       ? { color: "bg-warning", label: t.sidebar.needsAttention }
@@ -96,7 +85,6 @@ export const ConversationItem = memo(function ConversationItem({
         : { color: "bg-unread", label: t.sidebar.unread }
       : null
   const actionable = !active
-  const rename = () => setDraft(given ?? nameOf(conversation))
   // Draggable onto a project or back to the recents (AppSidebar).
   const { setNodeRef, listeners, isDragging } = useDraggable({
     id: `conversation:${conversation.id}`,
@@ -175,15 +163,16 @@ export const ConversationItem = memo(function ConversationItem({
           </span>
         )}
       </SidebarMenuButton>
+      {/* Opaque, so the name under it does not show through as characters are deleted. */}
       {draft !== null && (
         <NameField
           value={draft}
           label={t.sidebar.renameConversation}
           onChange={setDraft}
           onSave={commit}
-          onCancel={() => setDraft(null)}
+          onCancel={cancel}
           className={cn(
-            "absolute inset-0 z-10 h-full w-full rounded-md bg-sidebar-accent pr-2 text-sm text-sidebar-accent-foreground outline-none",
+            "absolute inset-0 z-10 h-full w-full rounded-md bg-(--sidebar-accent-solid) pr-2 text-sm text-sidebar-accent-foreground outline-none",
             inset ? "pl-row-nested" : "pl-row-text"
           )}
         />
@@ -202,29 +191,22 @@ export const ConversationItem = memo(function ConversationItem({
   )
 })
 
-/** A row's menu: rename, move to a project or out of its own, delete. Shown on hover, keyboard focus or while open;
- * always on touch screens. Apart from the row and memoized: a drag renders every row again as it starts and ends,
- * and the menus are most of a row. */
-const ConversationMenu = memo(function ConversationMenu({
-  conversation,
-  projects,
-  onRename,
-  onDelete,
-  onMove,
-  onNewProject,
-}: {
+type ConversationMenuProps = {
   conversation: Conversation
   projects: Pick<Project, "id" | "name">[]
   onRename: () => void // its name's field opens
   onDelete: (conversation: Conversation) => void
   onMove: (conversation: Conversation, project: string | null) => void
   onNewProject: (conversation: Conversation) => void
-}) {
+}
+
+/** A row's menu: rename, move to a project or out of its own, delete. Shown on hover, keyboard focus or while open;
+ * always on touch screens. Apart from the row and memoized: a drag renders every row again as it starts and ends,
+ * and the menus are most of a row. */
+const ConversationMenu = memo(function ConversationMenu(
+  props: ConversationMenuProps
+) {
   const t = useT()
-  const others = projects.filter(
-    (project) => project.id !== conversation.project
-  )
-  const own = projects.find((project) => project.id === conversation.project)
   return (
     <DropdownMenu>
       <DropdownMenuTrigger
@@ -233,61 +215,82 @@ const ConversationMenu = memo(function ConversationMenu({
       >
         <EllipsisIcon className="size-[18px]" />
       </DropdownMenuTrigger>
-      {/* Opens out over the page, not held to the narrow sidebar. */}
+      {/* Opens out over the page, not held to the narrow sidebar. No focus back to the button (finalFocus): the rename
+          input takes it. */}
       <DropdownMenuContent align="start" finalFocus={false}>
-        {/* No focus back to the button (finalFocus): the rename input takes it. */}
-        <DropdownMenuItem onClick={onRename}>
-          <PencilIcon />
-          {t.sidebar.renameConversation}
-        </DropdownMenuItem>
-        {/* New project first, removal from its own last. */}
-        <DropdownMenuSub>
-          <DropdownMenuSubTrigger>
-            <FolderIcon />
-            {t.sidebar.project}
-          </DropdownMenuSubTrigger>
-          <DropdownMenuContent
-            side="inline-end"
-            align="start"
-            sideOffset={0}
-            alignOffset={-4}
-            className="max-w-60"
-          >
-            <DropdownMenuItem onClick={() => onNewProject(conversation)}>
-              <FolderPlusIcon />
-              {t.sidebar.newProject}
-            </DropdownMenuItem>
-            {others.length > 0 && <DropdownMenuSeparator />}
-            {others.map((project) => (
-              <DropdownMenuItem
-                key={project.id}
-                onClick={() => onMove(conversation, project.id)}
-              >
-                <FolderIcon />
-                <span className="truncate">{project.name}</span>
-              </DropdownMenuItem>
-            ))}
-            {own !== undefined && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem onClick={() => onMove(conversation, null)}>
-                  <FolderRemoveIcon />
-                  <span className="truncate">
-                    {t.sidebar.removeFromProject(own.name)}
-                  </span>
-                </DropdownMenuItem>
-              </>
-            )}
-          </DropdownMenuContent>
-        </DropdownMenuSub>
-        <DropdownMenuItem
-          variant="destructive"
-          onClick={() => onDelete(conversation)}
-        >
-          <TrashIcon />
-          {t.sidebar.deleteConversation}
-        </DropdownMenuItem>
+        <ConversationMenuItems {...props} />
       </DropdownMenuContent>
     </DropdownMenu>
   )
 })
+
+/** What a conversation's menu holds, in its row and in the page's header alike. */
+export function ConversationMenuItems({
+  conversation,
+  projects,
+  onRename,
+  onDelete,
+  onMove,
+  onNewProject,
+}: ConversationMenuProps) {
+  const t = useT()
+  const others = projects.filter(
+    (project) => project.id !== conversation.project
+  )
+  const own = projects.find((project) => project.id === conversation.project)
+  return (
+    <>
+      <DropdownMenuItem onClick={onRename}>
+        <PencilIcon />
+        {t.sidebar.renameConversation}
+      </DropdownMenuItem>
+      {/* New project first, removal from its own last. */}
+      <DropdownMenuSub>
+        <DropdownMenuSubTrigger>
+          <FolderIcon />
+          {t.sidebar.project}
+        </DropdownMenuSubTrigger>
+        <DropdownMenuContent
+          side="inline-end"
+          align="start"
+          sideOffset={0}
+          alignOffset={-4}
+          className="max-w-60"
+        >
+          <DropdownMenuItem onClick={() => onNewProject(conversation)}>
+            <FolderPlusIcon />
+            {t.sidebar.newProject}
+          </DropdownMenuItem>
+          {others.length > 0 && <DropdownMenuSeparator />}
+          {others.map((project) => (
+            <DropdownMenuItem
+              key={project.id}
+              onClick={() => onMove(conversation, project.id)}
+            >
+              <FolderIcon />
+              <span className="truncate">{project.name}</span>
+            </DropdownMenuItem>
+          ))}
+          {own !== undefined && (
+            <>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem onClick={() => onMove(conversation, null)}>
+                <FolderRemoveIcon />
+                <span className="truncate">
+                  {t.sidebar.removeFromProject(own.name)}
+                </span>
+              </DropdownMenuItem>
+            </>
+          )}
+        </DropdownMenuContent>
+      </DropdownMenuSub>
+      <DropdownMenuItem
+        variant="destructive"
+        onClick={() => onDelete(conversation)}
+      >
+        <TrashIcon />
+        {t.sidebar.deleteConversation}
+      </DropdownMenuItem>
+    </>
+  )
+}

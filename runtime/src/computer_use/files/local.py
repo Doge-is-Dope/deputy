@@ -1,5 +1,5 @@
-"""Files under a folder, each key a path below it. Reads and writes stay on the event loop (well under a millisecond);
-erasing a prefix runs in a worker thread."""
+"""Files under a folder, each key a path below it. Reads and writes stay on the event loop (milliseconds even for the
+largest attachment); erasing a prefix runs in a worker thread."""
 
 import asyncio
 import shutil

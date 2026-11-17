@@ -12,7 +12,7 @@ from computer_use.tools.common import screenshot_blocks
 from computer_use.agent.trajectory import Trajectory
 from computer_use.agent.usage import usage_of
 from computer_use.storage import MAIN
-from conftest import file_runs, main_messages, new_log, read_events, runs_dir
+from conftest import file_runs, main_messages, new_log, read_events, run_turn, runs_dir, tool_call, use_script
 from computer_use.computers import ComputerError
 from computer_use.desktop import executor as executor_module
 from computer_use.desktop.control import (
@@ -368,3 +368,16 @@ def test_cache_writes_split_by_lifetime_count_as_cache_writes():
                                 "ephemeral_5m_input_tokens": 3_032, "ephemeral_1h_input_tokens": 0},
     })
     assert usage_of(reply)["cache_write"] == 3_032
+
+
+async def test_a_desktop_task_sends_its_model_only_the_latest_screenshots(settings, computer, monkeypatch):
+    steps = KEEP_SCREENSHOTS + PRUNE_EVERY + 2
+    computer_model, _ = use_script(monkeypatch, [
+        *(AIMessage(content="", tool_calls=[tool_call(f"c{n}", "key", text=f"f{n + 1}")]) for n in range(steps)),
+        AIMessage("Done."),
+    ])
+
+    await run_turn(settings, "press win", max_steps=steps + 2, computer=computer)
+
+    shown = [sum(bool(screenshot_blocks(m)) for m in received) for received in computer_model.received]
+    assert max(shown) < KEEP_SCREENSHOTS + PRUNE_EVERY and shown[-1] >= KEEP_SCREENSHOTS

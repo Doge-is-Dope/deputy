@@ -15,6 +15,7 @@ from aiortc import RTCConfiguration, RTCPeerConnection, RTCRtpCodecParameters, R
 from av import VideoFrame
 from langchain_core.messages import AIMessage, HumanMessage
 from pydantic import SecretStr
+from pymongo.asynchronous.collection import AsyncCollection
 from pyee.asyncio import AsyncIOEventEmitter
 
 import computer_use.agent.main_agent as main_agent
@@ -61,6 +62,27 @@ async def runs(settings):
     """The local user's runs in the server's store, as another process sees them."""
     store, _, _ = build_stores(settings)
     yield store.of(LOCAL_USER)
+    await store.close()
+
+
+async def test_stopping_the_server_stores_the_events_still_on_their_way(settings, computer, monkeypatch):
+    insert = AsyncCollection.insert_one
+
+    async def slow_insert(collection, *args, **kwargs):  # a database that answers late
+        await asyncio.sleep(0.2)
+        return await insert(collection, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncCollection, "insert_one", slow_insert)
+    built = []
+    monkeypatch.setattr(server, "build_stores", lambda settings: built.append(build_stores(settings)) or built[-1])
+    app = create_app(settings, max_steps=10, computer=computer)
+    async with app.router.lifespan_context(app):
+        runs = built[0][0].of(LOCAL_USER)
+        run = await runs.create()
+        runs.append(run, {"type": "note", "text": "on its way"})  # not flushed: the server stops at once
+
+    store, _, _ = build_stores(settings)
+    assert [event["text"] for event in await store.of(LOCAL_USER).events(run)] == ["on its way"]
     await store.close()
 
 

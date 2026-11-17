@@ -43,7 +43,7 @@ from computer_use.runner import ConversationBusy, Runner
 from computer_use.sandbox import CodeRunnerError
 from computer_use.memory.routes import memory_routes
 from computer_use.storage import (
-    ALL, HITS, MAX_PAGE, PAGE, TURN, Runs, RunSummary, cursor_of, page_limit, supported,
+    ALL, HITS, MAX_PAGE, PAGE, TURN, Runs, RunSummary, cursor_of, page_limit,
 )
 from computer_use.tools.common import MEDIA_TYPES
 
@@ -79,6 +79,13 @@ def known_zone(name: str) -> bool:
     except (ZoneInfoNotFoundError, ValueError):
         return False
     return True
+
+
+async def file_of(runs: Runs, run: str, name: str) -> bytes:
+    try:
+        return await runs.get_file(run, name)
+    except FileNotFoundError:
+        raise HTTPException(404, "no such file") from None
 
 
 AGENTS = (MAIN_AGENT, *(each.agent for each in SUBAGENTS))
@@ -143,7 +150,7 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
 
     async def owned(runs: Runs, run: str) -> bool:
         key = (runs.user, run)
-        if key not in supported_runs and RUN_ID.fullmatch(run) and supported(await runs.events(run, messages=False)):
+        if key not in supported_runs and RUN_ID.fullmatch(run) and await runs.thread(run) is not None:
             supported_runs.add(key)
         return key in supported_runs
 
@@ -588,20 +595,17 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             not media_type.startswith("image/") or not width.isdigit() or int(width) not in THUMBNAIL_WIDTHS
         ):
             raise HTTPException(400, f"w must be one of {', '.join(map(str, THUMBNAIL_WIDTHS))}, for an image")
+        if width is None:
+            data = await file_of(runs, run, name)
+            return Response(data, media_type=media_type, headers=IMMUTABLE | ({} if media_type.startswith("image/") else DOWNLOAD))
         # Made on first request and kept as a file of the run; many are never asked for.
-        wanted = name if width is None else f"thumbs/{width}/{name}.webp"
+        wanted = f"thumbs/{width}/{name}.webp"
         try:
             data = await runs.get_file(run, wanted)
         except FileNotFoundError:
-            try:
-                image = await runs.get_file(run, name)
-            except FileNotFoundError:
-                raise HTTPException(404, "no such file") from None
-            data = await asyncio.to_thread(thumbnail, image, int(width))
+            data = await asyncio.to_thread(thumbnail, await file_of(runs, run, name), int(width))
             await runs.put_file(run, wanted, data)
-        if width is not None:
-            return Response(data, media_type="image/webp", headers=IMMUTABLE)
-        return Response(data, media_type=media_type, headers=IMMUTABLE | ({} if media_type.startswith("image/") else DOWNLOAD))
+        return Response(data, media_type="image/webp", headers=IMMUTABLE)
 
     async def choose_approvals(request: Request) -> JSONResponse:
         """Sets at once how the run in progress answers steps that need approval; models apply from the next run."""
@@ -616,7 +620,8 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
     @contextlib.asynccontextmanager
     async def lifespan(app: Starlette):
         async with contextlib.AsyncExitStack() as cleanup:
-            for each in (store, projects, memory):
+            # Run in reverse: the run store waits for its writes before the database client they share closes.
+            for each in (memory, projects, store):
                 cleanup.push_async_callback(each.close)
             cleanup.push_async_callback(computer.close)
             cleanup.push_async_callback(share.close)

@@ -1,16 +1,17 @@
 ---
 name: design-system
-description: The web app's design system - the type scale (which font size each role uses) and the icon system (clients/web/src/components/icons.tsx; rules in references/icons.md). Use when adding or changing text sizes, adding, redrawing, resizing or reviewing an icon, or when text or an icon looks too big, too small or too heavy next to its neighbours.
+description: The web app's design system - the type scale (which font size each role uses) and the icon system (clients/web/src/components/icons.tsx; rules in references/icons.md) and layout (alignment columns, row heights, the radius scale, concentric corners, even numbers; references/layout.md). Use when adding or changing text sizes, adding, redrawing, resizing or reviewing an icon, when text or an icon looks too big, too small or too heavy next to its neighbours, or when adding or changing a row, popup, dialog, card, padding or corner radius, or checking that they line up.
 ---
 
 # Design system
 
-The web app (`clients/web/`) uses sizes, shapes and interaction patterns found in the reference products:
-ChatGPT, Codex,
-Claude and Apple. Do not introduce a size, shape or pattern absent from those references.
+The web app (`clients/web/`) uses sizes, shapes and interaction patterns found in the reference products: ChatGPT,
+Codex, Claude and Apple. Do not introduce a size, shape or pattern absent from those references.
 
 - **Type**: below.
 - **Icons**: [references/icons.md](references/icons.md).
+- **Layout and corners**: [references/layout.md](references/layout.md): the columns things line up on, row heights, the
+  radius scale, concentric corners and the even-numbers rule.
 
 ## Type
 
@@ -40,19 +41,15 @@ drawing, not text to read.
 
 - Pick a role above; a new role takes the size of the nearest existing one. Adding a size needs a reason the scale
   cannot give, and goes into this table.
-- Keep a role's size the same everywhere it appears (the conversation is 14 in a message, a reply and the
-  status line).
-- Muted color, not a smaller size, sets text apart: a step's details from its title, a sidebar heading from
-  its rows.
+- Keep a role's size the same everywhere it appears (the conversation is 14 in a message, a reply and the status line).
+- Muted color, not a smaller size, sets text apart: a step's details from its title, a sidebar heading from its rows.
 
 ## Measuring
 
-- [scripts/measure-type.js](scripts/measure-type.js): paste it into an available browser tool's JavaScript
-  evaluator on the Vite dev
-  server. It lists every rendered font size with examples and flags one off the scale.
-- [scripts/measure-icons.js](scripts/measure-icons.js): see references/icons.md.
+The scripts are browser snippets, not Node.js programs: run each through a browser JavaScript evaluator on the Vite
+dev server (the icon script needs top-level await). If no browser can run them, say the visual check is missing.
 
-Read the selected script and run it against the Vite dev server through a browser JavaScript evaluator. These are
-browser snippets, not Node.js programs; the icon script requires top-level await. Follow the browser tool's
-execution
-instructions. If browser execution is unavailable, report the missing visual validation.
+- [scripts/measure-type.js](scripts/measure-type.js) lists every rendered font size with examples and flags one off
+  the scale.
+- The icon and layout scripts are described in their references: `measure-icons.js` in icons.md, `draw-guides.js` and
+  `measure-corners.js` in layout.md.

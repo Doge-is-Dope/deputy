@@ -131,24 +131,14 @@ class Trajectory:
         if name:
             self.names[agent] = name
 
-    def _count(self, usage: dict[str, int], agent: str | None, model: str | None = None) -> None:
-        key = (self.names.get(agent, ""), model or self.models.get(agent, ""))
+    def _count(self, usage: dict[str, int], agent: str | None) -> None:
+        key = (self.names.get(agent, ""), self.models.get(agent, ""))
         by_agent = self.agent_tokens.setdefault(key, no_tokens())
         for kind, count in usage.items():
             by_agent[kind] += count
 
     def usage(self) -> dict[str, int]:
         return {kind: sum(tokens[kind] for tokens in self.agent_tokens.values()) for kind in no_tokens()}
-
-    def cost(self) -> dict[str, float] | None:
-        """What the tokens cost by kind at list prices; None when a model that used tokens has no known price."""
-        if any(PRICES.get(model) is None and any(tokens.values()) for (_, model), tokens in self.agent_tokens.items()):
-            return None
-        total = {"input": 0.0, "cached": 0.0, "cache_write": 0.0, "output": 0.0}
-        for (_, model), tokens in self.agent_tokens.items():
-            for kind, dollars in (cost_breakdown(tokens, PRICES[model]) if model in PRICES else {}).items():
-                total[kind] += dollars
-        return total
 
     def by_agent(self) -> list[dict]:
         """Each agent's tokens with each model, in the order first used, and what they cost (None without a known
@@ -164,9 +154,14 @@ class Trajectory:
         """How the run ended, with the tokens used and, when prices are known and no call was cut off by a stop, what
         they cost. A failed run records the exception and its code; a task records who stopped it (`by`) and how its
         agent ended (`agent_stop_reason`), once it has."""
+        agents = self.by_agent()
+        costs = [each["cost"] for each in agents]
+        cost = None if self.cut_calls or None in costs else {
+            kind: sum(each[kind] for each in costs) for kind in ("input", "cached", "cache_write", "output")
+        }
         event = {
             "type": "end", "stop_reason": stop_reason, "summary": summary,
-            "usage": self.usage(), "cost": None if self.cut_calls else self.cost(), "agents": self.by_agent(),
+            "usage": self.usage(), "cost": cost, "agents": agents,
         }
         if error is not None:
             event |= {"error": f"{type(error).__name__}: {error}", "error_code": error_code(error)}

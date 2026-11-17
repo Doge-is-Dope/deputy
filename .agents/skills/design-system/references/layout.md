@@ -4,8 +4,9 @@ Where things line up, how tall rows are and how round corners are. Numbers are C
 
 ## Even numbers
 
-Every size, gap, offset and radius is an even number. Tailwind's spacing steps (`2`, `2.5`, `3`, ...) are all even, so
-the rule is about arbitrary values: no `[3px]`, `[5px]`, `[11px]`. Two exceptions:
+Every size, gap, offset and radius is an even number. Tailwind's whole and half spacing steps (`2`, `2.5`, `3`, ...)
+are even and its quarter steps are not, so the rule is about those and arbitrary values: no `2.25`, `[3px]`, `[5px]`,
+`[11px]`. Two exceptions:
 
 - A hairline is 1px (`border`, `h-px`, `ring-1`), and what it adds to a gap is not counted.
 - An optical nudge inside a drawing (the pointer's tip on the live view).
@@ -25,7 +26,7 @@ value for the same reason, give it a token beside these.
 
 ## Columns
 
-Icons and words each keep one column from top to bottom of a list, as in Linear's and ChatGPT's sidebars.
+Icons and words each keep one column from top to bottom of a list, as in ChatGPT's sidebar.
 
 ### Sidebar (256 wide)
 
@@ -42,11 +43,22 @@ Icons and words each keep one column from top to bottom of a list, as in Linear'
 A menu opened from a row keeps the row's columns: the account menu's icons are centered at 28 and its words start at 48
 (`alignOffset={-2}`, `gap-3` on its items).
 
-### Header (48 tall)
+### Page card
 
-Buttons are 36 with a 20 icon, 10 from the window's edge and 6 from the top: the icon is 18 from the edge and its
-middle 24 from the top. The sidebar's toggle is the same button on the same line (32 in the closed rail, like the
-commands under it). A card docked under the header, such as the plan, is also 10 from the edge.
+From `md` up the page is a card on the sidebar's color: 4 from the window's top, right and bottom, flush with the
+sidebar, `rounded-2xl`, its 1px edge drawn over its contents (a border would push them 1 in; a ring outside it would
+go under the sidebar on its left). The live view opens inside it, beside the conversation; the line between them
+stops 8 short of the card's top and bottom, apart from its edge.
+
+### Header (52 tall in the card, 48 on a phone)
+
+In the card, buttons are 36 with a 20 icon, 8 from its top and right, as a dialog's close button is: the icon is 16 from
+the edge. The open conversation's name starts on that 16 column, `text-sm font-medium`. A card docked under the header,
+such as the plan, is also 8 from the edge. The header's middle is 30 from the window's top, and the sidebar's toggle
+is on that line (`md:pt-2.5` on its header, open or closed).
+
+On a phone there is no card: buttons are 10 from the window's edge and 6 from the top, the sidebar's toggle at the left
+on the same line and the name after it.
 
 ### Conversation
 
@@ -72,7 +84,7 @@ button, as nothing goes with that answer. The plus button's icon, the text and t
 
 ### Dialog
 
-As Linear's sidebar does, every edge sits on a column drawn from top to bottom; check it with lines (Measuring, below).
+Every edge sits on a column drawn from top to bottom; check it with lines (Measuring, below).
 
 | What | Where |
 |---|---|
@@ -99,7 +111,7 @@ One scale, in `index.css`, as steps from `--radius` (12):
 | `rounded-md` | 10 | Rows: sidebar, menu, select, settings navigation. `xs` and `sm` buttons. |
 | `rounded-lg` | 12 | Buttons, selects, text fields, tooltips. Rows and lit rules in a dialog with a close button. |
 | `rounded-xl` | 16 | Popups, dialogs without a close button, cards, code blocks. |
-| `rounded-2xl` | 20 | A dialog with a close button (its 12 plus its 8 from the corner). The plan's card. An option inside a 28 card. |
+| `rounded-2xl` | 20 | A dialog with a close button (its 12 plus its 8 from the corner). The page card, for the same reason. The plan's card. An option inside a 28 card. |
 | `rounded-3xl` | 24 | Your message's bubble. |
 | `rounded-4xl` | 28 | The composer and what takes its place: a question's card, the take-over bar. |
 | `rounded-full` | | Round buttons, chips, the switch. |
@@ -114,6 +126,7 @@ A rounded shape inside another, close to its corner, has the outer radius less t
 |---|---|---|
 | Popup, 16 | 6 (`p-1.5`) | Row, 10 |
 | Dialog with a close button, 20 | 8 | Close button, 12 |
+| Page card, 20 | 8 | Header button, 12 |
 | Search dialog, 20 | 8 (`p-2`) | Row, 12 |
 | Search row, 12 | 6 (its top, bottom and end) | Key label, 6 |
 | Usage dialog, 20 | 8 (each side and the bottom) | Row or agent group, 12 |
@@ -136,10 +149,10 @@ A rounded shape inside another, close to its corner, has the outer radius less t
 Judge alignment by drawing lines, not by reading numbers alone: a column is right when every edge on it sits on one
 line from top to bottom.
 
-- [scripts/draw-guides.js](../scripts/draw-guides.js): paste it into the Browser pane's JavaScript tool with the
-  popup, dialog or page open, then take a screenshot. It draws a red dashed line on each column that two or more edges
-  share (words' starts and ends, icons, the close icon) and on the first and last line boxes, and a blue one on an edge
-  that misses a column by 1 to 4px: each blue line is something to fix. It returns the columns, the misses and the top
+- [scripts/draw-guides.js](../scripts/draw-guides.js): paste it into a browser JavaScript evaluator on the Vite dev
+  server with the popup, dialog or page open, then take a screenshot. It draws a red dashed line on each column that
+  two or more edges share (words' starts and ends, icons, the close icon) and on the first and last line boxes, and a
+  blue one on an edge that misses a column by 1 to 4px: each blue line is something to fix. It returns the columns, the misses and the top
   and bottom spacing; `__guidesClear()` takes the lines away.
 - [scripts/measure-corners.js](../scripts/measure-corners.js): with the same popup, dialog or page open. It lists every
   rounded shape that sits near a rounded parent's corner, with the radius it has and the one the rule gives, and every

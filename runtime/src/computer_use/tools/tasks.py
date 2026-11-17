@@ -39,8 +39,9 @@ def handover_tools(
     runs."""
     tools = [handover_tool(tasks, with_rules=with_rules)]
 
+    # Async: a plain function runs on a worker thread, and a task's inbox belongs to the loop.
     @tool(TELL_TASK)
-    def tell_task(
+    async def tell_task(
         task_id: Annotated[str, Field(description="The task's id, as handing it over returned it.")],
         message: Annotated[str, Field(description="What changes, in your words.")],
         *,

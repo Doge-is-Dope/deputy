@@ -111,7 +111,6 @@ async def run_turn(
         computer_model = chosen(settings, ComputerAgent.agent, choices.agents).model
         log.start(message, thread, computer_model, main.model, force_computer, choices.approvals, project, sent=sent)
         log.uses(main.model, MAIN)
-        inbox.log = log
         thread = thread or log.run
         if titles is not None:
             titles.start(log, thread)

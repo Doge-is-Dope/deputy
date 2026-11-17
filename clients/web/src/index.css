@@ -198,9 +198,10 @@
   ::selection {
     background-color: var(--selection);
   }
-  /* Inherited by all text: long URLs wrap at the edge, and the caret takes the theme's accent. */
+  /* Inherited by all text: long URLs wrap at the edge, and the caret takes the theme's accent. From md up the page is
+     a card on the sidebar's color, which is then the window's own: what a pull past the top shows too. */
   body {
-    @apply bg-background text-foreground;
+    @apply bg-background text-foreground md:bg-sidebar;
     overflow-wrap: break-word;
     caret-color: var(--theme-accent);
     /* Grayscale antialiasing: on a Mac the default subpixel smoothing makes text read a weight heavier than it is. */

@@ -55,7 +55,7 @@ describe("run event stream", () => {
       body(
         `: heartbeat\n\n${frame(start, "0")}${draft("早安", true)}${draft("！")}event: done\ndata: {}\n\n`
       ),
-      (data, id) => events.push({ data: JSON.parse(data), id }),
+      (data, id) => events.push({ data, id }),
       (text, whole) => drafts.push({ text, whole })
     )
     expect(done).toBe(true)
@@ -69,9 +69,9 @@ describe("run event stream", () => {
   it("retains the last complete event cursor across a dropped stream and replaces its draft on reconnect", async () => {
     let state = fresh()
     let cursor = ""
-    const receive = (data: string, id: string) => {
+    const receive = (event: RunEvent, id: string) => {
       if (id) cursor = id
-      state = applyEventBatch(state, [{ event: JSON.parse(data) }])
+      state = applyEventBatch(state, [{ event }])
     }
     const write = (text: string, whole: boolean) => {
       state = applyEventBatch(state, [{ draft: text, whole }])

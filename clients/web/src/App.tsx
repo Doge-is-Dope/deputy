@@ -1,15 +1,12 @@
-import {
-  useCallback,
-  useEffect,
-  useMemo,
-  useRef,
-  useState,
-  type CSSProperties,
-} from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { cn } from "cn"
 import { toast } from "sonner"
 
-import { AppSidebar } from "@/components/sidebar/app-sidebar"
+import {
+  AppSidebar,
+  type ConversationEdits,
+} from "@/components/sidebar/app-sidebar"
+import { TitleMenu } from "@/components/title-menu"
 import { Composer } from "@/components/composer/composer"
 import {
   messageOrigin,
@@ -58,6 +55,15 @@ import { connectionOf, greeting } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { reducedMotion } from "@/lib/motion"
 import { HandIcon, MonitorIcon, PlanIcon, TrashIcon } from "@/components/icons"
+
+// The line between the conversation and the live view, on the side of the element drawing it: 8 short of the card's
+// top and bottom, under the resize handle's light.
+const DIVIDER =
+  "after:pointer-events-none after:absolute after:inset-y-2 after:z-10 after:w-px after:bg-border"
+
+// A precise pointer, so a keyboard, read once: a touch screen's options are tapped; a narrow window on a computer still
+// has Enter.
+const HAS_KEYBOARD = window.matchMedia("(pointer: fine)").matches
 
 // The banner that another conversation waits for the user: one wait at a time, as one run at a time has the desktop.
 const WAITING_NOTICE = "waiting"
@@ -132,30 +138,30 @@ export default function App() {
   const [panelOpen, setPanelOpen] = useState(false)
   const [sheetOpen, setSheetOpen] = useState(false)
   const isMobile = useIsMobile()
-  // Both side panels can be dragged wider or narrower; this browser remembers the widths.
-  const [sidebarWidth, setSidebarWidth] = useStoredWidth("sidebar-width", 256)
+  // The live view can be dragged wider or narrower; this browser remembers its width (the sidebar's, AppSidebar).
   const [liveWidth, setLiveWidth] = useStoredWidth("live-view-width", 520)
-  // The panel never takes more than the page can spare beside the conversation, even after the window shrinks.
+  // The panel never takes more than the page can spare beside the conversation, even after the window shrinks. Where
+  // the page can't spare the conversation its width beside the narrowest panel, it is cramped. Only these are kept,
+  // not the page's width: a sidebar drag then renders the page only when they change.
   const area = useRef<HTMLDivElement>(null)
-  const [areaWidth, setAreaWidth] = useState(0)
+  const [liveMax, setLiveMax] = useState(LIVE_MAX)
+  const [cramped, setCramped] = useState(false)
   useEffect(() => {
     const element = area.current
     if (!element) return
-    const observer = new ResizeObserver(([entry]) =>
-      setAreaWidth(entry.contentRect.width)
-    )
+    const observer = new ResizeObserver(([entry]) => {
+      const width = entry.contentRect.width
+      setLiveMax(Math.max(LIVE_MIN, Math.min(LIVE_MAX, width - MAIN_MIN)))
+      setCramped(width < MAIN_MIN + LIVE_MIN)
+    })
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const liveMax = areaWidth
-    ? Math.max(LIVE_MIN, Math.min(LIVE_MAX, areaWidth - MAIN_MIN))
-    : LIVE_MAX
   // A width stored before the minimum rose is shown at the minimum.
   const liveShown = Math.max(LIVE_MIN, Math.min(liveWidth, liveMax))
-  // Expanded, the live view fills the page's middle, over the conversation. Where the page can't spare the
-  // conversation its width beside the narrowest panel, the panel covers it so, and closes as the sheet on a phone does.
+  // Expanded, the live view fills the page's middle, over the conversation; cramped, the panel covers it so, and
+  // closes as the sheet on a phone does.
   const [expanded, setExpanded] = useState(false)
-  const cramped = areaWidth > 0 && areaWidth < MAIN_MIN + LIVE_MIN
   const covering = expanded || cramped
   const liveOpen = isMobile ? sheetOpen : panelOpen
   const setLiveOpen = isMobile ? setSheetOpen : setPanelOpen
@@ -249,6 +255,8 @@ export default function App() {
       ? started.run
       : null
   const running = current !== null
+  // The sidebar's edits to a conversation, for the header's menu.
+  const edits = useRef<ConversationEdits>(null)
   const projectName = (id: string) =>
     projects?.find((each) => each.id === id)?.name
   const userHasControl = status?.control.owner === "user"
@@ -452,10 +460,8 @@ export default function App() {
 
   // The question the main agent asked, while it is open.
   const [asked, setAsked] = useState<AskedQuestion | null>(null)
-  // A touch screen's options are tapped; a narrow window on a computer still has Enter.
-  const hasKeyboard = window.matchMedia("(pointer: fine)").matches
-  const recommended = hasKeyboard ? (asked?.recommended ?? null) : null
-  const many = hasKeyboard && asked?.multiple === true
+  const recommended = HAS_KEYBOARD ? (asked?.recommended ?? null) : null
+  const many = HAS_KEYBOARD && asked?.multiple === true
   // The answer the agent expects typed, when Enter takes no option: the empty composer shows it to take or change.
   const suggestion =
     !approval && !many && recommended === null ? (asked?.suggestion ?? "") : ""
@@ -611,9 +617,9 @@ export default function App() {
   // would cover the question.
   const questioned = asked !== null
   useEffect(() => {
-    if (questioned && hasKeyboard && document.activeElement === document.body)
+    if (questioned && HAS_KEYBOARD && document.activeElement === document.body)
       input.current?.focus()
-  }, [questioned, hasKeyboard, input])
+  }, [questioned, input])
   // The status says at once the run is no longer running, which changes the lists (listsChanged). Replaying an ended
   // run, as opening one does, ends its stream too, and asks the lists for nothing.
   const onRunEnded = refreshStatus
@@ -631,12 +637,8 @@ export default function App() {
   if (!panelMounted && expanded) setExpanded(false)
 
   return (
-    <SidebarProvider
-      style={{ "--sidebar-width": `${sidebarWidth}px` } as CSSProperties}
-    >
+    <SidebarProvider>
       <AppSidebar
-        width={sidebarWidth}
-        onWidth={setSidebarWidth}
         conversations={conversations}
         conversationsFailed={conversationsFailed}
         lists={lists}
@@ -653,6 +655,7 @@ export default function App() {
         onRenameProject={renameProject}
         onDeleteProject={deleteProject}
         composer={input}
+        edits={edits}
       />
       <SidebarInset className="h-svh min-w-0 overflow-hidden">
         <div ref={area} className="relative flex min-h-0 flex-1">
@@ -663,12 +666,12 @@ export default function App() {
           )}
           {/* Beside the panel, which covers it when expanded or cramped: it keeps its width then, so nothing reflows. It
             draws the divider while covered, so the panel sweeps over the line when it expands rather than carrying it
-            along. */}
+            along. The divider stops 8 short of the card's top and bottom, apart from its edge. */}
           <div
             data-slot="live-gap"
             className={cn(
-              "flex min-w-0 flex-1 flex-col transition-[margin-right] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
-              panelMounted && covering && "border-r"
+              "relative flex min-w-0 flex-1 flex-col transition-[margin-right] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
+              panelMounted && covering && [DIVIDER, "after:right-0"]
             )}
             style={{ marginRight: showPanel ? liveShown : 0 }}
             inert={showPanel && covering}
@@ -676,10 +679,21 @@ export default function App() {
             {/* Room at its end for the live view's toggle while that lies over this column. */}
             <header
               className={cn(
-                "flex h-12 shrink-0 items-center gap-2 pl-2.5 transition-[padding] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
-                showPanel ? "pr-2.5" : "pr-13.5"
+                // After the sidebar's toggle on a phone.
+                "flex h-12 shrink-0 items-center gap-2 pl-11.5 transition-[padding] duration-300 ease-(--ease-drawer) motion-reduce:transition-none md:h-13 md:pl-2",
+                showPanel ? "pr-2.5 md:pr-2" : "pr-13.5 md:pr-13"
               )}
             >
+              {/* The open conversation's name, its words on the column of the header buttons' icons. */}
+              {conversation && (
+                <TitleMenu
+                  key={conversation.id}
+                  conversation={conversation}
+                  running={running}
+                  edits={edits}
+                  onRename={rename}
+                />
+              )}
               {/* Over the panel, so it fades out there as the panel covers it rather than being cut by its edge, and
                 back in near the end as the panel shrinks away. */}
               <div
@@ -791,7 +805,7 @@ export default function App() {
               inert={panelClosing}
               className={cn(
                 "absolute inset-y-0 right-0 z-10 bg-background transition-[width,translate,opacity] duration-300 ease-(--ease-drawer) motion-safe:starting:translate-x-full motion-reduce:starting:opacity-0",
-                !covering && "border-l",
+                !covering && [DIVIDER, "after:left-0"],
                 panelClosing &&
                   "motion-safe:translate-x-full motion-reduce:opacity-0"
               )}
@@ -819,7 +833,7 @@ export default function App() {
                 <Button
                   variant={liveOpen ? "secondary" : "ghost"}
                   size="icon"
-                  className="touch-target absolute top-1.5 right-2.5 z-20"
+                  className="touch-target absolute top-1.5 right-2.5 z-20 md:top-2 md:right-2"
                   aria-label={
                     connection
                       ? say.home.liveViewWith(connection.label)

@@ -403,6 +403,7 @@ def telling(monkeypatch) -> list[str]:
     told, tell = [], Background.tell
 
     def recorded(self, id, text):
+        asyncio.get_running_loop()  # raises off the loop: the task's inbox belongs to it
         told.append(text)
         tell(self, id, text)
 

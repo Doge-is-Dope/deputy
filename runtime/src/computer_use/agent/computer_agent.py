@@ -131,6 +131,8 @@ class ComputerAgent(Subagent):
         board = await self.context.blackboard.read(self.task_id)
         today = notes.today(self.context.choices.timezone)
         text = f"{self.opening(task, board)}\n\n{today}"
+        settings, agents = self.context.settings, self.context.choices.agents
+        reviewer = chosen(settings, MAIN_AGENT, agents)
 
         async def review(step: str, png: bytes | None) -> Verdict:
             """Auto review by the main agent's model; a named delete or overwrite target must occur in the user's
@@ -138,9 +140,7 @@ class ComputerAgent(Subagent):
             sent = [message.text for message in told.read(SUBAGENT)]
             context = review_context(text, sent, await self.steps())
             sources = [*self.words(), *sent, *board.requests, *await self.records()]
-            settings = self.context.settings
-            main = build_chat_model(chosen(settings, MAIN_AGENT, self.context.choices.agents), settings)
-            return await review_step(main, context, step, png, sources)
+            return await review_step(build_chat_model(reviewer, settings), context, step, png, sources)
 
         executor = Executor(self.computer, self.control, self.judge)  # fresh for each task, so nothing carries over
         tools, guard = self._equipped(executor, told, review)
@@ -149,10 +149,11 @@ class ComputerAgent(Subagent):
                 await self.windows.ensure()
             start = self._start = HumanMessage(content=content(await executor.observe(f"{text}\n\n{FIRST_SCREEN}")))
             await self.log.input(start, "observe")
-            choice = chosen(self.context.settings, self.agent, self.context.choices.agents)
+            choice = chosen(settings, self.agent, agents)
             self.log.uses(choice.model, name=self.agent)
+            self.log.uses(reviewer.model, MAIN)  # auto review's tokens are priced as the main agent's
             reply = await self.invoke(
-                build_chat_model(choice, self.context.settings),
+                build_chat_model(choice, settings),
                 tools,
                 SYSTEM_PROMPT, guard, start,
                 middleware=[SkillsMiddleware(self.agent)],

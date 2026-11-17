@@ -10,6 +10,7 @@ from computer_use.agent.review import Verdict
 from conftest import desktop_ended, run_turn, runner_of
 from conftest import events_of, first_run, run_file, task_states
 from computer_use.config import RunChoices
+from computer_use.storage import MAIN
 from computer_use.desktop.control import ApprovalFile, ControlFile
 from conftest import (
     computer_use_result,
@@ -223,14 +224,14 @@ async def test_an_approved_key_goes_out_though_the_screen_changed_while_it_waite
 DELETE = {"text": "Delete", "needs_confirmation": True, "consequence": "把桌面上的 a.txt 刪到資源回收筒"}
 
 
-def reviewing(monkeypatch, allow: bool) -> list[dict]:
+def reviewing(monkeypatch, allow: bool, usage: dict | None = None) -> list[dict]:
     """Auto review answers every step with `allow`, by a stand-in for the reviewer; returns what it was asked."""
     asked = []
 
     async def review_step(model, context, step, png, sources):
         asked.append({"context": context, "step": step, "png": png, "sources": sources})
         return Verdict(allow, {"risk": "low", "authorization": "high", "decision": "allow" if allow else "ask",
-                               "reason": "a.txt 是這段對話剛建立的", "seconds": 0.1, "usage": {}})
+                               "reason": "a.txt 是這段對話剛建立的", "seconds": 0.1, "usage": usage or {}})
 
     monkeypatch.setattr(computer_agent, "review_step", review_step)
     return asked
@@ -287,6 +288,22 @@ async def test_with_auto_review_on_a_step_it_lets_through_goes_ahead_without_the
     assert question["step"].startswith('key {"text": "Delete"') and "刪到資源回收筒" in question["step"]
     assert question["sources"][0] == "建立 a.txt 再刪掉"
     assert "auto review let it through: 把桌面上的 a.txt 刪到資源回收筒" in computer_use_result(result)["result"]
+
+
+async def test_auto_review_tokens_are_priced_as_the_main_agents_in_the_tasks_cost(settings, computer, monkeypatch):
+    reviewing(monkeypatch, allow=True, usage={"input": 900, "cached": 0, "cache_write": 0, "output": 40})
+    use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", **DELETE)]),
+                             AIMessage(content="Deleted it.")])
+
+    result = await asyncio.wait_for(
+        run_turn(settings, "建立 a.txt 再刪掉", max_steps=10, computer=computer, choices=AUTO), 20
+    )
+
+    ends = [event for event in events_of(settings, result.run) if event["type"] == "end"]
+    (task_end,) = [end for end in ends if "agent_stop_reason" in end]
+    (main,) = [row for row in task_end["agents"] if row["agent"] == MAIN]
+    assert main["model"] == settings.main_model and main["usage"]["input"] == 900
+    assert task_end["cost"] is not None and task_end["cost"]["input"] > 0
 
 
 async def test_a_step_auto_review_does_not_let_through_waits_for_the_user(settings, computer, monkeypatch):

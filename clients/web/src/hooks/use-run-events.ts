@@ -109,8 +109,8 @@ function openStream(run: string): Shared {
       write("", true)
       const ended = await readEvents(
         response.body,
-        (data, id) => {
-          pending.push({ event: JSON.parse(data) })
+        (event, id) => {
+          pending.push({ event })
           if (id) lastId = id
           frame ||= requestAnimationFrame(flush)
         },

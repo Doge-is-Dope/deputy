@@ -3,15 +3,15 @@ import * as React from "react"
 const MOBILE_BREAKPOINT = 768
 const QUERY = `(max-width: ${MOBILE_BREAKPOINT - 1}px)`
 
+// One list for the page, made on first use: every render reads it, and making one per read is wasted work.
+let list: MediaQueryList | undefined
+const media = () => (list ??= window.matchMedia(QUERY))
+
 function subscribe(onChange: () => void) {
-  const mql = window.matchMedia(QUERY)
-  mql.addEventListener("change", onChange)
-  return () => mql.removeEventListener("change", onChange)
+  media().addEventListener("change", onChange)
+  return () => media().removeEventListener("change", onChange)
 }
 
 export function useIsMobile() {
-  return React.useSyncExternalStore(
-    subscribe,
-    () => window.matchMedia(QUERY).matches
-  )
+  return React.useSyncExternalStore(subscribe, () => media().matches)
 }

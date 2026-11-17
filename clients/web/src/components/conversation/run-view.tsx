@@ -1007,7 +1007,7 @@ export function RunView({
           aria-label={t.run.plan}
           data-closing={planClosing || undefined}
           className={cn(
-            "absolute top-2 right-2.5 z-10 flex max-h-[calc(100%-7rem)] w-72 origin-top-right flex-col overflow-y-auto rounded-2xl px-4 pt-3 pb-2.5 transition-[opacity,scale,filter] delay-100 duration-250 ease-(--ease-out) data-closing:scale-95 data-closing:opacity-0 data-closing:blur-[2px] data-closing:delay-0 motion-reduce:transition-opacity motion-reduce:data-closing:scale-100 motion-reduce:data-closing:blur-none starting:scale-95 starting:opacity-0 starting:blur-[2px] motion-reduce:starting:scale-100 motion-reduce:starting:blur-none",
+            "absolute top-2 right-2.5 z-10 flex max-h-[calc(100%-7rem)] w-72 origin-top-right flex-col overflow-y-auto rounded-2xl px-4 pt-3 pb-2.5 transition-[opacity,scale,filter] delay-100 duration-250 ease-(--ease-out) data-closing:scale-95 data-closing:opacity-0 data-closing:blur-[2px] data-closing:delay-0 motion-reduce:transition-opacity motion-reduce:data-closing:scale-100 motion-reduce:data-closing:blur-none md:right-2 starting:scale-95 starting:opacity-0 starting:blur-[2px] motion-reduce:starting:scale-100 motion-reduce:starting:blur-none",
             docked
               ? "border bg-background shadow-xs"
               : "bg-popover text-popover-foreground shadow-md ring-1 ring-foreground/10"

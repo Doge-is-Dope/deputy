@@ -2,7 +2,7 @@ import { store } from "@/lib/store"
 
 // Where the settings open, when a line in the conversation opens them: a page and the item on it to show. The
 // settings dialog lives in the sidebar, the lines in the conversation: this store is between them.
-export type OpenedSettings = {
+type OpenedSettings = {
   open: boolean
   page: string | null
   item: string | null

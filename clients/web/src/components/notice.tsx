@@ -24,15 +24,17 @@ export function Notice({
   return (
     <div
       data-notice
-      className="flex w-full items-center rounded-full border bg-popover py-1.5 pr-1.5 pl-3 text-sm text-popover-foreground shadow-[0_4px_16px_rgb(0_0_0/0.08)]"
+      className="flex w-full items-center rounded-3xl border bg-popover py-1.5 pr-1.5 pl-3 text-sm text-popover-foreground shadow-[0_4px_16px_rgb(0_0_0/0.08)]"
     >
       <div
         data-notice-content
         className="flex min-w-0 flex-1 items-center gap-2.5"
       >
         {icon}
-        {/* One line, as a conversation's name is in the sidebar. */}
-        <span className="min-w-0 flex-1 truncate">{text}</span>
+        {/* Wraps so the whole message reads; one line keeps the pill shape, as the 24 corner clamps to half its 44. */}
+        <span className="my-1.5 line-clamp-3 min-w-0 flex-1 break-words">
+          {text}
+        </span>
         <div className="flex shrink-0 items-center gap-1.5">
           {action && (
             <Button

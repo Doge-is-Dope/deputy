@@ -28,8 +28,9 @@ from computer_use.memory.files import FileMemoryStore
 from computer_use.storage import MAIN
 from computer_use.storage.files import FileRuns
 from computer_use.desktop.control import RunLock
+from conftest import BIG, OTHER, SMALL
 from conftest import run_turn, runs_dir
-from conftest import crash_point, events_of, first_run, read_events, run_file, task_folder, task_states
+from conftest import events_of, first_run, read_events, run_file, task_folder, task_states
 from conftest import (
     ScriptedModel,
     StreamingModel,
@@ -136,7 +137,7 @@ async def test_each_agent_gets_its_own_model_and_effort(settings, computer, monk
             (choice.model, choice.effort)) or scripted(choice, s, **kw))
     settings = settings.model_copy(update={
         "computer_model": "openai:gpt-6-luna", "computer_effort": "high", "main_model": "openai:gpt-6.1-sol",
-        "main_effort": "medium",
+        "main_effort": "medium", "openai_api_key": "sk-offline",
     })
 
     await run_turn(settings, "open notepad", max_steps=10, computer=computer)
@@ -148,15 +149,18 @@ def test_a_choice_follows_the_main_agent_unless_changed_and_its_effort_is_one_th
     from computer_use.agent.models import chosen
     from computer_use.config import Choice
 
+    settings.openai_api_key = "sk-offline"  # none for Anthropic
     assert chosen(settings, "coding") == Choice(settings.main_model, settings.main_effort)  # never chosen
     choices = {
-        "main": {"model": "openai:gpt-6.1-sol", "effort": "medium"},
+        "main": {"model": BIG, "effort": "medium"},
         "computer": {"model": "openai:gpt-5-gone", "effort": "none"},  # a model no longer offered
-        "coding": {"model": "openai:gpt-6-luna", "effort": "follow"},
+        "coding": {"model": SMALL, "effort": "follow"},
+        "designer": {"model": OTHER},  # offered, but without its API key
     }
-    # The main agent's model, at the lowest effort it takes: GPT-6.1 Sol has no "none".
-    assert chosen(settings, "computer", choices) == Choice("openai:gpt-6.1-sol", "low")
-    assert chosen(settings, "coding", choices) == Choice("openai:gpt-6-luna", "medium")
+    # The main agent's model, at the lowest effort it takes: BIG has no "none".
+    assert chosen(settings, "computer", choices) == Choice(BIG, "low")
+    assert chosen(settings, "coding", choices) == Choice(SMALL, "medium")
+    assert chosen(settings, "designer", choices) == Choice(BIG, "medium")
     following = settings.model_copy(update={"computer_model": "", "computer_effort": ""})
     assert chosen(following, "computer") == Choice(settings.main_model, settings.main_effort)
 
@@ -335,31 +339,6 @@ async def test_a_stop_stays_a_stop_when_its_record_cannot_be_stored(settings, co
     run.cancel()
     with pytest.raises(asyncio.CancelledError):
         await run
-
-
-async def test_a_task_the_runtime_died_under_is_told_to_the_next_run(settings, computer, monkeypatch):
-    pressing = asyncio.Event()
-
-    async def press(combos):
-        pressing.set()
-        await asyncio.Event().wait()
-
-    computer.press = press
-    use_script(monkeypatch, [AIMessage(content="Open Start.", tool_calls=[tool_call("c1", "key", text="win")])])
-    run = asyncio.create_task(run_turn(settings, "open start", max_steps=10, computer=computer))
-    await pressing.wait()
-    died = crash_point(settings)
-    run.cancel()
-    await asyncio.gather(run, return_exceptions=True)
-    died()
-    thread = first_run(settings)
-    _, main_model = use_script(monkeypatch, [], main=[AIMessage("It may or may not have opened.")])
-
-    await run_turn(settings, "did it open?", max_steps=10, computer=computer, thread=thread)
-
-    notes_heard = [m.text for m in main_model.received[0] if not from_user(m) and isinstance(m, HumanMessage)]
-    assert len(notes_heard) == 1
-    assert "The run was stopped, and the background task t1 (computer agent) with it" in notes_heard[0]
 
 
 def test_a_call_a_stopped_run_left_unanswered_is_answered_as_unknown():

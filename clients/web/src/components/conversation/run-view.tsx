@@ -227,6 +227,7 @@ function RunTurn({
         active={active}
         error={status?.error?.run === run ? status.error.message : null}
         userSince={userSince(status)}
+        models={status?.models}
         disconnected={status?.computer.connected === false}
         approving={approvalFor(status, known)?.consequence ?? null}
         takingOver={takingOver}
@@ -839,9 +840,10 @@ export function RunView({
             className="space-y-10"
           >
             {start > 0 && (
+              // Skipped while out of view, so its spinner doesn't draw a frame every vsync over the whole page.
               <div
                 ref={earlier}
-                className="flex h-8 items-center justify-center"
+                className="flex h-8 items-center justify-center [content-visibility:auto]"
               >
                 <Spinner />
               </div>
@@ -952,9 +954,8 @@ export function RunView({
                 : undefined
             }
             className={cn(
-              "group/latest absolute bottom-full left-1/2 mb-6 flex size-8 -translate-x-1/2 items-center justify-center rounded-full glass transition-[opacity,scale,filter,visibility] duration-200 ease-[cubic-bezier(0.4,0,0.2,1)] outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
-              !behind &&
-                "invisible scale-90 opacity-0 blur-[2px] motion-reduce:scale-100 motion-reduce:blur-none"
+              "group/latest absolute bottom-full left-1/2 mb-6 flex size-8 -translate-x-1/2 items-center justify-center rounded-full glass transition-[opacity,visibility] duration-120 outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
+              !behind && "invisible opacity-0"
             )}
             onClick={() =>
               scroller.current?.scrollTo({

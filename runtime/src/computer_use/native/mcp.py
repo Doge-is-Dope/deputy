@@ -1,16 +1,15 @@
-"""The host over MCP on HTTPS, reached with the credentials kept for its desktop. No call is retried."""
+"""The host over MCP on HTTPS, reached as one URL says. No call is retried."""
 
 import asyncio
 import hashlib
 import http.client
 import json
-import os
 import re
 import ssl
 import uuid
 from collections.abc import Callable
-from dataclasses import asdict, dataclass
-from pathlib import Path
+from dataclasses import dataclass
+from urllib.parse import unquote, urlsplit
 
 from computer_use.native import HostError
 
@@ -18,88 +17,79 @@ PROTOCOL = "2025-11-25"
 # Lease calls are the host's own, beside MCP: models never see them.
 CONTROL = ("control.resume", "control.heartbeat", "control.takeover")
 Post = Callable[[str, dict, float], dict]
+URL_SHAPE = "https://<token>@<address>:<port>/<certificate SHA-256>"
 
 
 @dataclass(frozen=True)
-class Credentials:
-    """What reaches one host: its token, and its certificate's SHA-256 once known."""
+class Connection:
+    """How to reach one host: where it listens, its token, and its certificate's SHA-256."""
 
+    address: str
+    port: int
     token: str
-    fingerprint: str | None = None
+    fingerprint: str
+
+    @classmethod
+    def from_url(cls, url: str) -> "Connection":
+        """The host's line, as `URL_SHAPE`; the port is 8767 when left out."""
+        parts = urlsplit(url.strip())
+        fingerprint = parts.path.strip("/").lower()
+        if parts.scheme != "https" or not parts.hostname or not parts.username or not re.fullmatch("[0-9a-f]{64}", fingerprint):
+            raise ValueError(f"WINDOWS_TOOLS_URL must be {URL_SHAPE}.")
+        return cls(parts.hostname, parts.port or 8767, unquote(parts.username), fingerprint)
 
 
-class CredentialFile:
-    """A desktop's host credentials, kept beside its other shared state so every server of that desktop uses the
-    same host. A token set by hand (`token`) is the one used, and the file then remembers only its certificate."""
-
-    def __init__(self, path: Path, token: str | None = None):
-        self.path = path
-        self.token = token
-
-    def read(self) -> Credentials | None:
-        try:
-            kept = Credentials(**json.loads(self.path.read_text()))
-        except (FileNotFoundError, ValueError, TypeError):
-            kept = None
-        if self.token is None:
-            return kept
-        return kept if kept and kept.token == self.token else Credentials(self.token)
-
-    def write(self, credentials: Credentials) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        scratch = self.path.with_suffix(".new")
-        with open(os.open(scratch, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600), "w") as file:
-            json.dump(asdict(credentials), file)
-        scratch.replace(self.path)
-
-
-def check_certificate(store: CredentialFile, credentials: Credentials, certificate: bytes) -> None:
-    """Refuse a host whose certificate is not the known one. With none known yet, as for a host started by hand,
-    the first seen is remembered."""
-    seen = hashlib.sha256(certificate).hexdigest()
-    if credentials.fingerprint is None:
-        store.write(Credentials(credentials.token, seen))
-    elif seen != credentials.fingerprint:
+def check_certificate(connection: Connection, certificate: bytes) -> None:
+    """Refuse a host whose certificate is not the one its URL names, before the token goes to it."""
+    if hashlib.sha256(certificate).hexdigest() != connection.fingerprint:
         raise HostError(
             "certificate_changed",
-            f"The Windows Tools host's certificate is not the known one. If that is expected, delete {store.path}.",
+            "The Windows Tools host's certificate is not the one in WINDOWS_TOOLS_URL. If the host was set up again, "
+            "put its new line in WINDOWS_TOOLS_URL.",
             sent=False,
         )
 
 
-def https(host: str, port: int, store: CredentialFile) -> Post:
-    """Posts JSON to the host, the token sent only once its certificate is the known one."""
+def https(connection: Connection) -> Post:
+    """Posts JSON to the host, the token sent only once its certificate is the one named."""
     context = ssl.create_default_context()
     # The fingerprint is the check: the host signs its own certificate.
     context.check_hostname, context.verify_mode = False, ssl.CERT_NONE
 
     def post(path: str, body: dict, timeout: float) -> dict:
-        credentials = store.read()
-        if credentials is None:
-            raise HostError("not_started", "The Windows Tools host has not been started yet.", sent=False)
-        connection = http.client.HTTPSConnection(host, port, timeout=timeout, context=context)
+        client = http.client.HTTPSConnection(connection.address, connection.port, timeout=timeout, context=context)
         try:
             try:
-                connection.connect()
-                check_certificate(store, credentials, connection.sock.getpeercert(binary_form=True))
+                client.connect()
+                check_certificate(connection, client.sock.getpeercert(binary_form=True))
             except OSError as error:
-                raise HostError("unreachable", f"The Windows Tools host did not answer: {error}", sent=False) from None
+                raise HostError("unreachable", (
+                    f"The Windows Tools host did not answer: {error}. Sign in to Windows as its account and allow port "
+                    f"{connection.port}; if the computer's address changed, run the installer again and put its new "
+                    "line in WINDOWS_TOOLS_URL."
+                ), sent=False) from None
             try:
-                connection.request("POST", path, json.dumps(body, ensure_ascii=False).encode(), {
-                    "Authorization": f"Bearer {credentials.token}", "Content-Type": "application/json",
+                client.request("POST", path, json.dumps(body, ensure_ascii=False).encode(), {
+                    "Authorization": f"Bearer {connection.token}", "Content-Type": "application/json",
                     "Accept": "application/json, text/event-stream", "MCP-Protocol-Version": PROTOCOL,
                 })
-                response = connection.getresponse()
+                response = client.getresponse()
                 text = response.read().decode()
             except (OSError, http.client.HTTPException) as error:
                 raise HostError("no_reply", f"The Windows Tools host did not reply: {error}") from None
             if response.status == 401:
-                raise HostError("unauthorized", "The Windows Tools host refused the token.", sent=False)
+                raise HostError("unauthorized", (
+                    "The Windows Tools host refused the token in WINDOWS_TOOLS_URL. Copy the installer's line into it "
+                    "again."
+                ), sent=False)
             if response.status not in (200, 202):
                 raise HostError("http_error", f"The Windows Tools host answered HTTP {response.status}.")
-            return json.loads(text) if text else {}
+            message = json.loads(text) if text else {}
+            if not isinstance(message, dict):
+                raise HostError("protocol_error", "The Windows Tools host did not reply with a JSON object.")
+            return message
         finally:
-            connection.close()
+            client.close()
 
     return post
 
@@ -155,7 +145,9 @@ def _result(envelope: object) -> dict:
     if not isinstance(envelope, dict):
         raise HostError("protocol_error", "The Windows Tools host's reply had no result.")
     if error := envelope.get("error"):
-        raise HostError(error.get("code", "error"), error.get("message", "The call failed."), sent=error.get("delivery") != "not_sent")
+        if not isinstance(error, dict) or not isinstance(error.get("code"), str):
+            raise HostError("protocol_error", "The Windows Tools host's error had no code.")
+        raise HostError(error["code"], error.get("message", "The call failed."), sent=error.get("delivery") != "not_sent")
     if not isinstance(envelope.get("result"), dict):
         raise HostError("protocol_error", "The Windows Tools host's reply had no result.")
     return envelope["result"]

@@ -143,6 +143,9 @@ A rounded shape inside another, close to its corner, has the outer radius less t
 - A round button in a rounded box sits the same distance from the top, the side and the bottom (the composer's send).
 - When the gap is as large as the outer radius, the inner shape is clear of the corner and keeps its own radius (a
   select in a settings card, a button in a dialog with `p-4`).
+- The composer, and what takes its place, keeps its 28 in the page card's corner. A narrow conversation (a side
+  panel open, a small window) puts it 16 from the card's side and bottom, inside the card's 20: the rule's 4 would
+  make it a box, and 16 is nearly clear of the corner.
 
 ## Measuring
 

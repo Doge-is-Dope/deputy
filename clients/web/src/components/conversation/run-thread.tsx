@@ -5,14 +5,20 @@ import { cn } from "cn"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useCopy } from "@/hooks/use-copy"
-import { type Pending } from "@/lib/api"
+import { type Pending, type Status } from "@/lib/api"
 import { sentWith } from "@/lib/attachments"
 import { useNow } from "@/hooks/use-now"
-import { formatDuration, problemReport, type Problem } from "@/lib/format"
+import {
+  formatDuration,
+  modelName,
+  problemReport,
+  type Problem,
+} from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import {
   citedMemories,
   openQuestion,
+  runningTask,
   unlogged,
   type Item,
   type Task,
@@ -222,16 +228,6 @@ function WorkFold({ open, children }: { open: boolean; children: ReactNode }) {
   )
 }
 
-/** The task of a work item that is on the computer and under way, if any. */
-function computerTask(item: Extract<Item, { kind: "task" | "agents" }>) {
-  const tasks = item.kind === "task" ? [item.task] : item.tasks
-  return (
-    tasks.find(
-      (task) => task.outcome === "running" && task.agent === "computer"
-    ) ?? null
-  )
-}
-
 /** Render messages and replies in order, with delegated work grouped at its end.
  * Keep active work last, below commentary and steering messages. */
 export function RunThread({
@@ -245,6 +241,7 @@ export function RunThread({
   active,
   error,
   userSince = null,
+  models,
   disconnected = false,
   approving,
   takingOver = false,
@@ -269,6 +266,7 @@ export function RunThread({
   active: boolean
   error: string | null
   userSince?: number | null // the user has had the desktop since then, by the runtime's status
+  models?: Status["models"] // to name the models the run used
   disconnected?: boolean // the desktop can't be reached
   approving: string | null // the step the run waits for the user to approve, which the composer asks: what it will do
   takingOver?: boolean // the run waits for the user to take over the desktop, which the composer asks
@@ -306,7 +304,8 @@ export function RunThread({
       )
     : []
   // The task on the computer now, which the user's turns at the desktop and the steps they approve are about.
-  const onComputer = working.map(computerTask).find((task) => task) ?? null
+  const underWay = active ? runningTask(thread) : null
+  const onComputer = underWay?.agent === "computer" ? underWay : null
   // Opened while it worked, a work group folds once it is done.
   const [under, setUnder] = useState(working.map((item) => item.key))
   if (
@@ -428,7 +427,10 @@ export function RunThread({
               end && item === lastReply
                 ? {
                     cost: end.cost,
-                    agents: end.agents,
+                    agents: end.agents.map((each) => ({
+                      ...each,
+                      name: modelName(each.model, models),
+                    })),
                     took:
                       thread.started === null
                         ? undefined

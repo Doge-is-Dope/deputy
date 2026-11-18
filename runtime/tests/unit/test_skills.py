@@ -94,7 +94,7 @@ async def test_the_computer_agent_is_told_its_skills_and_reads_one(settings, com
     result = await run_turn(settings, "open notepad", max_steps=5, computer=computer)
 
     system = computer_model.received[0][0]
-    assert isinstance(system, SystemMessage) and system.text.endswith(SkillsMiddleware("computer", tmp_path).section)
+    assert isinstance(system, SystemMessage) and system.text.endswith("\n- windows: Windows.")
     skill = computer_model.received[1][-1]
     assert isinstance(skill, ToolMessage) and skill.status == "success" and "Run dialog (win+r)" in skill.text
     (action,) = logged(result, "action")

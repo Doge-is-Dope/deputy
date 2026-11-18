@@ -1,15 +1,18 @@
 """Commands on Windows through the Windows Tools host: the transport, the lease and what the model is told."""
 
+import hashlib
+
 import pytest
 from langchain_core.messages import AIMessage
 
-from computer_use.config import RunChoices
+from computer_use.adapters import build_windows_tools
+from computer_use.computers import Status
+from computer_use.config import RunChoices, Settings
 from computer_use.native import HostError
 from computer_use.native.execution import MAX_OUTPUT_CHARACTERS, Commands, report
-from computer_use.native import launcher
-from computer_use.native.launcher import FINGERPRINT_PREFIX, TOKEN_PREFIX, RdpLauncher
-from computer_use.native.lease import Lease, WindowsTools
-from computer_use.native.mcp import CredentialFile, Credentials, McpChannel, check_certificate
+from computer_use.native import lease as leases
+from computer_use.native.lease import Lease
+from computer_use.native.mcp import Connection, McpChannel, check_certificate
 from computer_use.tools.native import command_tools
 
 from conftest import run_turn, use_script
@@ -38,28 +41,35 @@ class Host:
         return [method for method, _, _ in self.calls]
 
 
-def test_a_host_started_by_hand_has_its_first_certificate_remembered_and_another_refused(tmp_path):
-    store = CredentialFile(tmp_path / "data" / "windows-tools.json", token="set by hand")
-    assert store.read() == Credentials("set by hand")
-    check_certificate(store, store.read(), b"first certificate")
-    known = store.read()
-    assert known.token == "set by hand" and known.fingerprint is not None
-    check_certificate(store, known, b"first certificate")
+TOKEN, FINGERPRINT = "ab" * 32, hashlib.sha256(b"the host's certificate").hexdigest()
+URL = f"https://{TOKEN}@127.0.0.1:8767/{FINGERPRINT.upper()}"
+
+
+def test_one_url_says_where_the_host_is_its_token_and_its_certificate():
+    assert Connection.from_url(URL) == Connection("127.0.0.1", 8767, TOKEN, FINGERPRINT)
+    assert Connection.from_url(f"https://{TOKEN}@windows.example/{FINGERPRINT}").port == 8767
+    for wrong in (f"https://127.0.0.1/{FINGERPRINT}", f"https://{TOKEN}@127.0.0.1", f"http://{TOKEN}@127.0.0.1/{FINGERPRINT}"):
+        with pytest.raises(ValueError, match="WINDOWS_TOOLS_URL"):
+            Connection.from_url(wrong)
+
+
+def test_only_the_certificate_the_url_names_is_trusted():
+    connection = Connection.from_url(URL)
+    check_certificate(connection, b"the host's certificate")
     with pytest.raises(HostError) as refused:
-        check_certificate(store, known, b"another certificate")
-    assert not refused.value.sent and str(store.path) in str(refused.value)
-    # Another token set by hand is another host: nothing known of its certificate.
-    assert CredentialFile(store.path, token="a new one").read() == Credentials("a new one")
+        check_certificate(connection, b"another certificate")
+    assert refused.value.code == "certificate_changed" and not refused.value.sent
 
 
-def test_a_host_the_runtime_starts_is_reached_with_what_was_kept_for_its_desktop(tmp_path):
-    store = CredentialFile(tmp_path / "windows-tools.json")
-    assert store.read() is None  # not started yet
-    store.write(Credentials("made for this run", "ab" * 32))
-    assert CredentialFile(store.path).read() == Credentials("made for this run", "ab" * 32)  # another server's view
-    assert store.path.stat().st_mode & 0o777 == 0o600
-    with pytest.raises(HostError):
-        check_certificate(store, store.read(), b"not the certificate it announced")
+def test_windows_tools_are_on_with_a_url_in_env_and_write_nothing(settings, control, tmp_path):
+    env = tmp_path / ".env"
+    env.write_text(f"WINDOWS_TOOLS_URL={URL}\n")
+    on = Settings(_env_file=env, data_dir=settings.data_dir)
+    assert Connection.from_url(on.windows_tools_url.get_secret_value()).fingerprint == FINGERPRINT  # the whole line
+    assert build_windows_tools(on, control) is not None
+    for off in (None, ""):
+        assert build_windows_tools(Settings(_env_file=None, data_dir=settings.data_dir, windows_tools_url=off), control) is None
+    assert not list(settings.data_dir.glob("windows-tools*"))
 
 
 async def test_a_tool_call_names_the_session_it_is_for_and_the_lease_goes_beside_mcp():
@@ -145,9 +155,24 @@ async def test_a_fault_keeps_who_has_the_desktop_and_the_lease_is_taken_again(co
     assert host.sent()[-1] == "control.takeover"
 
 
+async def test_the_status_says_whether_the_host_answers_checked_again_after_a_while(control, monkeypatch):
+    host = Host()
+    lease = Lease(host, control)
+    host.fail = HostError("unreachable", "The host did not answer.", sent=False)
+    assert await lease.status() == Status(False, "The host did not answer.")
+    host.fail = None
+    assert not (await lease.status()).connected and host.sent() == ["describe"]  # the last check holds a while
+    monkeypatch.setattr(leases, "STATUS_SECONDS", 0)
+    assert await lease.status() == Status(True)
+    control.write("agent", "returned")
+    await lease.step()
+    host.calls.clear()
+    assert await lease.status() == Status(True) and not host.calls  # a lease held says so itself
+
+
 def commands(host, control, executor) -> tuple[Commands, Lease]:
     lease = Lease(host, control)
-    return Commands(WindowsTools(host, lease, CredentialFile(executor.control.path.with_name("windows-tools.json"))), executor), lease
+    return Commands(lease, executor), lease
 
 
 async def test_a_command_returns_how_it_ended_what_it_printed_and_the_screen(executor, control):
@@ -215,7 +240,8 @@ def test_a_command_can_be_held_for_approval_like_other_input(executor, control):
 
 
 async def test_a_task_has_commands_unless_the_user_turned_them_off(settings, computer, control, monkeypatch):
-    windows = WindowsTools(Host(), Lease(Host(), control), CredentialFile(settings.data_dir / "windows-tools.json"))
+    host = Host()
+    windows = Lease(host, control)
 
     async def offered(**choices) -> set[str]:
         model, _ = use_script(monkeypatch, [AIMessage(content="Done.")])
@@ -223,100 +249,7 @@ async def test_a_task_has_commands_unless_the_user_turned_them_off(settings, com
         return {tool.name for tool in model.bindings[0]["tools"]}
 
     assert "run_command" in await offered()
+    assert host.sent() == ["describe", "control.resume", "control.takeover"]
+    host.calls.clear()
     assert "run_command" not in await offered(choices=RunChoices(commands=False))
-
-
-class FakeClipboard:
-    """A clipboard a host answers on: once it holds a token, the next look finds the fingerprint."""
-
-    def __init__(self, answers: bool = True):
-        self.text, self.answers, self.puts = "", answers, []
-
-    async def put(self, text: str) -> None:
-        self.puts.append(text)
-        self.text = text
-
-    async def get(self) -> str:
-        if self.answers and self.text.startswith(TOKEN_PREFIX):
-            self.text = FINGERPRINT_PREFIX + "cd" * 32
-        return self.text
-
-
-PATH = r"C:\tools\windows-tools-host.exe"
-
-
-async def test_the_host_is_started_from_the_run_dialog_and_the_token_goes_by_the_clipboard(computer, monkeypatch):
-    monkeypatch.setattr(launcher, "RUN_OPENS_SECONDS", 0)
-    clipboard = FakeClipboard()
-    fingerprint = await RdpLauncher(computer, clipboard, PATH, "127.0.0.1", 8767).start("secret token")
-    assert fingerprint == "cd" * 32
-    command = f'conhost.exe --headless "{PATH}" --attach 127.0.0.1 8767'
-    assert computer.calls == [("press", [["win", "r"]]), ("type_text", command), ("press", [["enter"]])]
-    assert "secret token" not in command
-    assert clipboard.puts == [TOKEN_PREFIX + "secret token", ""]  # nothing of the exchange stays there
-
-
-async def test_a_host_that_does_not_answer_is_not_started(computer, monkeypatch):
-    for name in ("RUN_OPENS_SECONDS", "ANSWER_POLL_SECONDS"):
-        monkeypatch.setattr(launcher, name, 0)
-    monkeypatch.setattr(launcher, "ANSWER_SECONDS", 0.05)
-    clipboard = FakeClipboard(answers=False)
-    with pytest.raises(HostError) as failed:
-        await RdpLauncher(computer, clipboard, PATH, "127.0.0.1", 8767).start("secret token")
-    assert not failed.value.sent and clipboard.text == ""
-
-
-def test_a_launcher_needs_the_hosts_own_address_and_a_path_the_run_dialog_takes(computer):
-    for path, address in ((PATH, "windows.example"), ('C:\\a"b.exe', "127.0.0.1"), ("C:\\" + "x" * 260, "127.0.0.1")):
-        with pytest.raises(ValueError):
-            RdpLauncher(computer, FakeClipboard(), path, address, 8767)
-
-
-class Starts:
-    """A launcher that starts the fake host, or fails."""
-
-    def __init__(self, host: Host, fails: bool = False):
-        self.host, self.fails, self.tokens = host, fails, []
-
-    async def start(self, token: str) -> str:
-        self.tokens.append(token)
-        if self.fails:
-            raise HostError("not_started", "The host did not answer after it was started.", sent=False)
-        self.host.fail = None
-        return "ef" * 32
-
-
-def started_by_runtime(control, tmp_path, fails=False) -> tuple[WindowsTools, Host, Starts]:
-    host = Host()
-    host.fail = HostError("unreachable", "The host did not answer.", sent=False)  # nothing runs there yet
-    starts = Starts(host, fails)
-    return WindowsTools(host, Lease(host, control), CredentialFile(tmp_path / "windows-tools.json"), starts), host, starts
-
-
-async def test_a_task_starts_the_host_when_it_does_not_answer_and_keeps_what_reaches_it(control, tmp_path):
-    windows, host, starts = started_by_runtime(control, tmp_path)
-    control.write("agent", "returned")
-    await windows.ensure()
-    [token] = starts.tokens
-    assert len(token) == 64 and windows.store.read() == Credentials(token, "ef" * 32)
-    assert windows.lease.target == TARGET and windows.lease.problem == ""
-    await windows.ensure()  # it answers now: not started again
-    assert len(starts.tokens) == 1
-
-
-async def test_the_host_is_not_started_while_the_user_has_the_desktop_or_when_started_by_hand(control, tmp_path):
-    windows, host, starts = started_by_runtime(control, tmp_path)
-    control.write("user", "took over")
-    await windows.ensure()
-    by_hand = WindowsTools(host, Lease(host, control), CredentialFile(tmp_path / "by-hand.json", "set by hand"))
-    control.write("agent", "returned")
-    await by_hand.ensure()
-    assert starts.tokens == [] and host.calls == []
-
-
-async def test_a_host_that_cannot_be_started_leaves_the_task_without_commands_and_says_why(control, tmp_path):
-    windows, _, _ = started_by_runtime(control, tmp_path, fails=True)
-    control.write("agent", "returned")
-    await windows.ensure()
-    assert windows.lease.target is None and "did not answer after it was started" in windows.lease.problem
-    assert windows.store.read() is None
+    assert not host.calls

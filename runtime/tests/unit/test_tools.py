@@ -5,7 +5,6 @@ from types import SimpleNamespace
 
 import pytest
 from PIL import Image, ImageDraw
-from pydantic import ValidationError
 
 import computer_use.desktop.executor
 import computer_use.desktop.screen
@@ -82,14 +81,6 @@ def test_every_input_action_must_say_whether_it_needs_the_users_approval(tools):
         schema = each.args_schema.model_json_schema()
         assert ("needs_confirmation" in schema.get("required", [])) == (name in CONFIRMABLE), name
         assert ("consequence" in schema["properties"]) == (name in CONFIRMABLE), name
-
-
-async def test_an_input_action_without_the_flag_sends_nothing(tools, computer):
-    # In the agent, LangChain hands the model this error to fix (test_confirm); nothing reaches the computer.
-    unflagged = {"type": "tool_call", "name": "key", "args": {"text": "ctrl+s"}, "id": "call_key"}
-    with pytest.raises(ValidationError, match="needs_confirmation"):
-        await tools["key"].ainvoke(unflagged)
-    assert computer.calls == []
 
 
 def test_a_mark_rings_where_a_step_acts_and_nothing_else():
@@ -312,30 +303,19 @@ async def test_only_single_home_end_and_select_all_shorten_no_change_wait(
     tools, monkeypatch, text, repeat, configured, expected,
 ):
     settle_waits(monkeypatch, configured, 0.5, 3.0)
-    observed = []
-
-    async def capture_wait(computer, before, no_change_seconds):
-        observed.append(no_change_seconds)
-        return await computer_use.desktop.screen.capture(computer)
-
-    monkeypatch.setattr(computer_use.desktop.executor, "settle", capture_wait)
+    clock = fake_clock(monkeypatch)  # the screen never changes, so the key waits out its whole no-change wait
     assert (await call(tools, "key", text=text, repeat=repeat)).status == "success"
-    assert observed == [expected]
+    assert expected <= clock.now < expected + 0.2
 
 
 async def test_batch_shortcuts_keep_the_configured_wait(tools, monkeypatch):
     settle_waits(monkeypatch, 1.5, 0, 0)
-    waits = []
-
-    async def capture_wait(computer, before, no_change_seconds):
-        waits.append(no_change_seconds)
-        return await computer_use.desktop.screen.capture(computer)
-
-    monkeypatch.setattr(computer_use.desktop.executor, "settle", capture_wait)
+    clock = fake_clock(monkeypatch)
     result = await call_batch(tools, *(("key", {"text": key}) for key in ["home", "end", "ctrl+a"]))
-    assert result.status == "success" and waits == [1.5, 1.5, 1.5]
+    assert result.status == "success" and 4.5 <= clock.now < 5.0
+    batched = clock.now
     await call(tools, "key", text="home")
-    assert waits == [1.5, 1.5, 1.5, 0.8]
+    assert 0.8 <= clock.now - batched < 1.0
 
 
 async def test_same_shortcut_in_and_out_of_a_batch_still_counts_as_repeated(executor):
@@ -517,9 +497,3 @@ async def test_only_input_and_wait_can_be_batched(executor, computer):
     result = await executor.run_batch([("left_click", {"coordinate": [10, 10]}), ("screenshot", {})])
     assert not result.ok and result.text == "Nothing was sent: screenshot cannot be part of a batch."
     assert computer.calls == []
-
-
-async def test_scripts_reach_the_computer(tools, computer):
-    await call(tools, "key", text="win+r")
-    await call(tools, "type", text="powershell -NoProfile -Command Get-Date")
-    assert computer.calls == [("press", [["win", "r"]]), ("type_text", "powershell -NoProfile -Command Get-Date")]

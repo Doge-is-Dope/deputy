@@ -6,6 +6,7 @@ import {
 } from "react"
 
 import { showError } from "@/components/notice"
+import { editDraft } from "@/hooks/use-drafts"
 import { useT } from "@/lib/i18n"
 import {
   MAX_FILES,
@@ -13,9 +14,12 @@ import {
   isPhoto,
   refused,
   thumbnail,
+  unique,
   uploaded,
   type Attachment,
 } from "@/lib/attachments"
+import { withComments } from "@/lib/markup"
+import { forgetTiles } from "@/lib/side-panel"
 import { store } from "@/lib/store"
 
 const KEY = "draft-attachments"
@@ -83,50 +87,89 @@ export function useAttachments(draft: string) {
     )
   }
 
+  // A tile for the file, as it starts to upload; its preview comes once made.
+  function taken(file: File, key: string = crypto.randomUUID()): Attachment {
+    files.set(key, file)
+    const image = isPhoto(file.type)
+    if (image)
+      thumbnail(file).then(
+        (preview) => update(key, { preview }),
+        () => {} // a file that is no image after all: its tile stays plain
+      )
+    return {
+      key,
+      name: file.name,
+      kind: image ? "image" : "file",
+      preview: null,
+      id: null,
+      state: "uploading",
+    }
+  }
+
+  // Under a name no other tile has, numbered as the model would get it (unique), so its name on the tile is the one
+  // the model gets, and a picture's comments in the message are labelled by it.
+  function named(file: File, others: Attachment[]) {
+    const name = unique(file.name, new Set(others.map((each) => each.name)))
+    return name === file.name
+      ? file
+      : new File([file], name, {
+          type: file.type,
+          lastModified: file.lastModified,
+        })
+  }
+
+  /** Files added as tiles, after those there: the tiles they became. */
   function add(picked: File[]) {
     const room = MAX_FILES - list.length
     if (picked.length > room) showError(t.composer.attachments.many(MAX_FILES))
-    const taken: Attachment[] = []
+    const added: Attachment[] = []
     for (const file of picked.slice(0, Math.max(0, room))) {
       if (refused(file)) {
         showError(t.composer.attachments.size)
         continue
       }
-      const key = crypto.randomUUID()
-      files.set(key, file)
-      const image = isPhoto(file.type)
-      taken.push({
-        key,
-        name: file.name,
-        kind: image ? "image" : "file",
-        preview: null,
-        id: null,
-        state: "uploading",
-      })
-      if (image)
-        thumbnail(file).then(
-          (preview) => update(key, { preview }),
-          () => {} // a file that is no image after all: its tile stays plain
-        )
+      added.push(taken(named(file, [...list, ...added])))
     }
-    edit(draft, (all) => [...all, ...taken])
-    for (const each of taken) send(each.key, files.get(each.key)!)
+    edit(draft, (all) => [...all, ...added])
+    for (const each of added) send(each.key, files.get(each.key)!)
+    return added
+  }
+
+  /** The tile's file changed for another (its marked-up copy), in its place and under its key, so what shows it goes
+   * on showing it: the tile it became. */
+  function replace(key: string, file: File) {
+    const tile = taken(
+      named(
+        file,
+        list.filter((each) => each.key !== key)
+      ),
+      key
+    )
+    edit(draft, (all) => all.map((each) => (each.key === key ? tile : each)))
+    send(key, files.get(key)!)
+    return tile
   }
 
   function remove(key: string) {
+    const tile = attached.get()[draft]?.find((each) => each.key === key)
+    if (tile?.kind === "image")
+      editDraft(draft, (text) => withComments(text, [], tile.name))
     files.delete(key)
+    forgetTiles([key])
     edit(draft, (all) => all.filter((each) => each.key !== key))
   }
 
   return {
     list,
     add,
+    replace,
     remove,
     retry: (key: string) => send(key, files.get(key)!),
     // Only what a message took: a file added while it was being sent stays for the next.
     clear: (sent: readonly Attachment[]) => {
       const keys = new Set(sent.map((each) => each.key))
       for (const key of keys) files.delete(key)
+      forgetTiles(keys, true)
       edit(draft, (all) => all.filter((each) => !keys.has(each.key)))
     },
     // Every file is uploaded: the message can go with them.

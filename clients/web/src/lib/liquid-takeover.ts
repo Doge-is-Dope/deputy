@@ -289,7 +289,7 @@ const valueAt = (tween: Tween, now: number) =>
 const finished = (tween: Tween, now: number) =>
   now >= tween.start + tween.duration
 
-export type LiquidParts = {
+type LiquidParts = {
   screen: Element
   pill: Element
   button: Element

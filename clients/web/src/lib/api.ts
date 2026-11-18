@@ -5,7 +5,7 @@ import { answered } from "@/lib/session"
 
 export type Owner = "agent" | "user"
 // How a log ended: a turn's ("replied", "cancelled", "error"), or a task's ("ended", "stopped", "error").
-export type StopReason = "replied" | "cancelled" | "error" | "ended" | "stopped"
+type StopReason = "replied" | "cancelled" | "error" | "ended" | "stopped"
 // Why a run failed, as the runtime codes it (agent/failures.py, which says what each covers). The page says each in
 // words (run.errors) and puts the code only in the report the user copies.
 export type ErrorCode =
@@ -20,13 +20,21 @@ export type ErrorCode =
 /** An agent's model ("provider:model") and reasoning effort. */
 export type Choice = { model: string; effort: string }
 
+export type ModelUnavailable = "no_api_key"
+
 export type Status = {
   // Each agent's model and effort as the runtime starts it, by agent: "main", then those it hands work to; a value, or
   // "follow" (the main agent's). What the user chooses over them is kept in this browser (lib/choices.ts): the runtime
   // is shared by many users and keeps none of their choices.
   defaults: Record<string, Choice>
   title_model: Choice // runtime-managed, displayed read-only
-  models: { id: string; efforts: string[] }[] // what the settings page offers, each with the efforts it takes
+  // What the settings page offers
+  models: {
+    id: string
+    name: string
+    efforts: string[]
+    unavailable: ModelUnavailable | null
+  }[]
   active: string | null // the log of the task using the desktop
   titles_revision: number // changes as a conversation is named, during a run or after it (agent/title.py)
   running: Running[] // every session in progress, one per conversation at most
@@ -116,7 +124,7 @@ export const PROJECT_PAGE = 5
 export const RETRY_MS = [500, 1000, 2000, 4000, 8000]
 
 /** Stable runtime note codes; the display text is never used to infer behavior. */
-export type NoteCode =
+type NoteCode =
   | "userControl"
   | "controlReturned"
   | "disconnected"
@@ -280,7 +288,7 @@ export type Cost = {
   output: number
 }
 
-export type PlannedStep = {
+type PlannedStep = {
   id: string
   title: string
   done_when: string
@@ -294,7 +302,7 @@ export type ActionEvent = Extract<RunEvent, { type: "action" }>
 export type EndEvent = Extract<RunEvent, { type: "end" }>
 
 // Why a message was turned away (409): another run is using the desktop, or the conversation has a run in progress.
-export type BusyReason = "desktop" | "conversation"
+type BusyReason = "desktop" | "conversation"
 
 export class ApiError extends Error {
   status: number

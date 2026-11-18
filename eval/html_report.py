@@ -53,27 +53,19 @@ def version_title(version: dict) -> str:
     return version.get("note") or version["subject"] + (" + changes not committed" if version["dirty"] else "")
 
 
-def version_of(row: dict) -> str:
-    """The version a run used, by its name; "unknown" for a run that recorded none."""
-    version = row.get("version")
-    return version_key(version) if version else "unknown"
-
-
 def side(row: dict) -> str:
-    """What a run is compared as: its version with its agents' models, so two models on one version are two sides."""
-    return f"{version_of(row)} {row.get('model') or ''}".strip()
+    """What a run is compared as, in the report and the terminal's summary (eval.py): its version with its agents'
+    models, so two models on one version are two sides."""
+    return f"{version_key(row['version'])} {row['model']}"
 
 
 def versions(rows: list[dict], results: Path) -> dict:
-    """Each version's record, by the name `version_of` gives it: its version.json in `results`, else what its runs
-    recorded; with its title."""
+    """Each version's record, by its name: its version.json in `results`, with its title."""
     found = {}
     for row in rows:
-        name = version_of(row)
+        name = version_key(row["version"])
         if name not in found:
-            saved = results / name / "version.json"
-            version = json.loads(saved.read_text(encoding="utf-8")) if saved.is_file() else row.get("version") or {
-                "commit": "", "subject": "version not recorded", "date": "", "dirty": False}
+            version = json.loads((results / name / "version.json").read_text(encoding="utf-8"))
             found[name] = version | {"title": version_title(version)}
     return found
 
@@ -105,8 +97,7 @@ def prompt_diffs(versions: dict[str, dict], results: Path) -> dict[str, list[dic
     return {
         f"{a} {b}": changes(results / a / "src" / PROMPTS, results / b / "src" / PROMPTS)
         for a, b in itertools.permutations(versions, 2)
-        if versions[a].get("prompts") and versions[b].get("prompts") and versions[a]["prompts"] != versions[b]["prompts"]
-        and versions[a].get("code") == versions[b].get("code")
+        if versions[a]["prompts"] != versions[b]["prompts"] and versions[a]["code"] == versions[b]["code"]
     }
 
 
@@ -143,11 +134,11 @@ def end_screen(run: Path, logged: str | None) -> Path | None:
 
 def run_data(row: dict, report_dir: Path) -> dict:
     """What the page needs of one run (a result.json with its folder `dir`, `grade` line and `verdict`)."""
-    folder = row["dir"]
+    folder, version = row["dir"], version_key(row["version"])
     data = {
-        "id": f"{version_of(row)}/{folder.parent.name}/{folder.name}", "started": row["started"], "task": row["task"],
-        "attempt": row["attempt"], "side": side(row), "version": version_of(row),
-        "goal": row["goal"], "expect": row["expect"], "model": row.get("model") or "",
+        "id": f"{version}/{folder.parent.name}/{folder.name}", "started": row["started"], "task": row["task"],
+        "attempt": row["attempt"], "side": side(row), "version": version,
+        "goal": row["goal"], "expect": row["expect"], "model": row["model"],
         "grade": row["grade"], "verdict": row["verdict"],
     }
     if row.get("stop_reason") == "setup_failed" or not row.get("run"):
@@ -164,15 +155,15 @@ def run_data(row: dict, report_dir: Path) -> dict:
     }
 
 
-def render(rows: list[dict], out: Path, order: list[str], numbers: dict[str, int]) -> Path:
-    """Write the page for these runs, listing tasks in `order` (then any dropped since) with their `numbers`."""
+def render(rows: list[dict], out: Path, order: list[str]) -> Path:
+    """Write the page for these runs, listing tasks in `order`, then any dropped since."""
     if not rows:
         raise SystemExit("no eval runs")
     runs = [run_data(row, out.parent) for row in sorted(rows, key=lambda row: row["started"])]
     tasks = [*order, *sorted({run["task"] for run in runs} - set(order))]
     found = versions(rows, out.parent)
     payload = {
-        "runs": runs, "order": tasks, "numbers": numbers, "versions": found, "diffs": prompt_diffs(found, out.parent),
+        "runs": runs, "order": tasks, "versions": found, "diffs": prompt_diffs(found, out.parent),
     }
     data = json.dumps(payload, ensure_ascii=False).replace("</", "<\\/")
     out.write_text(TEMPLATE.replace("__DATA__", data), encoding="utf-8")
@@ -229,7 +220,7 @@ select:focus { outline:none }
 .row { border-bottom:1px solid var(--line) }
 .row > summary { cursor:pointer; list-style:none } .row > summary::-webkit-details-marker { display:none }
 .row > summary:hover .name { text-decoration:underline; text-decoration-color:var(--faint); text-underline-offset:3px }
-.name { font-weight:500 } .no { display:inline-block; width:28px; color:var(--faint); font-variant-numeric:tabular-nums }
+.name { font-weight:500 }
 .status { display:inline-flex; align-items:center; gap:7px; white-space:nowrap }
 .status::before { content:""; width:7px; height:7px; border-radius:50%; background:var(--none) }
 .status.pass::before { background:var(--pass) } .status.fail::before { background:var(--fail) }
@@ -283,7 +274,7 @@ code { font:12px ui-monospace, SFMono-Regular, Menlo, monospace }
 </main>
 <script type="application/json" id="data">__DATA__</script>
 <script>
-const { runs: RUNS, order: ORDER, numbers: NUMBERS, versions: VERSIONS, diffs: DIFFS } = JSON.parse(document.getElementById("data").textContent)
+const { runs: RUNS, order: ORDER, versions: VERSIONS, diffs: DIFFS } = JSON.parse(document.getElementById("data").textContent)
 const WORDS = { pass: "Pass", fail: "Fail", ungraded: "Not graded", setup: "Setup failed" }
 
 const label = (t) => `${+t.slice(5, 7)}/${+t.slice(8, 10)} ${t.slice(11, 16)}` // when a run started: YYYY-MM-DDTHH:MM:SS
@@ -295,12 +286,8 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? "" : "s"}`
 const title = (word) => word.charAt(0).toUpperCase() + word.slice(1)
 const clip = (text, n) => (text.length > n ? `${text.slice(0, n - 1)}…` : text)
 // "main openai:gpt-6.1-sol low, computer openai:gpt-6-luna high" as each agent's model and effort.
-const MODEL_NAME = (spec) => {
-  const [first, ...rest] = spec.split(":").at(-1).split("-")
-  return first === "gpt" ? `GPT-${rest[0]} ${rest.slice(1).map(title).join(" ")}` : [first, ...rest].map(title).join(" ")
-}
 const agents = (model) => [...model.matchAll(/(\\w+) \\S+?:(\\S+) (\\w+)/g)].map(([, agent, spec, effort]) =>
-  `<span class="agent"><span class="k">${title(agent)} agent</span>${esc(MODEL_NAME(spec))} · ${esc(effort)}</span>`).join("")
+  `<span class="agent"><span class="k">${title(agent)} agent</span>${esc(spec)} · ${esc(effort)}</span>`).join("")
 
 // A change for the better (lower) is green, one for the worse red; under 5% either way is no change.
 const tone = (a, b) => { const p = a ? (b - a) / a : 0; return p <= -0.05 ? "good" : p >= 0.05 ? "bad" : "" }
@@ -311,13 +298,13 @@ const runsOf = (key) => RUNS.filter((run) => run.side === key)
 const lastRun = (key) => runsOf(key).at(-1).started
 const versionOf = (key) => runsOf(key)[0].version
 const modelOf = (key) => runsOf(key)[0].model
-const date = (key) => VERSIONS[versionOf(key)].date || ""
+const date = (key) => VERSIONS[versionOf(key)].date
 const KEYS = [...new Set(RUNS.map((run) => run.side))]
   .sort((a, b) => date(b).localeCompare(date(a)) || lastRun(b).localeCompare(lastRun(a)))
-// Each agent's model and effort in a side, as "Computer agent GPT-6 Luna high"; a side's label names only the agents
+// Each agent's model and effort in a side, as "Computer agent gpt-6-luna high"; a side's label names only the agents
 // whose model or effort differs between the sides.
 const agentsOf = (key) => [...modelOf(key).matchAll(/(\\w+) \\S+?:(\\S+) (\\w+)/g)]
-  .map(([, agent, spec, effort]) => [agent, `${title(agent)} agent ${MODEL_NAME(spec)} ${effort}`])
+  .map(([, agent, spec, effort]) => [agent, `${title(agent)} agent ${spec} ${effort}`])
 const VARIES = new Set(KEYS.flatMap(agentsOf).map(([agent]) => agent)
   .filter((agent) => new Set(KEYS.map((key) => agentsOf(key).find(([a]) => a === agent)?.[1])).size > 1))
 const describe = (key) => [
@@ -413,7 +400,7 @@ function panel(run) {
   if (run.setup) return `<div class="run">${head}<p class="facts">The setup did not finish (${esc(run.setup)}); not run.</p></div>`
   const figure = (shot, caption) => shot ? `<figure><a href="${esc(shot.href)}" target="_blank"><img src="${shot.src}" alt="${caption}" loading="lazy"></a><figcaption>${caption}</figcaption></figure>` : ""
   return `<div class="run">${head}
-    <p class="facts">${run.calls} model calls · ${run.actions} actions · ${Math.round(run.seconds || 0)}s · $${(run.cost || 0).toFixed(3)}</p>
+    <p class="facts">${run.calls} model calls · ${run.actions} actions · ${Math.round(run.seconds || 0)}s · ${run.cost == null ? "$?" : `$${run.cost.toFixed(3)}`}</p>
     ${run.grade ? `<p class="grade">${esc(run.grade)}</p>` : ""}
     <div class="reply">${md(run.summary || "(no reply)")}</div>
     ${run.words.length ? `<div class="said"><p>Said on ${run.words.length} of ${run.calls} steps</p><ol>${run.words.map((w) => `<li>${md(w)}</li>`).join("")}</ol></div>` : ""}
@@ -421,11 +408,10 @@ function panel(run) {
     <details class="more"><summary>${plural(run.steps.length, "action")}</summary><ol class="steps">${run.steps.map((s) => `<li>${esc(s)}</li>`).join("")}</ol></details></div>`
 }
 
-// What else differs between the two versions picked: their prompts, the rest of their code, or neither. Versions run
-// before the eval kept their prompts' digest say nothing.
+// What else differs between the two versions picked: their prompts, the rest of their code, or neither.
 function differs(sides) {
   const [a, b] = sides.map((key) => VERSIONS[versionOf(key)])
-  if (sides.length < 2 || !a.prompts || !b.prompts) return ""
+  if (sides.length < 2) return ""
   const prompts = a.prompts !== b.prompts, code = a.code !== b.code
   return `<div>${prompts && code ? "The prompts and the rest of the code differ" : prompts ? "Only the prompts differ"
     : code ? "Same prompts; the rest of the code differs" : "Same prompts and code"}</div>`
@@ -487,7 +473,7 @@ function render() {
     const deltas = two ? delta("calls") + delta("seconds") : ""
     // One column per side, its latest run first.
     const panels = sides.map((s) => `<div>${[...(bySide.get(s) || [])].reverse().map(panel).join("")}</div>`).join("")
-    return `<details class="row" data-task="${esc(task)}" ${opened.has(task) ? "open" : ""}><summary><span><span class="no">${NUMBERS[task] ? String(NUMBERS[task]).padStart(2, "0") : "–"}</span><span class="name">${esc(task)}</span></span>${cells}${deltas}</summary>
+    return `<details class="row" data-task="${esc(task)}" ${opened.has(task) ? "open" : ""}><summary><span><span class="name">${esc(task)}</span></span>${cells}${deltas}</summary>
       <div class="task"><dl class="meta"><dt>Goal</dt><dd>${esc(any.goal)}</dd><dt>Expect</dt><dd>${esc(any.expect)}</dd></dl><div class="runs">${panels}</div></div></details>`
   }).join("")
   view.innerHTML = `${summary(byTask, sides)}${promptChanges(sides)}<div class="list">

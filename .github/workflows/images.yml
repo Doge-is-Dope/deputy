@@ -60,4 +60,4 @@ jobs:
             .services.web.image = strenv(images) + "/web:" + strenv(GITHUB_REF_NAME)' compose.yaml
           MONGO_ROOT_PASSWORD=x MONGO_RUNTIME_PASSWORD=x docker compose config --quiet
           tar -czf "$RUNNER_TEMP/deploy.tar.gz" --transform "s|^|${GITHUB_REPOSITORY#*/}/|" compose.yaml .env.example mongo
-          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/deploy.tar.gz" --verify-tag --notes-from-tag
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/deploy.tar.gz" --verify-tag --title "$GITHUB_REF_NAME" --notes-from-tag

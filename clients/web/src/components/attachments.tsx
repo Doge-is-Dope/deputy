@@ -10,11 +10,27 @@ import {
   SpinnerIcon,
   WarningIcon,
 } from "@/components/icons"
-import { ScreenshotViewer } from "@/components/screenshot-viewer"
 import { useIsMobile } from "@/hooks/use-mobile"
-import { screenshotUrl, uploadUrl } from "@/lib/api"
-import { kindOf, type Attachment, type Shown } from "@/lib/attachments"
+import { screenshotUrl } from "@/lib/api"
+import {
+  kindOf,
+  previewOf,
+  type Attachment,
+  type Shown,
+} from "@/lib/attachments"
 import { useT } from "@/lib/i18n"
+import { openFile, type Thumb } from "@/lib/side-panel"
+
+/** The small copy a clicked picture already shows, for its tab to show until the file has come. */
+function thumbOf(element: Element): Thumb | undefined {
+  const img = element.querySelector("img")
+  if (!img?.naturalWidth) return undefined
+  return {
+    src: img.currentSrc,
+    width: img.naturalWidth,
+    height: img.naturalHeight,
+  }
+}
 
 // An image's tile and a file's card are 56 tall, rounded 20: 8 inside the composer's 28 corner.
 const TILE = "h-14 rounded-2xl border"
@@ -66,13 +82,16 @@ const AWAY =
 const BACK =
   "[@media(hover:hover)]:group-hover/tile:scale-100 [@media(hover:hover)]:group-hover/tile:opacity-100 [@media(hover:hover)]:group-hover/tile:blur-none group-has-[:focus-visible]/tile:scale-100 group-has-[:focus-visible]/tile:opacity-100 group-has-[:focus-visible]/tile:blur-none"
 
-/** What is attached to the message being written, at the top of the composer: each with a button to take it off,
- * a spinner while it uploads, and a warning that turns into a way to try again if it failed. */
+/** What is attached to the message being written in `draft`, at the top of the composer: each with a button to take
+ * it off, a spinner while it uploads, and a warning that turns into a way to try again if it failed. A photo that has
+ * uploaded opens in the side panel, to mark up. */
 export function AttachmentTiles({
+  draft,
   list,
   onRemove,
   onRetry,
 }: {
+  draft: string
   list: Attachment[]
   onRemove: (key: string) => void
   onRetry: (key: string) => void
@@ -87,144 +106,154 @@ export function AttachmentTiles({
     keys.forEach(onRemove)
     setLeaving((all) => all.filter((key) => !keys.includes(key)))
   }
-  // The photos that have uploaded open large, as a message's do, from what the runtime kept.
-  const [viewing, setViewing] = useState<number | null>(null)
-  const photos = list.filter((each) => each.kind === "image" && each.id)
+  // One row that scrolls sideways when it outgrows the composer, edge to edge: the tiles start 8 in, and one half out
+  // of view runs to the border, cut along the composer's corners. The end has 8 more, so the last tile's X clears the
+  // corner.
   return (
-    <>
-      {/* One row that scrolls sideways when it outgrows the composer, edge to edge: the tiles start 8 in, and one half
-      out of view runs to the border, cut along the composer's corners. The end has 8 more, so the last tile's X clears
-      the corner. */}
-      <ul
-        data-closing={closing || list.length === 0 || undefined}
-        onTransitionEnd={(event) => {
-          if (
-            event.target === event.currentTarget &&
-            event.propertyName === "height"
-          )
-            gone(leaving)
-        }}
-        className="flex attach-row [scrollbar-width:none] gap-2 overflow-x-auto rounded-t-[calc(2rem-1px)] pt-2 pr-4 pl-2"
-      >
-        {list.map((each) => {
-          const image = each.kind === "image"
-          const failed = each.state === "failed"
-          // A failed upload's warning, its reason said once in a notice: over the whole photo, in a card's icon. Where
-          // something can hover, the pointer or the keyboard on the tile turns it into the way to try again; a tap on a
-          // touch screen tries again as it is.
-          const retry = failed && (
-            <button
-              type="button"
-              onClick={() => onRetry(each.key)}
-              aria-label={t.composer.attachments.retry}
-              className={cn(
-                "absolute inset-0 grid place-items-center",
-                image ? "rounded-2xl bg-background/70" : "rounded-lg"
-              )}
-            >
-              <WarningIcon className={cn(SWAP, "text-destructive", AWAY)} />
-              <RetryIcon
-                className={cn(SWAP, "scale-50 opacity-0 blur-[2px]", BACK)}
-              />
-            </button>
-          )
-          // One that cannot go however often it is tried: its warning only, until it is taken off.
-          const warning = each.state === "rejected" && (
-            <span
-              className={cn(
-                "absolute inset-0 flex items-center justify-center",
-                image ? "rounded-2xl bg-background/70" : "rounded-lg"
-              )}
-            >
-              <WarningIcon className="text-destructive" />
-            </span>
-          )
-          const spinner = each.state === "uploading" && (
-            <SpinnerIcon aria-label={t.composer.attachments.uploading} />
-          )
-          return (
-            <li
-              key={each.key}
-              data-tile
-              data-leaving={leaving.includes(each.key) || undefined}
-              onTransitionEnd={(event) => {
-                if (
-                  event.target === event.currentTarget &&
-                  event.propertyName === "opacity" &&
-                  leaving.includes(each.key) &&
-                  !closing
-                )
-                  gone([each.key])
-              }}
-              className="group/tile attach-tile relative shrink-0"
-            >
-              {image ? (
-                // Until its preview is made, or for a file that turns out to be no image: the plain square.
-                <span
-                  className={cn(
-                    TILE,
-                    "relative block w-14 overflow-hidden bg-muted"
-                  )}
-                >
-                  {each.preview && (
-                    <img
-                      src={each.preview}
-                      alt=""
-                      className="size-full object-cover"
-                    />
-                  )}
-                  {each.id && (
-                    <button
-                      type="button"
-                      onClick={() => setViewing(photos.indexOf(each))}
-                      aria-label={t.composer.attachments.open(each.name)}
-                      className="absolute inset-0 rounded-2xl"
-                    />
-                  )}
-                  {spinner && (
-                    <span className="absolute inset-0 flex items-center justify-center bg-background/60">
-                      {spinner}
-                    </span>
-                  )}
-                  {retry}
-                  {warning}
-                </span>
-              ) : (
-                // On a touch screen the button stays, so the name stops short of it.
+    <ul
+      data-closing={closing || list.length === 0 || undefined}
+      onTransitionEnd={(event) => {
+        if (
+          event.target === event.currentTarget &&
+          event.propertyName === "height"
+        )
+          gone(leaving)
+      }}
+      className="flex attach-row [scrollbar-width:none] gap-2 overflow-x-auto rounded-t-[calc(2rem-1px)] pt-2 pr-4 pl-2"
+    >
+      {list.map((each) => {
+        const image = each.kind === "image"
+        const failed = each.state === "failed"
+        const source = {
+          kind: "draft",
+          draft,
+          key: each.key,
+          name: each.name,
+        } as const
+        // A failed upload's warning, its reason said once in a notice: over the whole photo, in a card's icon. Where
+        // something can hover, the pointer or the keyboard on the tile turns it into the way to try again; a tap on a
+        // touch screen tries again as it is.
+        const retry = failed && (
+          <button
+            type="button"
+            onClick={() => onRetry(each.key)}
+            aria-label={t.composer.attachments.retry}
+            className={cn(
+              "absolute inset-0 grid place-items-center",
+              image ? "rounded-2xl bg-background/70" : "rounded-lg"
+            )}
+          >
+            <WarningIcon className={cn(SWAP, "text-destructive", AWAY)} />
+            <RetryIcon
+              className={cn(SWAP, "scale-50 opacity-0 blur-[2px]", BACK)}
+            />
+          </button>
+        )
+        // One that cannot go however often it is tried: its warning only, until it is taken off.
+        const warning = each.state === "rejected" && (
+          <span
+            className={cn(
+              "absolute inset-0 flex items-center justify-center",
+              image ? "rounded-2xl bg-background/70" : "rounded-lg"
+            )}
+          >
+            <WarningIcon className="text-destructive" />
+          </span>
+        )
+        const spinner = each.state === "uploading" && (
+          <SpinnerIcon aria-label={t.composer.attachments.uploading} />
+        )
+        return (
+          <li
+            key={each.key}
+            data-tile
+            data-leaving={leaving.includes(each.key) || undefined}
+            onTransitionEnd={(event) => {
+              if (
+                event.target === event.currentTarget &&
+                event.propertyName === "opacity" &&
+                leaving.includes(each.key) &&
+                !closing
+              )
+                gone([each.key])
+            }}
+            className="group/tile attach-tile relative shrink-0"
+          >
+            {image ? (
+              // Until its preview is made, or for a file that turns out to be no image: the plain square.
+              <span
+                className={cn(
+                  TILE,
+                  "relative block w-14 overflow-hidden bg-muted"
+                )}
+              >
+                {each.preview && (
+                  <img
+                    src={each.preview}
+                    alt=""
+                    className="size-full object-cover"
+                  />
+                )}
+                {each.id && (
+                  <button
+                    type="button"
+                    onClick={(event) =>
+                      openFile(
+                        source,
+                        thumbOf(event.currentTarget.parentElement!)
+                      )
+                    }
+                    aria-label={t.composer.attachments.open(each.name)}
+                    className="absolute inset-0 rounded-2xl"
+                  />
+                )}
+                {spinner && (
+                  <span className="absolute inset-0 flex items-center justify-center bg-background/60">
+                    {spinner}
+                  </span>
+                )}
+                {retry}
+                {warning}
+              </span>
+            ) : each.state === "ready" && previewOf(each.name) ? (
+              // Once it has uploaded, one that can be shown opens in the side panel, as a message's does.
+              <button
+                type="button"
+                onClick={() => openFile(source)}
+                aria-label={t.composer.attachments.open(each.name)}
+                className="block text-left"
+              >
                 <FileCard
                   name={each.name}
-                  mark={spinner || retry || warning}
-                  className="[@media(hover:none)]:pr-5"
+                  className="transition-colors hover:bg-muted [@media(hover:none)]:pr-5"
                 />
-              )}
-              {/* None while it uploads. */}
-              {each.state !== "uploading" && (
-                <button
-                  type="button"
-                  onClick={() => setLeaving((keys) => [...keys, each.key])}
-                  aria-label={t.composer.attachments.remove(each.name)}
-                  className={cn(
-                    "absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full bg-foreground text-background ring-2 ring-background dark:ring-[color-mix(in_oklch,var(--muted)_40%,var(--background))]",
-                    REVEAL
-                  )}
-                >
-                  <CloseIcon className="size-3" />
-                </button>
-              )}
-            </li>
-          )
-        })}
-      </ul>
-      <ScreenshotViewer
-        shots={photos.map((each) => ({
-          name: each.key,
-          label: each.name,
-          src: uploadUrl(each.id!),
-        }))}
-        index={viewing !== null && viewing < photos.length ? viewing : null}
-        onIndexChange={setViewing}
-      />
-    </>
+              </button>
+            ) : (
+              // On a touch screen the button stays, so the name stops short of it.
+              <FileCard
+                name={each.name}
+                mark={spinner || retry || warning}
+                className="[@media(hover:none)]:pr-5"
+              />
+            )}
+            {/* None while it uploads. */}
+            {each.state !== "uploading" && (
+              <button
+                type="button"
+                onClick={() => setLeaving((keys) => [...keys, each.key])}
+                aria-label={t.composer.attachments.remove(each.name)}
+                className={cn(
+                  "absolute -top-1 -right-1 flex size-5 items-center justify-center rounded-full bg-foreground text-background ring-2 ring-background dark:ring-[color-mix(in_oklch,var(--muted)_40%,var(--background))]",
+                  REVEAL
+                )}
+              >
+                <CloseIcon className="size-3" />
+              </button>
+            )}
+          </li>
+        )
+      })}
+    </ul>
   )
 }
 
@@ -327,8 +356,9 @@ export function DropOverlay() {
   )
 }
 
-/** What the user attached to a message, over its bubble: images to open large, files to download. Each is marked with
- * its place in the message's list, for its move from the composer's tile when sent from here (message-send.ts). */
+/** What the user attached to a message, over its bubble: images, PDFs and plain text open in the side panel, other
+ * files download. Each is marked with its place in the message's list, for its move from the composer's tile when
+ * sent from here (message-send.ts). */
 export function MessageAttachments({
   run,
   attachments,
@@ -337,7 +367,6 @@ export function MessageAttachments({
   attachments: Shown[]
 }) {
   const t = useT()
-  const [viewing, setViewing] = useState<number | null>(null)
   const [open, setOpen] = useState(false)
   const phone = useIsMobile()
   // A photo is kept under one of these; any other file is a card to download. One just sent has its preview instead.
@@ -370,7 +399,12 @@ export function MessageAttachments({
               key={index}
               type="button"
               disabled={!each.file}
-              onClick={() => setViewing(index)}
+              onClick={(event) =>
+                openFile(
+                  { kind: "sent", run, file: each.file, name: each.name },
+                  thumbOf(event.currentTarget)
+                )
+              }
               aria-label={t.composer.attachments.open(each.name)}
               style={{
                 width: `calc((100% - ${columns - 1} * 0.5rem) / ${columns})`,
@@ -400,20 +434,47 @@ export function MessageAttachments({
             width: `min(100%, ${cards * 13}rem + ${cards - 1} * 0.5rem)`,
           }}
         >
-          {shownFiles.map((each, index) => (
-            <a
-              key={index}
-              data-sent-index={attachments.indexOf(each)}
-              href={each.file ? screenshotUrl(run, each.file) : undefined}
-              download={each.name}
-              className="data-sending:relative data-sending:z-10"
-            >
+          {shownFiles.map((each, index) => {
+            const card = (
               <FileCard
                 name={each.name}
                 className="transition-colors hover:bg-muted"
               />
-            </a>
-          ))}
+            )
+            const place = {
+              "data-sent-index": attachments.indexOf(each),
+              className: "data-sending:relative data-sending:z-10",
+            }
+            // One that can be shown opens in the side panel; any other downloads, as one just sent waits for its file.
+            return each.file && previewOf(each.name) ? (
+              <button
+                key={index}
+                type="button"
+                {...place}
+                onClick={() =>
+                  openFile({
+                    kind: "sent",
+                    run,
+                    file: each.file,
+                    name: each.name,
+                  })
+                }
+                aria-label={t.composer.attachments.open(each.name)}
+                className={cn(place.className, "text-left")}
+              >
+                {card}
+              </button>
+            ) : (
+              <a
+                key={index}
+                {...place}
+                href={each.file ? screenshotUrl(run, each.file) : undefined}
+                download={each.name}
+              >
+                {card}
+              </a>
+            )
+          })}
         </div>
       )}
       {phone && (more > 0 || open) && (
@@ -429,12 +490,6 @@ export function MessageAttachments({
           <ChevronDownIcon className={cn("size-3.5", open && "rotate-180")} />
         </button>
       )}
-      <ScreenshotViewer
-        run={run}
-        shots={images.map((each) => ({ name: each.file, label: each.name }))}
-        index={viewing}
-        onIndexChange={setViewing}
-      />
     </div>
   )
 }

@@ -229,16 +229,19 @@ async def test_more_notches_or_held_modifiers_still_scroll_with_xdotool():
     ]
 
 
-async def test_a_notch_without_a_display_fails_and_reconnects_next_time():
+async def test_a_notch_without_a_display_fails_and_reconnects_next_time(monkeypatch):
     class Gone(FakeDisplay):
         def xtest_fake_input(self, *args, **kwargs):
             raise OSError("connection closed")
 
+    fresh = FakeDisplay()
+    displays = iter([Gone(), fresh])
+    monkeypatch.setattr(computer_use.computers.rdp.xlib, "Display", lambda _: next(displays))
     rdp = RecordingRdp()
-    rdp._xtest = Gone()
     with pytest.raises(ComputerError, match="XTest input failed"):
         await rdp.scroll((300, 200), "down", 1, [])
-    assert rdp._xtest is None
+    await rdp.scroll((300, 200), "down", 1, [])
+    assert fresh.sent == [(X.MotionNotify, 300, 200), (X.ButtonPress, 5), (X.ButtonRelease, 5)]
 
 
 async def test_a_command_that_hangs_is_stopped_and_fails():

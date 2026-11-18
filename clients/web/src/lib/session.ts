@@ -11,7 +11,7 @@ export type Login = "token" | "proxy"
 export type User = { id: string; name: string }
 
 /** Who the page is signed in as and how; nobody until the runtime has said, as when it could not be reached. */
-export type Session = { user: User | null; login: Login | null }
+type Session = { user: User | null; login: Login | null }
 
 // Asked no longer than this: a runtime or proxy that never answers leaves the page to say it cannot reach it.
 const WAIT = 5000

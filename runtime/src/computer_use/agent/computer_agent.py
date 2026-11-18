@@ -22,7 +22,7 @@ from computer_use.middleware.chat import Mention
 from computer_use.middleware.desktop import DesktopMiddleware
 from computer_use.middleware.skills import SkillsMiddleware
 from computer_use.native.execution import Commands
-from computer_use.native.lease import WindowsTools
+from computer_use.native.lease import Lease
 from computer_use.prompts import notes
 from computer_use.prompts.computer import (
     ABOUT, DESKTOP_ASKED, DESKTOP_BUSY, DESKTOP_HANDED, FIRST_SCREEN, LAST_SCREEN, computer_in_use, desktop_offline,
@@ -84,7 +84,7 @@ class ComputerAgent(Subagent):
         control: Control,
         approvals: Callable[[], Approvals],
         judge: ScreenJudge | None = None,
-        windows: WindowsTools | None = None,
+        windows: Lease | None = None,
     ):
         super().__init__(context, log, taught)
         self.computer = computer
@@ -146,9 +146,10 @@ class ComputerAgent(Subagent):
         tools, guard = self._equipped(executor, told, review)
         try:
             if self.windows is not None:
-                await self.windows.ensure()
-            start = self._start = HumanMessage(content=content(await executor.observe(f"{text}\n\n{FIRST_SCREEN}")))
+                await self.windows.start()
+            start = HumanMessage(content=content(await executor.observe(f"{text}\n\n{FIRST_SCREEN}")))
             await self.log.input(start, "observe")
+            self._start = start
             choice = chosen(settings, self.agent, agents)
             self.log.uses(choice.model, name=self.agent)
             self.log.uses(reviewer.model, MAIN)  # auto review's tokens are priced as the main agent's
@@ -161,6 +162,8 @@ class ComputerAgent(Subagent):
             return reply, await self._after(executor)
         finally:  # let go of whatever the task left held down, after its last screen
             await release_input(self.control, self.computer, "agent")
+            if self.windows is not None:
+                await self.windows.close()
 
     def _equipped(
         self, executor: Executor, told: Inbox, review: Callable[[str, bytes | None], Awaitable[Verdict]],

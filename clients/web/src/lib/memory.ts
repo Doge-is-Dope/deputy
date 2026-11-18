@@ -7,7 +7,7 @@ import { store } from "@/lib/store"
 import { openSettings } from "@/lib/settings"
 
 /** What taught it: a message sent while work ran, a declined step's reason, a takeover, or anything else said. */
-export type MemoryKind = "steer" | "decline" | "takeover" | "said"
+type MemoryKind = "steer" | "decline" | "takeover" | "said"
 
 export type Memory = {
   id: string
@@ -30,7 +30,7 @@ export type Remembered = { id: string; text: string }
 
 const path = (id: string) => `/api/memory/${encodeURIComponent(id)}`
 
-export const memoryApi = {
+const memoryApi = {
   // The user's own and every project's, oldest first. Views filter by project after loading this shared list.
   list: () => request<Memory[]>("/api/memory"),
   edit: (id: string, edit: MemoryEdit) =>
@@ -137,7 +137,7 @@ export async function forgetPersonalMemories() {
 
 // A project's rules, opened from its menu or from a line in the conversation: which project (null: shut) and the rule
 // to show. The dialog lives beside the settings, outside the sidebar's sheet on a phone.
-export type OpenedProjectMemory = {
+type OpenedProjectMemory = {
   project: string | null
   item: string | null
 }

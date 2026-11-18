@@ -7,16 +7,15 @@ import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 import computer_use.agent.background as background
-import computer_use.agent.coding_agent as coding_agent
 from computer_use.agent.background import from_user
 from computer_use.storage.files import FileRuns
 from computer_use.agent.inbox import Inbox
-from computer_use.desktop.control import RunLock
 from computer_use.prompts import notes
 from computer_use.sandbox import RunOutput
 from computer_use.storage import MAIN
 from conftest import (
     ScriptedModel,
+    coding_script,
     delegate,
     logged,
     crash_point,
@@ -31,12 +30,6 @@ from conftest import (
 )
 
 pytestmark = pytest.mark.usefixtures("the_log_is_the_whole_record")
-
-
-def coding_script(monkeypatch, replies) -> ScriptedModel:
-    model = ScriptedModel(messages=iter(replies), received=[], bindings=[])
-    monkeypatch.setattr(coding_agent, "build_chat_model", lambda _spec, _settings: model)
-    return model
 
 
 def actions(result) -> dict[str, dict]:
@@ -125,21 +118,6 @@ async def test_a_task_past_the_most_at_once_is_refused(settings, computer, code_
     done = actions(result)
     assert (done["m1"]["status"], done["m2"]["status"], done["m2"]["reason"]) == ("success", "error", "tooManyTasks")
     assert task_states(settings) == [("t1", "started"), ("t1", "ended")] and result.reply == "2 and 2 is 4."
-
-
-async def test_a_desktop_task_another_process_holds_the_desktop_for_is_refused_by_reason(
-    settings, computer, monkeypatch
-):
-    computer_model, _ = use_script(monkeypatch, [AIMessage("never asked")], main=[
-        delegate(), AIMessage("The desktop is busy."),
-    ])
-
-    with RunLock(settings.run_lock_path) as other:
-        other.name("20261007-120000")
-        result = await run_turn(settings, "open start", max_steps=10, computer=computer)
-
-    refused = actions(result)["m1"]
-    assert (refused["status"], refused["reason"]) == ("error", "desktopBusy") and computer_model.received == []
 
 
 async def test_stopping_one_task_leaves_the_other_at_work(settings, computer, code_runner, monkeypatch):
@@ -261,8 +239,11 @@ async def test_every_task_the_runtime_died_under_is_told_to_the_next_run(setting
                    thread=thread)
 
     heard = runtime_notes(main_model.received[0])
-    told = {(agent, f"background task {task_of(settings, agent)} ({agent} agent)") for agent in ("computer", "coding")}
-    assert len(heard) == 2 and all(any(said in note for note in heard) for _, said in told)
+    assert len(heard) == 2
+    for agent in ("computer", "coding"):
+        task = task_of(settings, agent)
+        stopped = f"The run was stopped, and the background task {task} ({agent} agent) with it"
+        assert sum(stopped in note for note in heard) == 1
 
 
 async def test_a_result_a_stop_cut_off_before_it_was_heard_is_not_told_later(settings, computer, monkeypatch):

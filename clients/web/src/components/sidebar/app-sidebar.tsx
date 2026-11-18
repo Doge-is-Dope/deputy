@@ -60,14 +60,12 @@ import {
 import { nameOf } from "@/lib/conversations"
 import { useT } from "@/lib/i18n"
 import { openSettings } from "@/lib/settings"
-import { signOut, useSession } from "@/lib/session"
+import { useSession } from "@/lib/session"
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { openProject, openRun, runHref } from "@/lib/route"
 import type { Lists } from "@/hooks/use-api"
 import {
@@ -75,7 +73,6 @@ import {
   FolderPlusIcon,
   GearIcon,
   SearchIcon,
-  SignOutIcon,
 } from "@/components/icons"
 import { SearchDialog } from "@/components/search-dialog"
 import { SettingsDialog } from "@/components/settings/settings-dialog"
@@ -135,8 +132,9 @@ function ShortcutItem({
         }}
         aria-keyshortcuts={shortcutAria(shortcut)}
         // As high as a conversation's row. In the closed rail a 32px square under
-        // the trigger's middle, so closing the sidebar moves no icon: the margin and padding change together.
-        className="h-8 pl-row-icon transition-[width,height,padding,margin] group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-1.5! pointer-coarse:h-10"
+        // the trigger's middle, so closing the sidebar moves no icon: the margin and padding change together. At once,
+        // not animated: closing, the words go in the first frame; opening, the sidebar's moving edge alone uncovers them.
+        className="h-8 pl-row-icon group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-1.5! pointer-coarse:h-10"
         {...props}
       >
         {icon}
@@ -149,6 +147,42 @@ function ShortcutItem({
         </Kbd>
       </SidebarMenuButton>
     </SidebarMenuItem>
+  )
+}
+
+/** Opens the settings, named with its key when pointed at. 32 square, the gear's middle on the icons' above in the
+    rail and the button flush with the row's end beside the name. */
+function SettingsButton({
+  className,
+  children,
+}: {
+  className: string
+  children: ReactNode
+}) {
+  const t = useT()
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <button
+            type="button"
+            aria-label={t.settings.title}
+            aria-keyshortcuts={shortcutAria(SETTINGS_SHORTCUT)}
+            onClick={() => openSettings()}
+            className={cn(
+              "grid size-8 shrink-0 place-items-center rounded-md outline-none hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 focus-visible:ring-sidebar-ring pointer-coarse:size-10 [&>svg]:col-start-1 [&>svg]:row-start-1",
+              className
+            )}
+          />
+        }
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent side="right">
+        {t.settings.title}
+        <Kbd>{shortcutLabel(SETTINGS_SHORTCUT)}</Kbd>
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -244,10 +278,10 @@ export function AppSidebar({
   onDeleteProject: (project: string) => Promise<unknown>
 }) {
   const t = useT()
+  const { user } = useSession()
   // Not the sidebar's open state: opening and closing it on a desktop then renders none of the lists.
   const { isMobile, setOpenMobile } = useSidebarSheet()
   const [searchOpen, setSearchOpen] = useState(false)
-  const { user, login } = useSession()
   const searchedNew = useRef(false) // 新對話 chosen in the search, which hands the focus to the composer as it closes
   // Where the keyboard was when the search opened, which gets it back: ⌘K has no button to give it back to.
   const searchedFrom = useRef<HTMLElement | null>(null)
@@ -519,7 +553,7 @@ export function AppSidebar({
             hairline under them shows while the list is scrolled, fading in and out, so the top of the list reads as
             passing under them. */}
         <SidebarHeader className="relative pt-1 pb-2 md:pt-2.5">
-          <SidebarTrigger className="m-0.5 size-9 transition-[width,height,margin] duration-300 ease-(--ease-drawer) group-data-[collapsible=icon]:my-1 group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8" />
+          <SidebarTrigger className="m-0.5 size-9 transition-[width,height,margin] duration-300 ease-(--ease-drawer) group-data-[collapsible=icon]:my-1 group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground dark:hover:bg-sidebar-accent" />
           <SidebarMenu className="gap-0.5">
             <ShortcutItem
               icon={<ComposeIcon />}
@@ -707,9 +741,9 @@ export function AppSidebar({
           </div>
         </SidebarContent>
 
-        {/* Who is signed in, opening a menu that names them above the settings and signing out; the gear and 設定
-            while the runtime has not said who. Its hairline shows while more of the list is below. */}
-        <SidebarFooter className="relative">
+        {/* Who is signed in, and the settings beside them, where signing out is too. Its hairline shows while more of
+            the list is below. */}
+        <SidebarFooter className="relative overflow-hidden">
           <span
             aria-hidden
             className={cn(
@@ -719,68 +753,38 @@ export function AppSidebar({
           />
           <SidebarMenu>
             <SidebarMenuItem>
-              <DropdownMenu>
-                <DropdownMenuTrigger
-                  render={
-                    <SidebarMenuButton
-                      tooltip={user?.name ?? t.settings.title}
-                      className={cn(
-                        "h-8 transition-[width,height,padding,margin] group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8! data-popup-open:bg-sidebar-accent pointer-coarse:h-10",
-                        // The avatar a size up from the icons above, its middle on theirs and the name where their words begin.
-                        user
-                          ? "gap-2 pl-2 group-data-[collapsible=icon]:p-1! [&_svg]:size-6"
-                          : ["pl-row-icon group-data-[collapsible=icon]:p-1.5!"]
-                      )}
-                    />
-                  }
-                >
-                  {user ? <UserAvatar id={user.id} /> : <GearIcon />}
-                  <span className="truncate">
-                    {user?.name ?? t.settings.title}
-                  </span>
-                </DropdownMenuTrigger>
-                {/* Above the row, from its start. */}
-                <DropdownMenuContent
-                  side="top"
-                  align="start"
-                  alignOffset={-2}
-                  className="min-w-56"
-                >
-                  {/* Who it is, not a choice: the avatar on the items' icons, the name where their words begin. */}
+              {/* The circle a size up from the icons above, its middle on theirs and the name where their words begin.
+                  As wide as the open sidebar's row while it opens, so its moving edge uncovers the gear where it ends. */}
+              <div className="flex items-center md:w-[calc(var(--sidebar-width)-var(--spacing)*4)]">
+                <div className="flex h-8 min-w-0 flex-1 items-center gap-2 pl-2 text-sm group-data-[collapsible=icon]:hidden pointer-coarse:h-10">
                   {user && (
                     <>
-                      <div className="flex items-center gap-2.5 py-1.5 pr-2 pl-1.5">
-                        <UserAvatar id={user.id} className="size-5 shrink-0" />
-                        <span className="truncate">{user.name}</span>
-                      </div>
-                      <DropdownMenuSeparator />
+                      <UserAvatar id={user.id} className="size-6 shrink-0" />
+                      <span className="truncate">{user.name}</span>
                     </>
                   )}
-                  <DropdownMenuItem
-                    className="gap-3"
-                    onClick={() => openSettings()}
-                  >
-                    <GearIcon />
-                    {t.settings.title}
-                    {/* No keyboard to press it on a touch screen. */}
-                    <Kbd row className="-mr-1 ml-auto pointer-coarse:hidden">
-                      {shortcutLabel(SETTINGS_SHORTCUT)}
-                    </Kbd>
-                  </DropdownMenuItem>
-                  {login === "token" && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem
-                        className="gap-3"
-                        onClick={() => void signOut()}
-                      >
-                        <SignOutIcon />
-                        {t.sidebar.signOut}
-                      </DropdownMenuItem>
-                    </>
+                </div>
+                <SettingsButton className="group-data-[collapsible=icon]:hidden">
+                  <GearIcon className="size-5" />
+                </SettingsButton>
+                {/* The rail's own, its circle where the one above was, so closing and opening the sidebar swap nothing
+                    that shows. Pointed at or focused, the circle blurs and shrinks away while the gear grows in. */}
+                <SettingsButton className="group/settings ml-1 hidden group-data-[collapsible=icon]:grid [&>svg]:transition-[opacity,scale,filter] [&>svg]:duration-200 [&>svg]:ease-(--ease-out) motion-reduce:[&>svg]:transition-none">
+                  {user && (
+                    <UserAvatar
+                      id={user.id}
+                      className="size-6 group-[:is(:hover,:focus-visible)]/settings:scale-50 group-[:is(:hover,:focus-visible)]/settings:opacity-0 group-[:is(:hover,:focus-visible)]/settings:blur-xs"
+                    />
                   )}
-                </DropdownMenuContent>
-              </DropdownMenu>
+                  <GearIcon
+                    className={cn(
+                      "size-5",
+                      user &&
+                        "scale-50 opacity-0 blur-xs group-[:is(:hover,:focus-visible)]/settings:scale-100 group-[:is(:hover,:focus-visible)]/settings:opacity-100 group-[:is(:hover,:focus-visible)]/settings:blur-none"
+                    )}
+                  />
+                </SettingsButton>
+              </div>
             </SidebarMenuItem>
           </SidebarMenu>
         </SidebarFooter>

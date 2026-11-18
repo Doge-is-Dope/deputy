@@ -1,13 +1,12 @@
 """Build chat models, and resolve model and effort choices."""
 
 from collections.abc import Iterable
-from functools import lru_cache
 
 from langchain_anthropic import ChatAnthropic
 from langchain_core.language_models import BaseChatModel
 from langchain_openai import ChatOpenAI
 
-from computer_use.agent.usage import PRICES
+from computer_use.agent.catalog import MODELS
 from computer_use.config import FOLLOW, Choice, Settings
 
 
@@ -53,15 +52,7 @@ class AgentChatAnthropic(ChatAnthropic):
 
 # Reasoning effort levels, lowest first, as LangChain names them for every provider.
 LEVELS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
-# The efforts of models whose LangChain profile does not list them, from the provider's model page.
-EFFORTS = {
-    # developers.openai.com/api/docs/models/gpt-6.1-sol (2026-10-18): "none" and "minimal" are not supported.
-    "openai:gpt-6.1-sol": ("low", "medium", "high", "xhigh", "max"),
-    "openai:gpt-6.1-terra": ("none", "low", "medium", "high", "xhigh", "max"),
-    # platform.claude.com/docs/en/about-claude/models (2026-10-20); langchain-anthropic 1.7.6 lists no efforts for it.
-    "anthropic:claude-haiku-5-5": ("low", "medium", "high", "xhigh", "max"),
-}
-# The efforts assumed of a model nothing lists: those every reasoning model of both providers takes.
+# The efforts assumed of a model not in the catalog: those every reasoning model of both providers takes.
 COMMON_EFFORTS = ("low", "medium", "high")
 MAIN_AGENT = "main"
 
@@ -72,17 +63,18 @@ BETAS = ["thinking-binding-controls-2026-08-01"]
 
 
 def offered(settings: Settings) -> tuple[str, ...]:
-    return tuple(dict.fromkeys(spec for spec in (*PRICES, settings.main_model, settings.computer_model) if spec))
+    return tuple(dict.fromkeys(spec for spec in (*MODELS, settings.main_model, settings.computer_model) if spec))
 
 
-@lru_cache
+def unavailable(settings: Settings, spec: str) -> str | None:
+    """Why the model cannot be used here, as a code the page words; None when it can."""
+    if not getattr(settings, f"{spec.partition(':')[0]}_api_key", None):
+        return "no_api_key"
+    return None
+
+
 def efforts(spec: str) -> tuple[str, ...]:
-    if spec in EFFORTS:
-        return EFFORTS[spec]
-    provider, _, name = spec.partition(":")
-    model = {"openai": ChatOpenAI, "anthropic": ChatAnthropic}.get(provider)
-    levels = (model(model=name, api_key="unused").profile or {}).get("reasoning_effort_levels") if model else None
-    return tuple(level for level in LEVELS if level in levels) if levels else COMMON_EFFORTS
+    return MODELS[spec].efforts if spec in MODELS else COMMON_EFFORTS
 
 
 def clamp(effort: str, levels: tuple[str, ...]) -> str:
@@ -104,9 +96,10 @@ def starting(settings: Settings, agents: Iterable[str] = ()) -> dict[str, dict[s
 
 def chosen(settings: Settings, agent: str, choices: dict[str, dict[str, str]] | None = None) -> Choice:
     """The model and effort an agent works with in a run: what the user chose (`choices`, by agent), else `starting`.
-    A subagent's model or effort that follows (FOLLOW) is the main agent's, and so is a model not offered. The page
-    works these out the same way (clients/web/src/lib/choices.ts)."""
-    start, models = starting(settings, (agent,)), offered(settings)
+    A subagent's model or effort that follows (FOLLOW) is the main agent's, and so is a model not offered or without
+    its API key. The page works these out the same way (clients/web/src/lib/choices.ts)."""
+    start = starting(settings, (agent,))
+    models = [spec for spec in offered(settings) if unavailable(settings, spec) is None]
 
     def of(name: str) -> dict[str, str]:
         return start[name] | (choices or {}).get(name, {})

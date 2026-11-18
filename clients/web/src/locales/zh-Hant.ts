@@ -1,7 +1,7 @@
 // The interface's words in Traditional Chinese, the language it was written in. Every other language has the same
 // shape (Messages), so one missing a word fails to compile.
 
-import type { ErrorCode } from "@/lib/api"
+import type { ErrorCode, ModelUnavailable } from "@/lib/api"
 
 // Which way a scroll goes, as the phrase puts it.
 const SCROLL: Record<string, string> = {
@@ -128,14 +128,8 @@ export const zhHant = {
     deleted: "找不到這段對話",
     offline: "連不到服務，請稍後再試",
     blockedOffline: "暫時連不到服務",
-    liveView: "即時畫面",
-    liveViewWith: (connection: string) => `即時畫面，${connection}`,
-    showLiveView: "顯示即時畫面",
     showPlan: "顯示計畫",
     hidePlan: "隱藏計畫",
-    hideLiveView: "隱藏即時畫面",
-    resizeLiveView: "調整即時畫面寬度",
-    liveViewDescription: "Windows 桌面的即時畫面與接管",
     // On the notice that another conversation waits for the user.
     openConversation: "前往對話",
     waitingApproval: "Agent 等你確認",
@@ -391,6 +385,56 @@ export const zhHant = {
     next: "下一張",
   },
 
+  // The panel beside the conversation: the computer and the attachments opened from it, each a tab.
+  tabs: {
+    title: "分頁",
+    description: "電腦的即時畫面與附件預覽",
+    show: "顯示分頁",
+    hide: "隱藏分頁",
+    resize: "調整分頁寬度",
+    expand: "放大分頁",
+    shrink: "縮小分頁",
+    computer: "電腦",
+    computerWith: (connection: string) => `電腦，${connection}`,
+    closeFile: (name: string) => `關閉 ${name}`,
+    download: "下載",
+    zoom: "縮放",
+    fit: "符合寬度",
+    loadFailed: "無法載入這個檔案",
+    pageFailed: "無法顯示這一頁",
+    truncated: "只顯示前 256 KB",
+  },
+
+  // Drawing over an attached image; the copy goes into the message being written.
+  markup: {
+    start: "標註",
+    pen: "畫筆",
+    shape: "形狀",
+    comment: "註解",
+    color: "顏色",
+    rect: "矩形",
+    ellipse: "橢圓",
+    arrow: "箭頭",
+    colors: { red: "紅", yellow: "黃", green: "綠", blue: "藍", black: "黑" },
+    undo: "復原",
+    redo: "重做",
+    add: "加入對話",
+    done: "完成",
+    commentPlaceholder: "加入註解…",
+    saveComment: "儲存",
+    deleteComment: "刪除註解",
+    commentNumber: (number: number) => `註解 ${number}`,
+    discard: {
+      title: "放棄標註？",
+      body: "畫上去的內容不會保留。",
+      confirm: "放棄",
+    },
+    busy: "等這次工作結束再加入",
+    answerFirst: "先回覆 Agent 再加入",
+    failed: "無法產生標註後的圖片",
+    finishFirst: "這張圖還有標註沒完成：按「完成」套用，或「取消」放棄",
+  },
+
   liveView: {
     label: "即時畫面",
     keyboard: "桌面鍵盤輸入",
@@ -403,11 +447,8 @@ export const zhHant = {
     unavailable: "桌面暫時無法使用",
     recovering: "正在自動重新連線",
     stillDown: "一直沒有恢復嗎？請把錯誤資訊傳給管理員。",
-    expand: "放大即時畫面",
-    shrink: "縮小即時畫面",
     exitFullscreen: "結束全螢幕",
     holdFullscreen: "長按全螢幕",
-    close: "關閉即時畫面",
     connecting: "連線中…",
     // Who has control, in two parts: the first rolls over when control changes hands, the rest stays. A space
     // between them goes at the end of the first, unbreakable, or the layout drops it.
@@ -425,11 +466,10 @@ export const zhHant = {
     pages: "設定頁面",
     general: "一般",
     account: "帳號",
-    accountName: "名稱",
-    signInMethod: "登入方式",
-    signInNone: "This machine only",
-    signInToken: "Access token",
-    signInProxy: "Sign-in proxy",
+    userId: "使用者 ID",
+    signInNone: "只限這台電腦",
+    signInToken: "存取權杖",
+    signInProxy: "登入代理",
     appearance: "外觀",
     desktop: "桌面",
     model: "模型",
@@ -459,6 +499,10 @@ export const zhHant = {
     titleGeneration: "標題生成",
     effort: "推理強度",
     byDefault: "（預設）",
+    modelUnavailable: { no_api_key: "未設定 API key" } satisfies Record<
+      ModelUnavailable,
+      string
+    >,
     resetModels: "重設",
     // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and its two switches, one
     // for writing and one for reading.

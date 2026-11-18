@@ -83,15 +83,6 @@ export const PersonIcon = (props: IconProps) => (
   </Icon>
 )
 
-// Signing out (the account menu's 登出), as SF Symbols' rectangle.portrait.and.arrow.right: a door left open, an
-// arrow leaving through it.
-export const SignOutIcon = (props: IconProps) => (
-  <Icon {...props}>
-    <path d="M10 3.75H7A3.25 3.25 0 0 0 3.75 7v10A3.25 3.25 0 0 0 7 20.25h3" />
-    <path d="M15.5 7.5 20 12l-4.5 4.5M20 12H9.5" />
-  </Icon>
-)
-
 export const GearIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M9.18 5.19Q9.84 4.92 10.10 3.83L10.10 3.83Q10.37 2.74 11.97 2.74L12.03 2.74Q13.63 2.74 13.90 3.83L13.90 3.83Q14.16 4.92 14.82 5.19L14.82 5.19Q15.47 5.47 16.43 4.88L16.43 4.88Q17.39 4.30 18.52 5.43L18.57 5.48Q19.70 6.61 19.12 7.57L19.12 7.57Q18.53 8.53 18.81 9.18L18.81 9.18Q19.08 9.84 20.17 10.10L20.17 10.10Q21.26 10.37 21.26 11.97L21.26 12.03Q21.26 13.63 20.17 13.90L20.17 13.90Q19.08 14.16 18.81 14.82L18.81 14.82Q18.53 15.47 19.12 16.43L19.12 16.43Q19.70 17.39 18.57 18.52L18.52 18.57Q17.39 19.70 16.43 19.12L16.43 19.12Q15.47 18.53 14.82 18.81L14.82 18.81Q14.16 19.08 13.90 20.17L13.90 20.17Q13.63 21.26 12.03 21.26L11.97 21.26Q10.37 21.26 10.10 20.17L10.10 20.17Q9.84 19.08 9.18 18.81L9.18 18.81Q8.53 18.53 7.57 19.12L7.57 19.12Q6.61 19.70 5.48 18.57L5.43 18.52Q4.30 17.39 4.88 16.43L4.88 16.43Q5.47 15.47 5.19 14.82L5.19 14.82Q4.92 14.16 3.83 13.90L3.83 13.90Q2.74 13.63 2.74 12.03L2.74 11.97Q2.74 10.37 3.83 10.10L3.83 10.10Q4.92 9.84 5.19 9.18L5.19 9.18Q5.47 8.53 4.88 7.57L4.88 7.57Q4.30 6.61 5.43 5.48L5.48 5.43Q6.61 4.30 7.57 4.88L7.57 4.88Q8.53 5.47 9.18 5.19Z" />
@@ -132,24 +123,19 @@ export const SidebarIcon = ({
   </Icon>
 )
 
-/** Make a panel fill the page: two arrows pointing out to the corners; `inward`, to put it back, each turned about
-    its own middle to point in from them (index.css), with the panel. */
+/** Make a panel fill the page: two arrows pointing out to the corners; `inward`, to put it back, the same two pointing
+    in from them. It swaps at once: turned or flipped, the arrows passed through a shape that read as neither. */
 export const ExpandIcon = ({
   inward = false,
   ...props
 }: IconProps & { inward?: boolean }) => (
   <Icon {...props}>
     <path
-      className="expand-icon-arrow"
-      data-inward={inward || undefined}
-      style={{ transformOrigin: "16.75px 7.25px" }}
-      d="m14 10 5.5-5.5M14.5 4.5h5v5"
-    />
-    <path
-      className="expand-icon-arrow"
-      data-inward={inward || undefined}
-      style={{ transformOrigin: "7.25px 16.75px" }}
-      d="m10 14-5.5 5.5M9.5 19.5h-5v-5"
+      d={
+        inward
+          ? "m14 10 5.5-5.5M19 10h-5V5m-4 9-5.5 5.5M5 14h5v5"
+          : "m14 10 5.5-5.5M14.5 4.5h5v5M10 14l-5.5 5.5M9.5 19.5h-5v-5"
+      }
     />
   </Icon>
 )
@@ -627,5 +613,90 @@ export const PauseCircleIcon = (props: IconProps) => (
   <Icon {...props}>
     <circle cx="12" cy="12" r="8.75" />
     <path d="M10 9v6M14 9v6" />
+  </Icon>
+)
+
+// Attachments in the side panel and marking them up
+
+/** A picture the user attached, on its tab (`photo`): a frame, the sun at its top left and one mountain whose line
+    runs from the frame's bottom edge over a rounded peak to its right edge, so no line ends inside it. */
+export const PhotoIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="3" y="4.5" width="18" height="15" rx="3.5" />
+    <circle cx="8.5" cy="9.5" r="1.75" />
+    <path d="M6.5 19.5l6.67-6.89Q14 11.75 15.06 12.32L21 15.5" />
+  </Icon>
+)
+
+/** Mark a picture up (`scribble`): one line written across it, turning once in a loop, as a hand marks a page. Not
+    the pen tool's own icon, which it opens. */
+export const ScribbleIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path
+      transform="matrix(1.12 0 0 1.4 -0.94 -5.69)"
+      d="M3.75 18.5c3.1-.3 5.5-3.5 7-6.7 1.2-2.6 1-5.05-.7-5.05-1.9 0-2.6 3.2-1.1 5.7 1.7 2.8 5.2 3.8 7.8 1.8 1-.8 1.9-1.9 2.5-3"
+    />
+  </Icon>
+)
+
+/** Draw freehand, the markup's pen (`pencil` without its band): a pen laid from the bottom left, its back end round,
+    its sides straight, its tip a short point eased at the shoulders. Not PencilIcon, which renames. */
+export const PenIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M15.9 4.6a2.8 2.8 0 0 1 4 4L9.1 19.4a1.6 1.6 0 0 1-.7.4l-3.9 1.15a.4.4 0 0 1-.5-.5L5.15 16.6a1.6 1.6 0 0 1 .4-.7Z" />
+  </Icon>
+)
+
+/** Save the file (`arrow.down.to.line`): an arrow down onto a line. */
+export const DownloadIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M12 3.5v12M6.5 10l5.5 5.5 5.5-5.5M4.5 20.5h15" />
+  </Icon>
+)
+
+/** Draw a rectangle (`square`). */
+export const SquareIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <rect x="3.25" y="3.25" width="17.5" height="17.5" rx="4" />
+  </Icon>
+)
+
+/** Draw an ellipse (`circle`): the status marks' circle. */
+export const CircleIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="12" cy="12" r="8.75" />
+  </Icon>
+)
+
+/** Draw an arrow (`arrow.up.right`). */
+export const ArrowUpRightIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M5 19 19 5M9 5h10v10" />
+  </Icon>
+)
+
+/** Comment on a spot of a picture: the corners of an area, dashed, with the pointer that picks the spot in its
+    open corner, as the comment tool's own. */
+export const CommentIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M3.5 8.5v-2a3 3 0 0 1 3-3h2M12.5 3.5h2a3 3 0 0 1 3 3v2M3.5 12.5v2a3 3 0 0 0 3 3h2" />
+    <path d="M11.9 11.6a.6.6 0 0 1 .7-.7l7.9 3a.6.6 0 0 1 0 1.1l-3.1 1.1a1.1 1.1 0 0 0-.65.65l-1.1 3.1a.6.6 0 0 1-1.1 0Z" />
+  </Icon>
+)
+
+/** Undo (`arrow.uturn.backward`): back along the top, the line turning down and round under it. */
+export const UndoIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path d="M8.5 14 3.5 9l5-5M3.5 9h11a6 6 0 0 1 0 12H11" />
+  </Icon>
+)
+
+/** Redo (`arrow.uturn.forward`): undo's, mirrored. */
+export const RedoIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <path
+      transform="matrix(-1 0 0 1 24 0)"
+      d="M8.5 14 3.5 9l5-5M3.5 9h11a6 6 0 0 1 0 12H11"
+    />
   </Icon>
 )

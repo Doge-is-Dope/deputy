@@ -6,7 +6,6 @@ import json
 import re
 import sys
 import threading
-from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -19,12 +18,8 @@ from computer_use.desktop.control import RunLock
 MODEL = "openai:offline-model"
 
 
-def usage(input=100, cached=20, write=10, output=8, reasoning=3):
-    return {"input": input, "cached": cached, "cache_write": write, "output": output, "reasoning": reasoning}
-
-
 def events(cost=None):
-    tokens = usage()
+    tokens = {"input": 100, "cached": 20, "cache_write": 10, "output": 8, "reasoning": 3}
     return [
         {"type": "start", "kind": "turn", "time": 0, "goal": "Draw a box"},
         {"type": "model", "time": 1, "model": MODEL, "text": "Draw.", "tool_calls": [{"name": "left_click"}],
@@ -64,21 +59,19 @@ def status():
 
 
 def version(commit="abcdef123456", source="snapshot1234"):
-    return {"commit": commit, "source": source, "dirty": False, "subject": "Offline fixture", "date": "2026-10-27",
-            "changes": [], "note": ""}
+    return {"commit": commit, "source": source, "prompts": "prompts1234", "code": "code12345678", "dirty": False,
+            "subject": "Offline fixture", "date": "2026-10-27", "changes": [], "note": ""}
 
 
 def trial(evaluator, attempt=1, effort="medium", **changes):
+    """A run's result.json; with `verdict`, as `load_rows` reads it back."""
     agents = {"main": {"model": MODEL, "effort": "medium"}, "computer": {"model": MODEL, "effort": effort}}
     return {
-        "no": 3, "task": "paint-canvas", "attempt": attempt, "started": f"2026-10-27T12:{attempt:02d}:00",
+        "task": "paint-canvas", "attempt": attempt, "started": f"2026-10-27T12:{attempt:02d}:00",
         "goal": "Draw a box", "expect": "A box", "source": "offline fixture", "start": "Empty canvas",
         "max_steps": 60, "feasible": True, "model": evaluator.model_names(agents), "setup": "ok",
-        "version": version(), "approve": True, "run": f"run-{attempt}", "stop_reason": "replied", "computer": "replied",
-        "calls": 2, "main_calls": 1, "seconds": 10, "agent_cost": .01, "title_cost": .003, "unknown_calls": 0,
-        "usage": usage(), "agents": [{"agent": "computer", "model": MODEL, "usage": usage()}],
-        "settings": {"requested_agents": {}, "agents": agents, "screenshots": {"keep": 3, "every": 5}},
-        **changes,
+        "version": version(), "run": f"run-{attempt}", "stop_reason": "replied", "computer": "replied",
+        "calls": 2, "main_calls": 1, "seconds": 10, "cost": .013, **changes,
     }
 
 
@@ -91,7 +84,7 @@ def save_version(evaluator, record=None):
 
 
 def save_trial(folder, row, log=None):
-    where = folder / "03-paint-canvas" / str(row["attempt"])
+    where = folder / "paint-canvas" / str(row["attempt"])
     where.mkdir(parents=True)
     (where / "result.json").write_text(json.dumps(row))
     if row.get("run"):
@@ -205,25 +198,10 @@ def test_a_busy_desktop_stops_the_eval_instead_of_failing_the_setup(evaluator, m
         evaluator.run_setup([{"type": "close-windows"}])
 
 
-def test_pruning_metadata_comes_from_the_snapshot_without_executing_it(evaluator, tmp_path):
-    source = tmp_path / "src"
-    file = source / "computer_use/middleware/common.py"
-    file.parent.mkdir(parents=True)
-    file.write_text("raise RuntimeError('must never execute')\nKEEP_SCREENSHOTS = 7\nPRUNE_EVERY = 25\n")
-    assert evaluator.screenshot_settings(source) == {"keep": 7, "every": 25}
-    for text in ("KEEP_SCREENSHOTS = 7\n", "KEEP_SCREENSHOTS = 3\nPRUNE_EVERY = get_setting()\n",
-                 "KEEP_SCREENSHOTS = True\nPRUNE_EVERY = 5\n", "not valid python!"):
-        file.write_text(text)
-        assert evaluator.screenshot_settings(source) is None
-    assert evaluator.screenshot_settings(tmp_path / "absent") is None
-
-
-def test_run_records_requested_and_resolved_settings_and_exported_usage(evaluator, monkeypatch, tmp_path):
+def test_run_records_the_effective_models_and_what_the_run_cost(evaluator, monkeypatch, tmp_path):
     folder = save_version(evaluator)
     source = tmp_path / "src"
-    file = source / "computer_use/middleware/common.py"
-    file.parent.mkdir(parents=True)
-    file.write_text("KEEP_SCREENSHOTS = 3\nPRUNE_EVERY = 5\n")
+    source.mkdir()
     screen = tmp_path / "start.png"
     screen.write_bytes(b"fake screen; no image processing in this test")
     requested = {"computer": {"effort": "low"}}
@@ -241,128 +219,73 @@ def test_run_records_requested_and_resolved_settings_and_exported_usage(evaluato
         (into / "turn-1" / "steps.jsonl").write_text("".join(json.dumps(event) + "\n" for event in events({"input": .01})))
 
     monkeypatch.setattr(evaluator.api, "export_session", exported)
-    evaluator.run_tasks(SimpleNamespace(trials=1, ask=True), ["paint-canvas"], version(), source, requested)
-    row = json.loads((folder / "03-paint-canvas/1/result.json").read_text())
-    assert sent[0][-1] == requested and sent[0][-2] is False
-    assert row["settings"]["requested_agents"] == requested
-    assert row["settings"]["agents"]["computer"] == {"model": MODEL, "effort": "low"}
-    assert row["settings"]["screenshots"] == {"keep": 3, "every": 5}
-    assert row["usage"] == usage() and row["agent_cost"] == .01 and row["title_cost"] == .003
-    assert row["version"]["source"] == "snapshot1234"
+    evaluator.run_tasks(1, ["paint-canvas"], version(), source, requested)
+    row = json.loads((folder / "paint-canvas/1/result.json").read_text())
+    assert sent[0][-1] == requested
+    assert row["model"] == f"main {MODEL} medium, computer {MODEL} low"
+    assert row["cost"] == pytest.approx(.013) and row["version"]["source"] == "snapshot1234"
+    assert evaluator.file_name("abcdef1", "paint-canvas", 1) in row["goal"]  # the attempt's own files
+    assert "paint-canvas" not in evaluator.file_name("abcdef1", "paint-canvas", 1)  # the id would hint at the task
 
 
-def test_summarize_keeps_authoritative_totals_title_and_unknown_calls_separate(evaluator):
+def test_summarize_counts_every_logs_cost_and_the_titles_once(evaluator):
     log = events({"input": .01, "output": .02})
-    # A duplicated model usage must not be added again to the end event's authoritative total.
-    log.insert(2, copy.deepcopy(log[1]))
-    result = evaluator.summarize(log)
-    assert result["usage"] == usage() and result["agents"][0]["usage"] == usage()
-    assert result["agent_cost"] == pytest.approx(.03)
-    assert result["title_cost"] == pytest.approx(.003) and result["cost"] == pytest.approx(.033)
-    log[1]["usage"] = None
+    log.insert(2, copy.deepcopy(log[1]))  # a model call's usage is not a cost of its own
+    assert evaluator.summarize(log)["cost"] == pytest.approx(.033)
     log[-2]["cost"] = None
-    result = evaluator.summarize(log)
-    assert result["unknown_calls"] == 1 and result["agent_cost"] is None and result["cost"] is None
-    assert evaluator.summarize([])["usage"] is None
+    assert evaluator.summarize(log)["cost"] is None
 
 
-def test_grouping_uses_effective_settings_not_the_requested_spelling(evaluator):
-    a = trial(evaluator)
-    b = copy.deepcopy(a)
-    b["settings"]["requested_agents"] = {"main": {"model": "follow"}, "computer": {"effort": "medium"}}
-    b["settings"]["agents"] = dict(reversed(list(b["settings"]["agents"].items())))
-    assert evaluator.experiment(a) == evaluator.experiment(b)
-    for field, value in (("max_steps", 20), ("approve", False)):
-        assert evaluator.experiment(a) != evaluator.experiment(a | {field: value})
-    for change in (trial(evaluator, effort="low"), a | {"version": version(source="other-source")},
-                   a | {"settings": a["settings"] | {"screenshots": {"keep": 3, "every": 25}}}):
-        assert evaluator.experiment(a) != evaluator.experiment(change)
-
-
-def test_summary_includes_all_trials_and_unknown_cost_without_reading_logs(evaluator, monkeypatch):
+def test_summary_includes_all_trials_by_models_and_shows_unknown_cost(evaluator, monkeypatch):
     folder = save_version(evaluator)
-    a = trial(evaluator, seconds=10, agent_cost=.01)
-    b = trial(evaluator, attempt=2, seconds=1, agent_cost=None, stop_reason="cancelled", computer="step_limit",
-              unknown_calls=1)
-    rows = [a, b, trial(evaluator, attempt=3),
-            trial(evaluator, attempt=4, run=None, stop_reason="setup_failed"), trial(evaluator, attempt=5, effort="low")]
+    rows = [trial(evaluator, verdict="pass"),
+            trial(evaluator, attempt=2, seconds=1, cost=None, stop_reason="cancelled", computer="step_limit",
+                  verdict="fail"),
+            trial(evaluator, attempt=3, verdict=None),
+            trial(evaluator, attempt=4, run=None, stop_reason="setup_failed", verdict=None),
+            trial(evaluator, attempt=5, effort="low", verdict="pass", feasible=False)]
     monkeypatch.setattr(evaluator, "read_events", lambda *args: pytest.fail("summary must not read transcripts"))
-    text = evaluator.summary(folder, rows, {"run-1": "pass", "run-2": "fail", "run-5": "pass"})
+    text = evaluator.summary(folder, rows)
     medium, low = text.split(f"   main {MODEL} medium, computer {MODEL} low")
     assert "trials=4, started=3, ungraded=1" in medium
     assert "'setup_failed': 1" in medium and "'step_limit': 1" in medium
-    assert "1/2" in medium and "0.02000+?1" in medium
-    task = next(line for line in medium.splitlines() if line.strip().startswith("03-paint-canvas"))
-    assert task.split()[4:6] == ["10.0", "10.0"]  # a quick failure must not improve successful-run latency
-    assert "trials=1, started=1" in low and "1/1" in low
-    # A token-weighted ratio, not the average of 20% and 90% (55%).
-    rows[1]["agents"] = [{"agent": "computer", "model": MODEL, "usage": usage(input=900, cached=810)}]
-    text = evaluator.summary(folder, rows[:2], {"run-1": "pass", "run-2": "fail"})
-    assert "cached=830 (83.0%)" in text and "write=20" in text
-    assert evaluator.percentile([10, 30], .5) == "20.0"
-    assert evaluator.percentile([10, 30], .95) == "29.0"
-    assert evaluator.known_total([None, None], 5) == "?"
+    task = next(line for line in medium.splitlines() if line.strip().startswith("paint-canvas"))
+    # 1/2 graded passed, 4 trials, calls of the 3 started, the passes' median time (a quick failure must not
+    # improve it), and a cost one trial left unknown.
+    assert task.split()[1:] == ["1/2", "4", "3/6", "10.0", "?"]
+    assert "paint-canvas [infeasible]" in low and "1/1" in low and "0.013" in low
 
 
-def test_missing_usage_and_infeasible_results_are_explicit(evaluator):
+def test_the_report_keeps_the_grades_and_never_rewrites_results(evaluator, capsys):
     folder = save_version(evaluator)
-    row = trial(evaluator, feasible=False)
-    for key in ("agent_cost", "agents", "title_cost", "unknown_calls"):
-        row.pop(key)
-    text = evaluator.summary(folder, [row], {row["run"]: "pass"})
-    assert "[infeasible]" in text and "usage unavailable in 1 trial(s)" in text
-    assert "0.00000" not in text
-
-
-def test_report_loads_each_result_and_trajectory_once_and_preserves_grades(evaluator, monkeypatch, capsys):
-    folder = save_version(evaluator)
-    originals = {}
-    grades = {}
-    for n in range(1, 31):
+    originals, grades = {}, {}
+    for n in range(1, 5):
         row = trial(evaluator, attempt=n, effort="low" if n % 2 else "medium")
         path = save_trial(folder, row, events({"input": .01}))
         originals[path / "result.json"] = (path / "result.json").read_text()
         grades[row["run"]] = "pass retained reason" if n % 2 else "fail retained reason"
     (folder / "grade.md").write_text("# Grades\n\n" + "\n\n".join(
         f"## trial · `{run}`\n\nGrade: {grade}" for run, grade in grades.items()))
-    reads = Counter()
-    read_text = Path.read_text
-    calculated = []
-    summarize = evaluator.summarize
-
-    def metrics(log):
-        calculated.append(True)
-        return summarize(log)
-
-    def counted(path, *args, **kwargs):
-        if path.name in ("result.json", "steps.jsonl"):
-            reads[path] += 1
-        return read_text(path, *args, **kwargs)
-
-    monkeypatch.setattr(Path, "read_text", counted)
-    monkeypatch.setattr(evaluator, "summarize", metrics)
     evaluator.cmd_report(SimpleNamespace(versions=[]))
-    assert len(reads) == 60 and set(reads.values()) == {1}
     assert evaluator.read_grades(folder) == grades
     output = capsys.readouterr().out
-    assert "trials=15" in output and "0/15" in output and "15/15" in output
+    assert "trials=2" in output and "0/2" in output and "2/2" in output
     assert (evaluator.RESULTS / "report.html").is_file()
-    assert all(read_text(path) == text for path, text in originals.items())
+    assert all(path.read_text() == text for path, text in originals.items())
     sheet = folder / "grade.md"
-    sheet.write_text(read_text(sheet).replace("Grade: pass retained reason", "Grade: fail revised", 1))
+    sheet.write_text(sheet.read_text().replace("Grade: pass retained reason", "Grade: fail revised", 1))
     evaluator.cmd_report(SimpleNamespace(versions=[]))
-    assert set(reads.values()) == {2}  # cache lifetime is one report, so a regrade is visible on the next call
-    assert not calculated  # records keep their metrics: the report does not work them out again
     assert evaluator.read_grades(folder)["run-1"] == "fail revised"
 
 
-def test_build_sheet_merges_new_grades_without_losing_existing_ones(evaluator):
+def test_a_rebuilt_sheet_keeps_its_grades_and_adds_new_runs_ungraded(evaluator):
     folder = save_version(evaluator)
     save_trial(folder, trial(evaluator))
     save_trial(folder, trial(evaluator, attempt=2))
     (folder / "grade.md").write_text("# Grades\n\n## one · `run-1`\n\nGrade: pass original reason\n")
-    evaluator.build_sheet(folder, {"run-2": "fail another reason"})
-    assert evaluator.read_grades(folder) == {"run-1": "pass original reason", "run-2": "fail another reason"}
+    evaluator.build_sheet(folder)
+    assert evaluator.read_grades(folder) == {"run-1": "pass original reason"}
+    assert "`run-2`" in (folder / "grade.md").read_text()
 
 
 def save_session(where, logs):
@@ -404,10 +327,10 @@ def test_a_rebuilt_sheet_and_the_report_show_the_runs_end_screen_and_keep_its_gr
 
     sheet = (folder / "grade.md").read_text()
     links = re.findall(r'src="([^"]+)"', sheet)
-    assert links == ["03-paint-canvas/1/start.png", f"03-paint-canvas/1/run/{end}"]
+    assert links == ["paint-canvas/1/start.png", f"paint-canvas/1/run/{end}"]
     assert all((folder / link).is_file() for link in links)
     assert evaluator.read_grades(folder) == {"run-1": "pass kept reason"}
-    assert f"{folder.name}/03-paint-canvas/1/run/{end}" in (evaluator.RESULTS / "report.html").read_text()
+    assert f"{folder.name}/paint-canvas/1/run/{end}" in (evaluator.RESULTS / "report.html").read_text()
 
 
 def test_a_run_without_a_screen_on_disk_has_no_end_screen_on_its_sheet(evaluator):
@@ -449,7 +372,7 @@ def test_a_sessions_logs_read_back_in_order_and_summed(evaluator, tmp_path):
 
     assert [event["time"] for event in events] == [1, 2, 2.5, 3, 4, 5, 6, 7]
     assert (result["stop_reason"], result["summary"], result["actions"]) == ("replied", "Start is open.", 1)
-    assert result["agent_cost"] == pytest.approx(.06) and result["seconds"] == 6
+    assert result["cost"] == pytest.approx(.06) and result["seconds"] == 6
 
 
 class WaitingSession:

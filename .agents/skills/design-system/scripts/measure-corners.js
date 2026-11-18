@@ -44,6 +44,7 @@ for (const el of document.querySelectorAll("body *")) {
   )[0]
   const gap = Math.max(...corner)
   if (Math.min(...corner) < -1 || gap >= outer) continue // outside it, or clear of the corner
+  if (inner === 28 && parent.dataset.slot === "sidebar-inset") continue // the composer keeps its 28 (layout.md)
   const key = `${name(parent).split(" ")[0]}>${name(el).split(" ")[0]}:${inner}:${gap}`
   if (seen.has(key)) continue
   seen.add(key)

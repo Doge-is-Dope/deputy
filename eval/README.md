@@ -22,7 +22,7 @@ Then list the tasks, run a sample and create the report:
 
 ```bash
 eval/ev tasks              # list the tasks
-eval/ev run 10 13          # run tasks 10 and 13
+eval/ev run excel-sort word-zh  # run two tasks
 eval/ev report             # pass rates, the grading sheet and the HTML report
 ```
 
@@ -34,43 +34,43 @@ The eval and web servers share stored runs and the desktop lock. Only one run ca
 
 ## Tasks
 
-[tasks.jsonl](tasks.jsonl) holds 22 tasks, one per line. `eval/ev tasks 10` shows one task in full, with the
+[tasks.jsonl](tasks.jsonl) holds 22 tasks, one per line. `eval/ev tasks excel-sort` shows one task in full, with the
 PowerShell that sets it up.
 
 | Kind | Tasks |
 |---|---|
-| Windows Agent Arena | 01–07: Notepad, Calculator, Paint, Explorer, Settings, Chrome |
-| Back-office web pages | 08–09: fill a form, reconcile a page with a spreadsheet; 21: an ID from one page, its phone from a 250-page table |
-| OSWorld Windows (Office) | 10–12, 14–16: Excel, Word, PowerPoint, multi-app |
-| Typing Traditional Chinese | 13 |
-| Infeasible: the right answer is "this cannot be done" | 17–18, scored apart |
-| Distractor: a similar open file must be left alone | 19 |
-| Keyboard only: a submenu ignores the mouse | 20: export from a menu whose submenu takes only the keyboard |
-| Professional system: function codes, query mode, value lists, maker-checker | 22: a local mock, change a party's phone and leave it unauthorized |
+| Windows Agent Arena | notepad-count, calc-days, paint-canvas, explorer-archive, explorer-restore, storage-sense, chrome-pdf |
+| Back-office web pages | web-form, web-reconcile (a page against a spreadsheet), web-paged-lookup (an ID from one page, its phone from a 250-page table) |
+| OSWorld Windows (Office) | excel-sort, excel-dropdown, word-subscript, ppt-duplicate, bookkeeping, paper-authors |
+| Typing Traditional Chinese | word-zh |
+| Infeasible: the right answer is "this cannot be done" | missing-file, calc-lunar; scored apart |
+| Distractor: a similar open file must be left alone | notepad-distractor |
+| Keyboard only: a submenu ignores the mouse | submenu-keys |
+| Professional system: function codes, query mode, value lists, maker-checker | pro-system: a local mock, change a party's phone and leave it unauthorized |
 
-Each line defines one task: its number (`no`), ID (`id`), source, starting state (`start`), goal (`goal`),
+Each line defines one task: its ID (`id`), which names its results folder, source, starting state (`start`), goal (`goal`),
 expected result (`expect`) and setup steps (`setup`). The setup steps are converted to PowerShell by
 `step_script` in [winsetup.py](winsetup.py). Optional fields are `feasible: false` and `max_steps` (default 60).
 
-The `{name}` placeholder becomes `ev-<version>-<no>-<attempt>`, giving each attempt its own files. Keep task numbers stable while results filed under them are kept.
+The `{name}` placeholder becomes `ev-<version>-<task digest>-<attempt>`, giving each attempt its own files without naming the task to the agent.
 
 ## Running
 
 ```bash
-eval/ev run 10 13 --trials 3                       # run each task three times
-eval/ev run 10 --version HEAD                      # use the latest committed runtime source
-eval/ev run 10 --computer openai:gpt-6-luna medium # override the desktop model and effort
+eval/ev run excel-sort word-zh --trials 3                 # run each task three times
+eval/ev run excel-sort --version HEAD                     # use the latest committed runtime source
+eval/ev run excel-sort --computer openai:gpt-6-luna medium # override the desktop model and effort
 ```
 
-Omit the task numbers to run all 22 tasks. Without `--version`, the evaluator uses the current working-tree source, including uncommitted changes under `runtime/src`.
+Name no tasks to run all 22. Without `--version`, the evaluator uses the current working-tree source, including uncommitted changes under `runtime/src`.
 
 Before each task, `run` checks that the desktop is connected, available and matches the local `clean-desktop.png` baseline. It waits up to a minute for reconnection. It then sets up the task through PowerShell, runs the goal and closes any windows it opened without saving.
 
 Close unrelated windows yourself before testing. If only the wallpaper changed, update the baseline with `eval/ev reset --accept`.
 
-Steps the agent asks approval for are approved automatically, and a run whose agent asks the user a question ends there, its question in the output; add `--ask` to answer both yourself. A run still going after 30 minutes is stopped.
+Steps the agent asks approval for are approved automatically, and a run whose agent asks the user a question ends there, its question in the output. A run still going after 30 minutes is stopped.
 
-Results go to `results/<version>/<NN-task>/<attempt>/` (`result.json`, `start.png`, the run's log and screenshots
+Results go to `results/<version>/<task>/<attempt>/` (`result.json`, `start.png`, the run's log and screenshots
 as `computer-use export` writes them). See [versions and prompts](#versions-and-prompts) for how a version is named.
 
 ## Versions and prompts
@@ -80,7 +80,7 @@ The eval compares results: of two prompt versions, two code versions or two mode
 Versions use the short commit hash. Uncommitted changes under `runtime/src` add a source digest, such as `e856315-80cad5`, keeping each revision's results separate. Use `--note` to give the version a readable label in reports. The label stays until a later run replaces it.
 
 ```bash
-eval/ev run 10 13 --trials 3 --note "shorter plan steps"
+eval/ev run excel-sort word-zh --trials 3 --note "shorter plan steps"
 ```
 
 Each version saves its tested source in `src/`, including uncommitted prompts. Its `version.json` records separate digests for `runtime/src/computer_use/prompts/` and the remaining code. The report identifies comparisons where only prompts changed and shows their diff below the results.
@@ -94,23 +94,12 @@ screens and the actions. Write `pass` or `fail` after `Grade:`, then why. Leave 
 numbers, and writes `results/report.html`, where you pick two versions or model setups to compare side by side.
 The report's thumbnails link to the screenshots next to it, so keep it in `results/`.
 
-## Settings and repeated trials
+## Repeated trials
 
-`result.json` records requested agents in `settings.requested_agents` and effective models and efforts in `settings.agents`. The HTML report also uses the readable `model` field. Screenshot pruning settings (`settings.screenshots`, `keep`/`every`) are read from constants in the saved source without executing it. Missing constants are recorded as unknown; runtime defaults stay unchanged.
-
-The terminal report groups **all trials** by source, effective models and efforts, pruning settings, step limit and approval mode. Each group shows:
-
-- Pass/graded, ungraded and not-started counts, plus task endings.
-- Main/subagent calls (`M/S`) and agent cost across all started trials.
-- Per-task p50/p95 duration for successful runs. Failed and ungraded timings remain in individual results. Small-sample p95 is descriptive, not a reliable tail estimate.
-
-Infeasible tasks are graded separately. Use terminal groups for repeated A/B comparisons; the HTML compares the latest trials for diagnosis.
-
-Usage totals come from the exported end event, counted once per agent and model. Reasoning tokens are included in output; cache-read ratios are weighted by input tokens. Title costs are shown separately.
-
-Missing usage and interrupted calls stay unknown: `?` means unknown, and `0.01200+?1` means a known subtotal plus one unknown trial. Generating a report never rewrites exports or results.
-
-Reports read each result and trajectory once, then share compact summaries between the grading sheet and HTML. Statistics skip screenshot decoding and do not cache full conversations. Run offline regression checks in the runtime test environment:
+`eval/ev report` prints, for each version and agents' models, every trial: pass/graded per task, ungraded and
+not-started counts, how the desktop tasks ended, main/subagent model calls (`M/S`), the median time of the passes and
+the cost, `?` where one is unknown. Infeasible tasks are marked and graded separately. The HTML compares each task's
+latest trial, for diagnosis; use the terminal for repeated A/B comparisons. Offline checks:
 
 ```bash
 cd runtime

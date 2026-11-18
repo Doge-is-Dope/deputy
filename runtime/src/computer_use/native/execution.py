@@ -6,7 +6,7 @@ from dataclasses import replace
 from computer_use.computers import ComputerError
 from computer_use.desktop.executor import ActionResult, Executor
 from computer_use.native import HostError
-from computer_use.native.lease import WindowsTools
+from computer_use.native.lease import Lease
 
 # What a command printed, as the model reads it: its end, where the errors are.
 MAX_OUTPUT_CHARACTERS = 12_000
@@ -35,19 +35,19 @@ def report(result: dict) -> str:
 
 
 class Commands:
-    def __init__(self, windows: WindowsTools, executor: Executor):
-        self.windows = windows
+    def __init__(self, lease: Lease, executor: Executor):
+        self.lease = lease
         self.executor = executor
 
     async def run(self, command: str, timeout: int) -> ActionResult:
         try:
             if held := await self.executor.held():
                 return held
-            target = self.windows.lease.target
+            target = self.lease.target
             if target is None:
-                return ActionResult(False, f"Not executed: commands are unavailable right now ({self.windows.lease.problem}).")
+                return ActionResult(False, f"Not executed: commands are unavailable right now ({self.lease.problem}).")
             try:
-                result = await self.windows.channel.call(
+                result = await self.lease.channel.call(
                     "exec.run", target, {"command": command, "timeoutMs": timeout * 1000},
                     timeout=timeout + REPLY_MARGIN_SECONDS,
                 )

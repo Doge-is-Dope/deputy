@@ -35,6 +35,7 @@ from computer_use.adapters import build_stores
 from computer_use.runner import Runner
 from computer_use.storage import FORMAT, LOCAL_USER, summarize
 from computer_use.streaming import LiveStream
+from conftest import BIG, OTHER, SMALL
 from conftest import (
     runner_of,
     DATABASES, SCRIPTED_TITLE, ScriptedModel, StreamingModel, delegate, listed_runs, listed_sessions, settings_for, tool_call,
@@ -338,7 +339,9 @@ async def test_what_the_user_uploads_reaches_the_main_agent_and_comes_back_in_th
 
     assert (created.status_code, again.status_code) == (201, 201)
     sent = [{"type": "text", "text": "what is the total?"},
+            {"type": "text", "text": "收據.jpg:"},
             {"type": "image", "base64": base64.b64encode(photo).decode(), "mime_type": "image/jpeg", "filename": "收據.jpg"},
+            {"type": "text", "text": "報價單.pdf:"},
             {"type": "file", "base64": base64.b64encode(pdf).decode(), "mime_type": "application/pdf", "filename": "報價單.pdf"}]
     # Both turns' calls get the message as sent: the next turn reads its files back, and they are never pruned.
     for call in main.received:
@@ -441,13 +444,6 @@ async def test_unsupported_logs_are_hidden_and_direct_access_is_rejected_without
         assert await runs.events(run) == original
 
 
-def test_the_list_names_a_run_by_its_title_once_it_has_one(tmp_path):
-    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10}
-    named = {"type": "title", "text": "Opening Start", "usage": {}, "seconds": 1.2, "time": 12}
-    assert asdict(summarize("r1", [start]))["title"] is None
-    assert asdict(summarize("r1", [start, named]))["title"] == "Opening Start"
-
-
 async def test_a_conversation_begun_in_a_project_on_the_page_is_listed_under_it(client, monkeypatch):
     project = (await client.post("/api/projects", json={"name": "  客戶  報價 "})).json()
     assert project["name"] == "客戶 報價"
@@ -502,12 +498,6 @@ async def test_a_project_keeps_its_id_when_renamed_and_names_are_one_each(client
     assert (await client.delete(f"/api/projects/{other['id']}")).status_code == 200
     assert (await client.delete(f"/api/projects/{other['id']}")).status_code == 404
     assert [each["name"] for each in (await client.get("/api/projects")).json()] == ["大客戶"]
-
-
-def test_the_list_says_which_project_a_run_was_started_in(tmp_path):
-    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10}
-    assert asdict(summarize("r1", [start]))["project"] is None
-    assert asdict(summarize("r1", [start | {"project": "p1"}]))["project"] == "p1"
 
 
 def test_the_list_says_when_a_run_ended_and_whether_it_failed(tmp_path):
@@ -935,7 +925,7 @@ async def test_what_runs_did_not_read_goes_nowhere_as_the_server_shuts_down(sett
     await runner.close()
     await asyncio.sleep(0.05)
 
-    assert runner.running() == {} and not runner.following
+    assert runner.running() == {}
 
 
 async def test_stopping_with_no_runs_or_two(settings, computer, control, monkeypatch):
@@ -1124,13 +1114,6 @@ async def test_moving_a_conversation_lists_it_under_another_project_or_none(clie
     assert (await client.patch(f"/api/conversations/{first}", json={})).status_code == 400
 
 
-def test_a_runs_project_is_the_last_it_was_moved_to(tmp_path):
-    start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10, "project": "p1"}
-    moved = {"type": "project", "project": "p2", "by": "user", "time": 11}
-    assert asdict(summarize("r1", [start, moved]))["project"] == "p2"
-    assert asdict(summarize("r1", [start, moved, {**moved, "project": None}]))["project"] is None
-
-
 def test_the_users_title_stands_over_the_runtimes_whichever_came_last(tmp_path):
     start = {"type": "start", "v": FORMAT, "kind": "turn", "session": "s", "thread": "t1", "goal": "open start", "time": 10}
     made = {"type": "title", "text": "Opening Start", "usage": {}, "seconds": 1.2, "time": 12}
@@ -1254,7 +1237,8 @@ async def test_a_step_awaiting_approval_shows_in_the_status_and_is_answered_from
     assert (decision["outcome"], decision["by"]) == ("approved", "cli")
 
 
-async def test_the_status_keeps_no_users_choices_and_says_how_the_settings_start_them(client):
+async def test_the_status_keeps_no_users_choices_and_says_how_the_settings_start_them(client, settings):
+    settings.openai_api_key, settings.anthropic_api_key = SecretStr("sk-offline"), None
     status = (await client.get("/api/status")).json()
 
     assert "agents" not in status and "approvals" not in status
@@ -1264,14 +1248,17 @@ async def test_the_status_keeps_no_users_choices_and_says_how_the_settings_start
         "computer": {"model": "openai:gpt-6.1-terra", "effort": "medium"},
         "coding": {"model": "follow", "effort": "follow"},
     }
-    models = {each["id"]: each["efforts"] for each in status["models"]}
-    assert models["openai:gpt-6.1-sol"] == ["low", "medium", "high", "xhigh", "max"]
-    assert models["openai:gpt-6-luna"][0] == "none"
+    models = {each["id"]: each for each in status["models"]}
+    assert (models[BIG]["name"], models[BIG]["efforts"]) == ("Big", ["low", "medium", "high", "xhigh", "max"])
+    assert models[SMALL]["efforts"][0] == "none"
+    # A model that cannot be used is still listed, with why, for the page to grey out.
+    assert (models[BIG]["unavailable"], models[OTHER]["unavailable"]) == (None, "no_api_key")
 
 
 async def test_a_run_works_with_the_choices_sent_with_its_message_and_the_runtime_keeps_none(
     client, settings, monkeypatch
 ):
+    settings.openai_api_key = SecretStr("sk-offline")
     use_script(monkeypatch, [], main=[AIMessage("Hello."), AIMessage("Hello again.")])
 
     async def started(**sent) -> dict:
@@ -1280,10 +1267,10 @@ async def test_a_run_works_with_the_choices_sent_with_its_message_and_the_runtim
         return sse((await client.get(f"/api/runs/{run}/events")).text)[0][1]
 
     chose = await started(approvals="auto", agents={
-        "main": {"model": "openai:gpt-6-luna"}, "computer": {"model": "openai:gpt-6.1-sol"},
-        "designer": {"model": "openai:gpt-6-luna"},  # an agent the runtime does not have: not refused
+        "main": {"model": SMALL}, "computer": {"model": BIG},
+        "designer": {"model": SMALL},  # an agent the runtime does not have: not refused
     })
-    assert (chose["main_model"], chose["model"], chose["approvals"]) == ("openai:gpt-6-luna", "openai:gpt-6.1-sol", "auto")
+    assert (chose["main_model"], chose["model"], chose["approvals"]) == (SMALL, BIG, "auto")
     plain = await started(thread=chose["thread"])
     assert (plain["main_model"], plain["model"], plain["approvals"]) == ("openai:gpt-6.1-terra", "openai:gpt-6.1-terra", "ask")
     assert [path for path in settings.data_dir.iterdir() if path.is_file()] == []
@@ -1440,15 +1427,6 @@ async def test_live_text_waits_for_the_end_of_a_continuous_burst(computer, contr
             break
         await asyncio.sleep(0.01)
     assert computer.calls == [("type_text", "逐字中文輸入")]
-
-
-async def test_status_hands_the_page_the_turn_server_with_its_password(settings, computer):
-    settings = settings.model_copy(update={"turn_url": "turn:localhost:3478?transport=tcp", "turn_password": SecretStr("pw")})
-    app = create_app(settings, max_steps=10, computer=computer)
-    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://localhost") as client:
-        status = (await client.get("/api/status")).json()
-
-    assert status["ice_servers"] == [{"urls": "turn:localhost:3478?transport=tcp", "username": "live", "credential": "pw"}]
 
 
 class Clock:

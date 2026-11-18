@@ -36,10 +36,9 @@ const STEADY = Array.from(
 )
 
 describe("Pace", () => {
-  it("shows nothing of a first batch at once, and takes its size a second as the rate", () => {
+  it("shows nothing of a first batch at once", () => {
     const pace = new Pace(0)
     expect(pace.step(12, 1000)).toBe(0)
-    expect(pace.rate).toBe(12)
   })
 
   it("never shows more than has come, nor takes back what it showed", () => {

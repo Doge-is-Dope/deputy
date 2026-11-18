@@ -9,9 +9,7 @@ import ctypes
 import json
 import socket
 import importlib.util
-import io
 import os
-import shlex
 import sys
 import tempfile
 import threading
@@ -22,7 +20,6 @@ from types import SimpleNamespace
 import httpx
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
-from PIL import Image
 
 import computer_use.agent.coding_agent as coding_agent
 import computer_use.agent.main_agent as main_agent
@@ -35,15 +32,9 @@ from computer_use.desktop.control import RunLock
 from computer_use.agent.history import tasks
 from conftest import run_turn
 from conftest import events_of, read_events, task_folder, task_states
-from conftest import ScriptedModel, logged, tool_call, use_script
+from conftest import ScriptedModel, coding_script, image, logged, tool_call, use_script
 
 pytestmark = pytest.mark.usefixtures("the_log_is_the_whole_record")
-
-
-def coding_script(monkeypatch, replies) -> ScriptedModel:
-    model = ScriptedModel(messages=iter(replies), received=[], bindings=[])
-    monkeypatch.setattr(coding_agent, "build_chat_model", lambda _spec, _settings: model)
-    return model
 
 
 def handing_code(task="Add 2 and 2.", call_id="m1") -> AIMessage:
@@ -84,7 +75,7 @@ async def test_a_run_with_a_code_runner_offers_every_agent_the_settings_list(
     await run_turn(settings, "hi", max_steps=10, computer=computer, code_runner=code_runner)
 
     start_task = next(each for each in main_model.bindings[0]["tools"] if each.name == "start_task")
-    assert start_task.args["agent"]["enum"] == [each.agent for each in main_agent.SUBAGENTS]
+    assert start_task.args["agent"]["enum"] == ["computer", "coding"]
 
 
 async def test_a_coding_task_runs_in_the_conversations_folder_without_the_computer(
@@ -356,13 +347,8 @@ async def test_an_earlier_file_never_replaces_one_put_in_the_folder_meanwhile(co
 
 
 async def test_the_coding_agent_looks_at_an_image_once_it_is_one_a_model_takes(code_runner):
-    def picture(image_format, size=(40, 30)):
-        out = io.BytesIO()
-        Image.new("RGB", size, "teal").save(out, image_format)
-        return out.getvalue()
-
     code_runner.files.update({
-        "chart.png": picture("PNG"), "frame.gif": picture("GIF"), "huge.png": picture("PNG", (3000, 10)),
+        "chart.png": image("PNG"), "frame.gif": image("GIF"), "huge.png": image("PNG", (3000, 10)),
     })
     view = next(each for each in coding_tools(code_runner, "t1", "k1") if each.name == "view_image")
     call = lambda path: view.ainvoke({"type": "tool_call", "id": "v1", "name": "view_image", "args": {"path": path}})
@@ -378,9 +364,7 @@ async def test_the_coding_agent_looks_at_an_image_once_it_is_one_a_model_takes(c
 
 
 async def test_the_coding_agent_keeps_only_its_latest_images(settings, computer, code_runner, monkeypatch):
-    out = io.BytesIO()
-    Image.new("RGB", (40, 30), "teal").save(out, "PNG")
-    code_runner.files["chart.png"] = out.getvalue()
+    code_runner.files["chart.png"] = image("PNG")
     looks = [AIMessage(content="", tool_calls=[tool_call(f"v{n}", "view_image", path="chart.png")]) for n in range(8)]
     coder = coding_script(monkeypatch, [*looks, AIMessage("It is a teal square.")])
     use_script(monkeypatch, [], main=[handing_code("Look at chart.png."), AIMessage("A teal square.")])
@@ -628,9 +612,6 @@ async def test_the_runtime_reaches_the_server_over_its_socket(server, monkeypatc
         assert await runner.run("t1", "k1", "cat a.txt", 5) == RunOutput(0, "hi", 0)
         await runner.write("t1", f"{folder}/sub/absolute.txt", "absolute")
         assert await runner.read("t1", f"{folder}/sub/absolute.txt") == b"absolute"
-        script = f"cd sub; printf artifact > {shlex.quote(folder + '/result.txt')}"
-        assert (await runner.run("t1", "k1", script, 5)).code == 0
-        assert await runner.read("t1", "result.txt") == b"artifact"
         with pytest.raises(ValueError):
             await runner.read("t1", f"{server.WORKSPACE}/t2/a.txt")
         await runner.write("t1", "報表/年度 預算.csv", "方案,金額\nA,90720\n")

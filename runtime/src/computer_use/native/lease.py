@@ -5,16 +5,17 @@ running when it ends: so a runtime that dies, or a user who takes the desktop, l
 
 import asyncio
 import contextlib
-import secrets
+import time
 
+from computer_use.computers import Status
 from computer_use.desktop.control import Control
 from computer_use.native import Channel, HostError
-from computer_use.native.launcher import Launcher
-from computer_use.native.mcp import CredentialFile, Credentials
 
 # The host's lease lasts 5 to 10 s; renewed this often, it survives two lost renewals.
 BEAT_SECONDS = 1.5
 BEAT_TIMEOUT_SECONDS = 3.0
+# Outside a desktop task, whether the host answers is checked again once the last check is this old.
+STATUS_SECONDS = 30.0
 
 
 class Lease:
@@ -22,11 +23,25 @@ class Lease:
         self.channel = channel
         self.control = control
         self.target: dict | None = None  # the session and lease commands are sent for; None while not held
-        self.problem = "not started yet"  # why it is not held, in words for the agent and the status
+        self.problem = "not started yet"  # why it is not held, in words for the agent
         self._task: asyncio.Task | None = None
-        self._stepping = asyncio.Lock()  # the loop and a task starting the host both step
+        self._checked: tuple[float, Status] | None = None
+
+    async def status(self) -> Status:
+        """Whether the host answers: so while the lease is held, else as a describe found it, kept a while."""
+        if self.target is not None:
+            return Status(True)
+        if self._checked is None or time.monotonic() - self._checked[0] >= STATUS_SECONDS:
+            try:
+                await self.channel.call("describe", timeout=BEAT_TIMEOUT_SECONDS)
+                status = Status(True)
+            except HostError as error:
+                status = Status(False, str(error))
+            self._checked = (time.monotonic(), status)
+        return self._checked[1]
 
     async def start(self) -> None:
+        await self.step()
         self._task = asyncio.create_task(self._run())
 
     async def close(self) -> None:
@@ -34,20 +49,17 @@ class Lease:
             self._task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._task
-        await self._give_up("the runtime stopped")
+        self._task = None
+        await self._give_up("the desktop task ended")
 
     async def _run(self) -> None:
         while True:
-            await self.step()
             await asyncio.sleep(BEAT_SECONDS)
+            await self.step()
 
     async def step(self) -> None:
         """Hold the lease while the agent has the desktop, and only then. A fault changes nothing about who has it:
         the lease is taken again once the host answers."""
-        async with self._stepping:
-            await self._step()
-
-    async def _step(self) -> None:
         if not self.control.read().allows_input("agent"):
             await self._give_up("the user has control of the desktop")
             return
@@ -60,49 +72,10 @@ class Lease:
                 await self.channel.call("control.heartbeat", self.target, timeout=BEAT_TIMEOUT_SECONDS)
         except (HostError, KeyError) as error:
             self.target = None
-            # A host not started yet says nothing new: why it could not be started stays.
-            if not (isinstance(error, HostError) and error.code == "not_started" and self.problem):
-                self.problem = str(error) or type(error).__name__
+            self.problem = str(error) or type(error).__name__
 
     async def _give_up(self, why: str) -> None:
         target, self.target, self.problem = self.target, None, why
         if target is not None:
             with contextlib.suppress(HostError):  # an unreachable host lets the lease run out by itself
                 await self.channel.call("control.takeover", target, timeout=BEAT_TIMEOUT_SECONDS)
-
-
-# After the host is started it binds its port; the lease is tried this many times, this far apart.
-STARTED_TRIES = 20
-STARTED_POLL_SECONDS = 0.5
-
-
-class WindowsTools:
-    """One desktop's host: how to reach it, its lease, and, where the runtime starts it itself, how."""
-
-    def __init__(self, channel: Channel, lease: Lease, store: CredentialFile, launcher: Launcher | None = None):
-        self.channel = channel
-        self.lease = lease
-        self.store = store
-        self.launcher = launcher
-
-    async def ensure(self) -> None:
-        """Before a desktop task acts: have the host running, starting it if it does not answer. Starting it types
-        on the desktop, so it happens only here, with the desktop the task's and the agent in control; a failure
-        leaves the task its mouse and keyboard, and the lease says why."""
-        if self.launcher is None or not self.lease.control.read().allows_input("agent"):
-            return
-        await self.lease.step()
-        if self.lease.target is not None:
-            return
-        try:
-            token = secrets.token_hex(32)
-            fingerprint = await self.launcher.start(token)
-        except HostError as error:
-            self.lease.problem = str(error)
-            return
-        self.store.write(Credentials(token, fingerprint))
-        for _ in range(STARTED_TRIES):
-            await self.lease.step()
-            if self.lease.target is not None:
-                return
-            await asyncio.sleep(STARTED_POLL_SECONDS)

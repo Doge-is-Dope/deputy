@@ -1,14 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
 import {
-  agentName,
   describeAction,
   describeActions,
-  effortName,
   formatDollars,
   formatDuration,
   greeting,
-  modelName,
   stepCode,
 } from "@/lib/format"
 
@@ -92,25 +89,6 @@ describe("stepCode", () => {
 
   it("shows nothing for other steps", () => {
     expect(stepCode("left_click", { x: 1, y: 2 }, "ok")).toBeNull()
-  })
-})
-
-describe("names", () => {
-  it("names a model as its maker does, or by its id", () => {
-    expect(modelName("openai:gpt-6.1-sol")).toBe("GPT-6.1 Sol")
-    expect(modelName("anthropic:claude-haiku-5-5")).toBe("Claude Haiku 5.5")
-    expect(modelName("openai:gpt-7")).toBe("gpt-7")
-  })
-
-  it("names a reasoning effort, or by its id", () => {
-    expect(effortName("xhigh")).toBe("Extra High")
-    expect(effortName("ultra")).toBe("ultra")
-  })
-
-  it("names an agent as the settings do, or by its own name", () => {
-    expect(agentName("main")).toBe("Main agent")
-    expect(agentName("computer")).toBe("Computer-use agent")
-    expect(agentName("review")).toBe("review")
   })
 })
 

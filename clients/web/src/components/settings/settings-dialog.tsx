@@ -22,7 +22,7 @@ import { Permissions } from "@/components/settings/permissions"
 import { Account } from "@/components/settings/account"
 import { MemoryPage } from "@/components/settings/memory"
 
-export type SettingsPage =
+type SettingsPage =
   | "general"
   | "appearance"
   | "desktop"

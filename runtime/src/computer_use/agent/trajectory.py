@@ -12,7 +12,8 @@ from typing import Unpack
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage, message_to_dict
 
 from computer_use.agent.failures import error_code
-from computer_use.agent.usage import PRICES, cost_breakdown, no_tokens, usage_of
+from computer_use.agent.catalog import MODELS
+from computer_use.agent.usage import cost_breakdown, no_tokens, usage_of
 from computer_use.events import NoteCode, NoteData, NoteEvent, PlanSnapshot
 from computer_use.storage import FORMAT, MAIN, TASK, TURN, RunId, Runs
 from computer_use.tools.common import extension_of, is_media, is_screenshot
@@ -145,7 +146,7 @@ class Trajectory:
         price)."""
         return [
             {"agent": name, "model": model, "usage": tokens,
-             "cost": cost_breakdown(tokens, PRICES[model]) if model in PRICES else None}
+             "cost": cost_breakdown(tokens, MODELS[model].price) if model in MODELS else None}
             for (name, model), tokens in self.agent_tokens.items() if any(tokens.values())
         ]
 
@@ -177,7 +178,7 @@ class Trajectory:
 
     def title(self, text: str, usage: dict[str, int], seconds: float, model: str) -> None:
         """The title call's result and cost; it may arrive after the run has ended."""
-        price = PRICES.get(model)
+        price = MODELS[model].price if model in MODELS else None
         self._write({"type": "title", "text": text, "usage": usage, "seconds": round(seconds, 2),
                      "model": model, "cost": cost_breakdown(usage, price) if price else None})
 

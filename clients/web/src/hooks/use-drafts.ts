@@ -40,9 +40,20 @@ export function setDraft(
   drafts.set(next)
 }
 
+/** What is written in `conversation`'s composer now. */
+export const draftOf = (conversation: string) =>
+  drafts.get()[conversation] ?? ""
+
+/** What is written in `conversation`'s composer, changed by `change`: a picture's comments added or relabelled. */
+export function editDraft(
+  conversation: string,
+  change: (text: string) => string
+) {
+  const current = draftOf(conversation)
+  const next = change(current)
+  if (next !== current) setDraft(conversation, next)
+}
+
 export function useDraft(conversation: string) {
-  return useSyncExternalStore(
-    drafts.subscribe,
-    () => drafts.get()[conversation] ?? ""
-  )
+  return useSyncExternalStore(drafts.subscribe, () => draftOf(conversation))
 }

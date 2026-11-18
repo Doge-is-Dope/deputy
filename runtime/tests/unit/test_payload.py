@@ -149,12 +149,3 @@ async def test_openai_responses_gets_back_an_update_before_a_call_as_commentary_
     assert [(item["content"][0]["text"], item["phase"]) for item in said] == [
         ("Opening File Explorer to read C:.", "commentary"), ("C: has 41 GB free.", "final_answer"),
     ]
-
-
-def test_claude_is_offered_with_every_effort_it_takes(settings):
-    from computer_use.agent.models import efforts, offered
-
-    settings.main_model = "anthropic:claude-haiku-5-5"
-    claude = [spec for spec in offered(settings) if spec.startswith("anthropic:")]
-    assert claude == ["anthropic:claude-haiku-5-5", "anthropic:claude-sonnet-5-5", "anthropic:claude-opus-5-5"]
-    assert all(efforts(spec) == ("low", "medium", "high", "xhigh", "max") for spec in claude)

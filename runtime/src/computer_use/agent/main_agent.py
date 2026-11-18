@@ -28,7 +28,7 @@ from computer_use.computers import Computer
 from computer_use.config import Approvals, RunChoices, Settings
 from computer_use.desktop.control import Control, RunLock, hand_over
 from computer_use.desktop.judge import ScreenJudge
-from computer_use.native.lease import WindowsTools
+from computer_use.native.lease import Lease
 from computer_use.memory import MemoryStore
 from computer_use.middleware.memory import UserMemory
 from computer_use.middleware.skills import SkillsMiddleware
@@ -74,7 +74,7 @@ async def run_turn(
     draft: Draft | None = None,
     code_runner: CodeRunner | None = None,
     judge: ScreenJudge | None = None,
-    windows: WindowsTools | None = None,
+    windows: Lease | None = None,
     choices: RunChoices = RunChoices(),
     titles: title.Titles | None = None,
     approvals: Callable[[], Approvals] | None = None,

@@ -213,10 +213,11 @@ class Background:
 
     async def status(self) -> HumanMessage | None:
         """The running tasks' state, from the log, for the main agent to answer from rather than guess."""
-        if not self.jobs:
+        jobs = list(self.jobs.values())  # a task may end while its log is read
+        if not jobs:
             return None
         parts = [
             notes.task_running(job.id, job.agent, time.time() - job.started, job.brief, await job.steps())
-            for job in self.jobs.values()
+            for job in jobs
         ]
-        return runtime_message("\n\n".join(parts), "task_status", ids=list(self.jobs))
+        return runtime_message("\n\n".join(parts), "task_status", ids=[job.id for job in jobs])

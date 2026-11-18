@@ -7,7 +7,7 @@ import { store } from "@/lib/store"
 // apply to the active run's next flagged step.
 
 /** A subagent's model or effort that is the main agent's, whatever that is (the runtime's config.FOLLOW). */
-export const FOLLOW = "follow"
+const FOLLOW = "follow"
 const MAIN = "main"
 const LEVELS = EFFORTS.map((effort) => effort.id)
 
@@ -15,7 +15,7 @@ const LEVELS = EFFORTS.map((effort) => effort.id)
 export type Chosen = Record<string, Partial<Choice>>
 /** Whether the main agent learns rules from the user's interventions, and whether a run is told those it has. */
 export type MemoryChoice = { learn: boolean; use: boolean }
-export type Choices = {
+type Choices = {
   agents: Chosen
   approvals: Approvals
   memory: MemoryChoice
@@ -92,14 +92,14 @@ function clamp(effort: string, levels: string[]): string {
 }
 
 /** Resolve overrides and FOLLOW against runtime defaults, falling back to the main
- * model for unavailable models and clamping effort. Keep aligned with agent/models.py. */
+ * model for models not offered or unavailable (no API key) and clamping effort. Keep aligned with agent/models.py. */
 export function resolve(
   status: Pick<Status, "defaults" | "models">,
   agent: string,
   agents: Chosen
 ): Choice {
   const offered = (model: string) =>
-    status.models.some((each) => each.id === model)
+    status.models.some((each) => each.id === model && !each.unavailable)
   const of = (name: string) => ({
     ...(status.defaults[name] ?? { model: FOLLOW, effort: FOLLOW }),
     ...agents[name],

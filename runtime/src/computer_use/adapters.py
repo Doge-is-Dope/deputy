@@ -10,9 +10,8 @@ from computer_use.desktop.judge import ScreenJudge
 from computer_use.files import FileStore
 from computer_use.files.local import LocalFileStore
 from computer_use.memory import MemoryStore
-from computer_use.native.launcher import RdpLauncher, XClipboard
-from computer_use.native.lease import Lease, WindowsTools
-from computer_use.native.mcp import CredentialFile, McpChannel, https
+from computer_use.native.lease import Lease
+from computer_use.native.mcp import Connection, McpChannel, https
 from computer_use.memory.files import FileMemoryStore
 from computer_use.memory.mongo import INDEXES as MEMORY_INDEXES, MongoMemoryStore
 from computer_use.sandbox import CodeRunner
@@ -41,16 +40,12 @@ def build_screen_judge(settings: Settings) -> ScreenJudge | None:
     return DecisionsJudge(key.get_secret_value()) if key else None
 
 
-def build_windows_tools(settings: Settings, control: ControlFile, computer: Computer) -> WindowsTools | None:
-    """The Windows Tools host, or None: run_command is then not offered. With a token it is one started by hand;
-    with the path of its program, the runtime starts it over the desktop's own connection."""
-    host, token, path = settings.windows_tools_host or settings.rdp_host, settings.windows_tools_token, settings.windows_tools_path
-    if not host or not (token or path):
+def build_windows_tools(settings: Settings, control: ControlFile) -> Lease | None:
+    """The Windows Tools host its URL names, or None without one: run_command is then not offered."""
+    url = settings.windows_tools_url
+    if not url:  # unset or empty
         return None
-    store = CredentialFile(settings.data_dir / "windows-tools.json", token.get_secret_value() if token else None)
-    channel = McpChannel(https(host, settings.windows_tools_port, store))
-    launcher = None if token else RdpLauncher(computer, XClipboard(settings.display), path, host, settings.windows_tools_port)
-    return WindowsTools(channel, Lease(channel, control), store, launcher)
+    return Lease(McpChannel(https(Connection.from_url(url.get_secret_value()))), control)
 
 
 def build_file_store(settings: Settings) -> FileStore:

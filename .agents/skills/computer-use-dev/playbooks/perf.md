@@ -5,7 +5,7 @@ Tie every change to a measurement. Reading code is not measuring.
 1. Take a baseline where the cost is paid:
    - Runtime CPU: in a container limited to `--cpus=0.25` (many runtimes will share one host), not natively.
    - Web: a production build (`bun run build && bun run preview`) traced in Chrome with 4x CPU throttling.
-   - Task time: the eval's per-task p50/p95 (`eval/ev report`), 3+ trials, versions alternated task by task.
+   - Task time: the eval's per-task median time of passes (`eval/ev report`), 3+ trials, versions alternated task by task.
 2. Find what limits it before changing anything: model calls (usually most of a task's time), CPU, the event loop,
    I/O, rendering. Then try, cheapest first: don't do it; don't do it again; do less; do it later; do it concurrently;
    do it cheaper. Stop at the first that meets the target. Revert what did not help.

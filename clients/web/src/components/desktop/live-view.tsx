@@ -11,11 +11,10 @@ import { cn } from "cn"
 
 import { AnswerPair } from "@/components/composer/answers"
 import { RemoteScreen } from "@/components/desktop/remote-screen"
+import { CornerButton } from "@/components/side-panel/corner-button"
 import {
   CheckIcon,
-  CloseIcon,
   CopyIcon,
-  ExpandIcon,
   CursorEnterIcon,
   HandIcon,
   OfflineIcon,
@@ -24,11 +23,6 @@ import {
 } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
-import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
 import { useRunLog } from "@/hooks/use-run-events"
 import { useCopy } from "@/hooks/use-copy"
 import { NUDGE_MS, useFlash } from "@/hooks/use-flash"
@@ -466,21 +460,21 @@ export function LiveView({
     }
   })
 
-  // One button in the corner: to expand or shrink it where it can be, else to close it; full screen, to leave it.
+  // One button in the corner: to expand or shrink it where it can be, else to close it; full screen, an X to leave it.
   const corner = fullscreen
     ? {
         label: t.liveView.exitFullscreen,
         onClick: () => void document.exitFullscreen(),
-        pressed: true,
+        pressed: undefined,
       }
     : onExpand
       ? {
-          label: expanded ? t.liveView.shrink : t.liveView.expand,
+          label: expanded ? t.tabs.shrink : t.tabs.expand,
           onClick: onExpand,
           pressed: expanded,
         }
       : onClose && {
-          label: t.liveView.close,
+          label: t.tabs.hide,
           onClick: onClose,
           pressed: undefined,
         }
@@ -502,45 +496,23 @@ export function LiveView({
       aria-label={t.liveView.label}
     >
       {corner && (
-        <Tooltip>
-          <TooltipTrigger
-            render={
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={corner.label}
-                aria-pressed={corner.pressed}
-                // Beside the page's own toggle for the live view, which keeps the corner (App.tsx); in the corner
-                // itself where that is out of sight: on a phone's sheet, and full screen.
-                className={cn(
-                  "touch-target absolute top-1.5 z-10 md:top-2",
-                  onExpand && !fullscreen
-                    ? "right-12.5 md:right-12"
-                    : "right-2.5 md:right-2"
-                )}
-                {...hold.handlers}
-                // A press leaves the keyboard where it was (on the desktop, taken over), and no ring on the button
-                // at the next key.
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={() => {
-                  if (!hold.held()) corner.onClick()
-                }}
-              />
-            }
-          >
-            {corner.pressed === undefined ? (
-              <CloseIcon className="size-5" />
-            ) : (
-              <ExpandIcon inward={corner.pressed} className="size-5" />
-            )}
-          </TooltipTrigger>
-          <TooltipContent side="bottom" align="end">
-            {corner.label}
-            {holds && (
+        <CornerButton
+          label={corner.label}
+          pressed={corner.pressed}
+          beside={!!onExpand && !fullscreen}
+          hint={
+            holds && (
               <span className="opacity-60">{t.liveView.holdFullscreen}</span>
-            )}
-          </TooltipContent>
-        </Tooltip>
+            )
+          }
+          {...hold.handlers}
+          // A press leaves the keyboard where it was (on the desktop, taken over), and no ring on the button at the
+          // next key.
+          onMouseDown={(event) => event.preventDefault()}
+          onClick={() => {
+            if (!hold.held()) corner.onClick()
+          }}
+        />
       )}
 
       {/* data-control drives the takeover frame and pill styles in index.css; unset while the desktop can't be
@@ -614,12 +586,13 @@ export function LiveView({
                   {problem ? (
                     <Unavailable key={problem.code} problem={problem} />
                   ) : (
-                    <>
+                    // After a moment, so a quick connection shows no spinner at all; once shown, it stays through retries.
+                    <span className="flex flex-col items-center gap-2 transition-opacity delay-300 duration-200 ease-(--ease-out) starting:opacity-0">
                       <Spinner className="size-5" />
                       {state === "retrying"
                         ? t.connection.reconnecting
                         : t.liveView.connecting}
-                    </>
+                    </span>
                   )}
                 </div>
               )}

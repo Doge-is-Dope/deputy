@@ -87,8 +87,9 @@ class Uploads:
 
     async def blocks(self, user: str, ids, coding: bool) -> list[dict]:
         """The content blocks of the uploads a message names, each file named by its `filename`, unique in the
-        message; ValueError if one is not there or cannot go. With a `coding` agent each file is also in its folder,
-        under ATTACHED, and the model is told so; without one, a file only code opens cannot go."""
+        message, and by a text ahead of it for the model, which reads no block's file name; ValueError if one is not
+        there or cannot go. With a `coding` agent each file is also in its folder, under ATTACHED, and the model is
+        told so; without one, a file only code opens cannot go."""
         if not isinstance(ids, list) or len(ids) > MAX_FILES or not all(isinstance(each, str) for each in ids):
             raise ValueError(f"attachments must be a list of at most {MAX_FILES} upload ids")
         blocks, names = [], set()
@@ -105,12 +106,16 @@ class Uploads:
             readable = mime_type in MEDIA_TYPES
             if not readable and not coding:
                 raise ValueError(f"{name} can be opened only by the coding agent, which this runtime does not have")
+            # Ahead of it: a name after a file reads as the next one's.
+            blocks.append({"type": "text", "text": told_of(name, data, readable, coding)})
             blocks.append({
                 "type": "image" if mime_type.startswith("image/") and readable else "file",
                 "base64": base64.b64encode(data).decode(), "mime_type": mime_type, "filename": name,
             })
-            if told := told_of(name, data, readable, coding):
-                blocks.append({"type": "text", "text": told})
+        if coding and blocks:
+            # Once for them all: a label ahead of a picture that also says where it is reads less as its name.
+            folder = f"The attached files are also in the coding agent's working folder, under {ATTACHED}/."
+            blocks.append({"type": "text", "text": folder})
         return blocks
 
     async def get(self, user: str, upload_id: str) -> tuple[str, bytes]:
@@ -173,12 +178,12 @@ def unique(name: str, taken: set[str]) -> str:
     return chosen
 
 
-def told_of(name: str, data: bytes, readable: bool, coding: bool) -> str | None:
-    """What the model is told of a file beside its block: where the coding agent finds it, and for one it cannot read
-    itself, that it was attached, with its text when that is short."""
-    where = f"It is in the coding agent's working folder as {ATTACHED}/{name}." if coding else ""
+def told_of(name: str, data: bytes, readable: bool, coding: bool) -> str:
+    """What the model is told of a file ahead of its block: its name, and for one it cannot read itself, that it was
+    attached, where the coding agent finds it, and its text when that is short."""
     if readable:
-        return f"{name} is in the coding agent's working folder as {ATTACHED}/{name}." if coding else None
+        return f"{name}:"
+    where = f"It is in the coding agent's working folder as {ATTACHED}/{name}." if coding else ""
     told = f"The user attached {name} ({size(len(data))}). {where}"
     if len(data) <= MAX_SHOWN and (text := as_text(data)) is not None:
         told += f" It reads:\n<file name=\"{name}\">\n{text}\n</file>"

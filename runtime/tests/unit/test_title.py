@@ -12,6 +12,7 @@ from computer_use.agent.models import build_chat_model
 from computer_use.config import Choice, RunChoices, Settings
 from computer_use.agent.history import has_title
 from computer_use.storage.files import FileRuns
+from conftest import BIG, SMALL
 from conftest import run_turn
 from conftest import events_of, first_run
 from conftest import SCRIPTED_TITLE, ScriptedModel, use_script
@@ -36,7 +37,7 @@ async def titles(settings, store, monkeypatch):
     ("**用小算盤算出結果貼到記事本。**\n\nA second line.", "用小算盤算出結果貼到記事本"),
     ("「打開記事本」", "打開記事本"),
     ("  \n # List the  Documents folder!  ", "List the Documents folder"),
-    ("x" * 100, "x" * title.MAX_CHARS),
+    ("x" * 100, "x" * 80),
     ('""', None),
     ("", None),
 ])
@@ -63,7 +64,7 @@ async def test_a_long_message_is_cut_and_a_failed_or_slow_call_names_nothing(set
     model = ScriptedModel(messages=iter([AIMessage('{"title":"Long message"}')]), received=[], bindings=[])
     monkeypatch.setattr(title, "build_chat_model", lambda *_, **__: model)
     assert await title.generate_title(settings, "x" * 5000) is not None
-    assert len(model.received[0][1].text) == title.MESSAGE_CHARS
+    assert len(model.received[0][1].text) == 2000
 
     class Failing:
         def with_structured_output(self, *_, **__):
@@ -94,7 +95,7 @@ def test_the_title_model_is_its_own_setting_at_low_effort(monkeypatch):
 
 @pytest.mark.parametrize(("content", "named"), [
     ({"type": "output_text", "text": '{"title":"計算乘積"}', "annotations": []}, "計算乘積"),
-    ({"type": "output_text", "text": json.dumps({"title": "x" * 81}), "annotations": []}, "x" * title.MAX_CHARS),
+    ({"type": "output_text", "text": json.dumps({"title": "x" * 81}), "annotations": []}, "x" * 80),
     ({"type": "output_text", "text": '{"title":123}', "annotations": []}, None),
     ({"type": "output_text", "text": '{"wrong":"title"}', "annotations": []}, None),
     ({"type": "output_text", "text": '{"title":"ok","extra":true}', "annotations": []}, None),
@@ -175,7 +176,7 @@ async def test_a_new_conversation_is_named_once_in_its_first_run(settings, compu
     settings.title_model = "openai:independent-title-model"
     first = await run_turn(
         settings, "What is 128 x 37?", max_steps=10, computer=computer,
-        choices=RunChoices(agents={"computer": {"model": "follow"}, "main": {"model": "openai:gpt-6.1-sol"}}),
+        choices=RunChoices(agents={"computer": {"model": "follow"}, "main": {"model": BIG}}),
     )
     await titles.close(cancel=False)
     events = events_of(settings, first.run)
@@ -216,6 +217,7 @@ async def test_a_conversation_left_unnamed_is_named_at_its_next_run(settings, co
 
 
 async def test_a_title_outlives_its_run_and_is_not_duplicated_by_the_next(settings, computer, monkeypatch, titles, store):
+    settings.title_model = SMALL  # priced
     use_script(monkeypatch, [], main=[AIMessage("4736."), AIMessage("Yes.")])
     gate, asked = asyncio.Event(), asyncio.Event()
     calls = []
@@ -239,7 +241,7 @@ async def test_a_title_outlives_its_run_and_is_not_duplicated_by_the_next(settin
     await titles.close(cancel=False)
     events = events_of(settings, first.run)
     assert events[-1]["type"] == "title" and events[-1]["text"] == "Multiplying numbers"
-    assert events[-1]["model"] == title.MODEL and events[-1]["cost"]["output"] > 0
+    assert events[-1]["model"] == SMALL and events[-1]["cost"]["output"] > 0
     assert next(event for event in events if event["type"] == "end") == before
     assert not any(event["type"] == "title" for event in events_of(settings, second.run))
     assert not titles.tasks and await store.revision() > revision

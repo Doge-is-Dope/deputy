@@ -7,7 +7,7 @@ import computer_use
 
 SOURCE = Path(computer_use.__file__).parent
 CORE = {
-    "agent.background", "agent.blackboard", "agent.failures", "agent.handover", "agent.history", "agent.inbox", "agent.plan",
+    "agent.background", "agent.blackboard", "agent.catalog", "agent.failures", "agent.handover", "agent.history", "agent.inbox", "agent.plan",
     "agent.session", "agent.subagent", "agent.trajectory", "agent.usage", "events", "middleware.chat",
     "middleware.common", "middleware.subagent", "runner", "streaming", "tools.ask_user", "tools.common", "tools.conversations", "tools.plan",
     "tools.tasks",
@@ -50,3 +50,8 @@ def test_the_core_loads_nothing_optional():
     found = {(module, name) for module in CORE for name in reached(module) if is_optional(name)}
 
     assert found == set(), "go through a port or an argument instead"
+
+
+def test_windows_tools_load_no_desktop_connection():
+    native = ("native", "native.execution", "native.lease", "native.mcp")
+    assert {name for module in native for name in reached(module) if name.startswith("computers.")} == set()

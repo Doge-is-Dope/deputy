@@ -7,6 +7,11 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { type Choice, type Status } from "@/lib/api"
 import { chooseModel, resetModels, resolve, useChoices } from "@/lib/choices"
 import { agentName, effortName, modelName } from "@/lib/format"
@@ -50,7 +55,7 @@ export function Model({ status }: { status: Status | null }) {
                     label={agentName(agent)}
                     choice={choice}
                     byDefault={resolve(status, agent, {})}
-                    models={status.models.map((each) => each.id)}
+                    models={status.models}
                     efforts={efforts(choice.model)}
                     onChange={(change) => chooseModel(status, agent, change)}
                   />
@@ -64,7 +69,7 @@ export function Model({ status }: { status: Status | null }) {
                   model={status.title_model.model}
                   className="size-4"
                 />
-                {modelName(status.title_model.model)}
+                {modelName(status.title_model.model, status.models)}
                 <span className="text-muted-foreground">
                   {effortName(status.title_model.effort)}
                 </span>
@@ -100,7 +105,7 @@ function ModelPicker({
   label: string
   choice: Choice
   byDefault?: Choice // the runtime's default, marked in the menu; an effort only with its model
-  models: string[]
+  models: Status["models"]
   efforts: string[]
   onChange: (change: Partial<Choice>) => void
 }) {
@@ -121,22 +126,38 @@ function ModelPicker({
             {(model: string) => (
               <>
                 <ProviderIcon model={model} className="size-4" />
-                {modelName(model)}
+                {modelName(model, models)}
               </>
             )}
           </SelectValue>
         </SelectTrigger>
         <SelectContent>
-          {models.map((model) => (
-            <SelectItem key={model} value={model}>
-              <ProviderIcon model={model} className="size-4" />
-              {/* One line of text, or the row's gap would drop the space " (Default)" starts with. */}
-              <span>
-                {modelName(model)}
-                {marked(model === byDefault?.model)}
-              </span>
-            </SelectItem>
-          ))}
+          {models.map(({ id: model, name, unavailable }) => {
+            const item = (
+              <SelectItem
+                key={model}
+                value={model}
+                disabled={unavailable !== null}
+              >
+                <ProviderIcon model={model} className="size-4" />
+                {/* One line of text, or the row's gap would drop the space " (Default)" starts with. */}
+                <span>
+                  {name}
+                  {marked(model === byDefault?.model)}
+                </span>
+              </SelectItem>
+            )
+            if (unavailable === null) return item
+            // A disabled item takes no pointer events, so the hover lands on this wrapper.
+            return (
+              <Tooltip key={model}>
+                <TooltipTrigger render={<div />}>{item}</TooltipTrigger>
+                <TooltipContent side="left">
+                  {t.settings.modelUnavailable[unavailable]}
+                </TooltipContent>
+              </Tooltip>
+            )
+          })}
         </SelectContent>
       </Select>
       <Select

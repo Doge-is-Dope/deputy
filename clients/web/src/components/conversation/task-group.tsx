@@ -89,11 +89,8 @@ export function TaskGroup({
 }) {
   const t = useT()
   const running = task.outcome === "running" && active
-  // The user's turns at the desktop in the task under way: of a run's tasks shown as one, the last one's, whose keys
-  // alone are by their place (thread.ts mergeTasks).
-  const controls = task.entries.filter(
-    (entry) => entry.kind === "control" && entry.key.startsWith("control-")
-  )
+  // The user's turns at the desktop in the task under way.
+  const controls = task.entries.filter((entry) => entry.kind === "control")
   // The desktop is the user's: since when, by the status, which knows at once (`took`); or by the log (`logged`).
   const logged = awaitingDesktop(task)
   const { took, worked: elapsed } = useTaskClock(task, userSince, running, last)

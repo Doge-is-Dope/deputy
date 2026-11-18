@@ -6,7 +6,7 @@ The runtime runs the agents, controls the Windows desktop and serves the HTTP AP
 
 ![Runtime architecture](../diagrams/runtime.svg)
 
-The API server and the agents reach everything outside the runtime through six interfaces, drawn on its edge. Each one's backend is chosen from the settings and can be swapped without touching the rest:
+The API server and the agents reach everything outside the runtime through six interfaces. Each backend is chosen in the settings and can be swapped without touching the rest:
 
 | Interface | Backend | Options |
 | --- | --- | --- |
@@ -17,12 +17,20 @@ The API server and the agents reach everything outside the runtime through six i
 | Code runner | Code sandbox | the code-runner container, over a Unix socket |
 | Computer | Windows VM | RDP |
 
+## How it works
+
+- **Agents.** The main agent answers, or starts background tasks (up to six, one on the desktop): `computer` uses the mouse and keyboard, `coding` runs code in the code runner, which has no network and no access to Windows.
+- **Windows Tools** (optional). The desktop agent can also run PowerShell with `run_command`. A running command stops when the user takes the desktop.
+- **Takeover.** The user takes the desktop from the web live view or `computer-use takeover`; the agent asks for it for passwords, CAPTCHAs, administrator prompts and payments.
+- **Approvals.** A step the agent flags waits for the user's approval; **Settings → Permissions** can send it to an auto reviewer first.
+- **Models.** Defaults come from `.env` (`CU_MAIN_MODEL`, `CU_COMPUTER_MODEL`); **Settings → Model** overrides them.
+
 ## Setup
 
 ### Requirements
 
 - Docker Compose (and [uv](https://docs.astral.sh/uv/) for development)
-- An OpenAI API key for the default models
+- An OpenAI API key for the default models, and an Anthropic API key (`ANTHROPIC_API_KEY`) for the Claude models
 - Windows Pro or Enterprise with Remote Desktop enabled and a dedicated standard account in **Remote Desktop Users**, with English (US) as its keyboard
 
 ### Start the stack
@@ -34,21 +42,35 @@ docker compose up -d --build
 
 The web page is at <http://localhost:8080> and the API at <http://localhost:8000>. Everything listens on 127.0.0.1; to open the page from other machines, set `CU_BIND`, `CU_TURN_URL`, `CU_WEB_URL` and `CU_AUTH=token` in `.env`.
 
-If Windows refuses the RDP sign-in, the runtime stops trying so the account is not locked: fix `.env` and run `docker compose up -d runtime`. After a legitimate change of the PC's RDP certificate, run `docker compose down` and `docker volume rm computer-use_rdp-certs`.
+- **RDP sign-in refused:** the runtime stops trying, so the account is not locked. Fix `.env` and run `docker compose up -d runtime`.
+- **RDP certificate changed on purpose:** run `docker compose down` and `docker volume rm computer-use_rdp-certs`.
 
 ### Windows machine
 
-Optional: the Windows Tools host, for the agent's `run_command`, and Python with pypdf and openpyxl, which those commands use for PDFs and spreadsheets. [windows-setup.ps1](windows-setup.ps1) installs both; run it on Windows as the RDP account, then set `WINDOWS_TOOLS_PATH` in `.env`:
+Optional: Windows Tools v0.3.1, for `run_command`.
+
+1. On Windows, as the RDP account, run its `install-windows-tools.cmd` while no task runs and the live view is closed: the line it prints is the key to that computer.
+2. Put that line in `.env` as `WINDOWS_TOOLS_URL`.
+3. Run `docker compose up -d runtime`.
+
+**Settings → Desktop** shows whether it answers. With no **Windows commands** row there, the runtime has no URL: check `.env` and run step 3 again. To update, run the new release's installer: the line stays the same.
+
+Also optional: Python with pypdf and openpyxl, for PDFs and spreadsheets. On Windows, as the RDP account:
 
 ```powershell
-powershell -NoProfile -ExecutionPolicy Bypass -File windows-setup.ps1 -HostProgram .\windows-tools-host.exe
+powershell -NoProfile -ExecutionPolicy Bypass -File windows-setup.ps1
 ```
+
+### Sign-in
+
+`CU_AUTH` selects it: `none` (default, loopback only), `token` (`CU_AUTH_TOKEN`, generated if unset) or `proxy` (trusts `CU_AUTH_HEADER` from `CU_AUTH_PROXIES`). Each user sees only their own records.
 
 ## Layout
 
 ```text
 runtime/
 ├── src/computer_use/
+│   ├── server.py         # The HTTP API's routes
 │   ├── agent/            # Main, desktop and coding agents
 │   ├── tools/            # What agents call
 │   ├── middleware/       # What runs around model and tool calls
@@ -59,6 +81,7 @@ runtime/
 │   ├── native/           # Commands on Windows through the Windows Tools host
 │   ├── sandbox/          # The code runner client
 │   ├── storage/          # The run store: files or MongoDB
+│   ├── files/            # The file store: screenshots and attachments
 │   ├── memory/           # What the agent remembers for each user
 │   └── auth/             # Sign-in methods
 ├── tests/
@@ -81,18 +104,4 @@ until docker exec cu-mongo-dev mongosh --quiet --eval 'try { rs.status() } catch
 CU_TEST_MONGO_URL="mongodb://localhost:27017/?replicaSet=rs0" uv run pytest -m mongo
 ```
 
-## How it works
-
-- **Agents.** The main agent answers, or hands work to background tasks (up to six, one on the desktop): `computer` operates Windows by mouse and keyboard, `coding` runs code in the code runner, a container with no network or access to Windows.
-- **Windows Tools** (optional). The desktop agent can also run PowerShell on Windows with `run_command`; the runtime starts the host there by itself before a desktop task.
-- **Takeover.** The user can take the desktop from the web live view or `computer-use takeover`; the agent asks for it for passwords, CAPTCHAs, administrator prompts and payments.
-- **Approvals.** A flagged step waits for the user's approval; **Settings → Permissions** can send it to an auto reviewer first.
-- **Models.** Defaults come from `.env` (`CU_MAIN_MODEL`, `CU_COMPUTER_MODEL`); **Settings → Model** overrides them.
-
-## Sign-in
-
-`CU_AUTH` selects it: `none` (default, loopback only), `token` (`CU_AUTH_TOKEN`, generated if unset) or `proxy` (trusts `CU_AUTH_HEADER` from `CU_AUTH_PROXIES`). Each user sees only their own records.
-
-## HTTP API
-
-Routes are in [server.py](src/computer_use/server.py). Conversations run in parallel; one desktop task runs at a time. For tracing, set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` in `.env`.
+For tracing, set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` in `.env`.

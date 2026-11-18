@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 import { cn } from "cn"
 import { toast } from "sonner"
 
@@ -14,6 +21,7 @@ import {
   type SentMessage,
 } from "@/components/conversation/message-send"
 import { LiveView } from "@/components/desktop/live-view"
+import { SidePanel } from "@/components/side-panel/side-panel"
 import {
   RunView,
   type AskedQuestion,
@@ -41,7 +49,8 @@ import {
 } from "@/components/ui/tooltip"
 import { useConversations, useStatus, useThreadRuns } from "@/hooks/use-api"
 import { useOpenProject, useOpenRun } from "@/hooks/use-route"
-import { Notice, notify } from "@/components/notice"
+import { Notice, notify, showError } from "@/components/notice"
+import { useAttachments } from "@/hooks/use-attachments"
 import { NEW_TASK, setDraft } from "@/hooks/use-drafts"
 import { useConversationActions } from "@/hooks/use-conversation-actions"
 import { useSeen } from "@/hooks/use-seen"
@@ -54,7 +63,18 @@ import { conversationOf, nameOf } from "@/lib/conversations"
 import { connectionOf, greeting } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { reducedMotion } from "@/lib/motion"
-import { HandIcon, MonitorIcon, PlanIcon, TrashIcon } from "@/components/icons"
+import { HandIcon, PlanIcon, SidebarIcon, TrashIcon } from "@/components/icons"
+import {
+  COMPUTER,
+  markedTile,
+  selectTab,
+  setPanelOpen,
+  showComputer,
+  shownFiles,
+  shownTab,
+  usePanel,
+  usePanelDraft,
+} from "@/lib/side-panel"
 
 // The line between the conversation and the live view, on the side of the element drawing it: 8 short of the card's
 // top and bottom, under the resize handle's light.
@@ -134,9 +154,9 @@ export default function App() {
     undefined
   // Each conversation keeps its own draft, which its composer reads and writes.
   const draftKey = thread ?? NEW_TASK
-  // Desktop panel and mobile sheet start closed; takeover opens the active view.
-  const [panelOpen, setPanelOpen] = useState(false)
-  const [sheetOpen, setSheetOpen] = useState(false)
+  usePanelDraft(draftKey)
+  // The panel beside the conversation (a sheet over it on a phone): closed at first; a takeover opens its computer.
+  const panel = usePanel()
   const isMobile = useIsMobile()
   // The live view can be dragged wider or narrower; this browser remembers its width (the sidebar's, AppSidebar).
   const [liveWidth, setLiveWidth] = useStoredWidth("live-view-width", 520)
@@ -163,12 +183,32 @@ export default function App() {
   // closes as the sheet on a phone does.
   const [expanded, setExpanded] = useState(false)
   const covering = expanded || cramped
-  const liveOpen = isMobile ? sheetOpen : panelOpen
-  const setLiveOpen = isMobile ? setSheetOpen : setPanelOpen
+  // The session in progress comes in as soon as the status lists it, as one the runtime started with a message queued
+  // for it: before the list has it, and with the message it began with.
+  const session = thread === null ? null : runningOf(status, { thread })
+  const sessionRun = session?.run ?? null
+  const sessionGoal = session?.goal ?? null
+  // The panel shows this conversation's attachments; the computer is in view while its tab is chosen.
+  const panelRuns = useMemo(
+    () => [
+      ...(threadRuns?.map((run) => run.id) ?? (opened ? [opened] : [])),
+      ...(sessionRun ? [sessionRun] : []),
+    ],
+    [threadRuns, opened, sessionRun]
+  )
+  const panelTab = shownTab(
+    panel,
+    shownFiles(panel, panelRuns, draftKey),
+    draftKey
+  )
+  const computerShown = panel.open && panelTab === COMPUTER
+  // An attachment's tab over the conversation: what it asks is out of sight there, so a notice says so.
+  const conversationHidden =
+    panel.open && (isMobile || covering) && panelTab !== COMPUTER
   // Taking over from the composer or a notice opens the live view with the keyboard on the desktop; the live view says
   // once it is (or it closes first).
   const [focusScreen, setFocusScreen] = useState(false)
-  if (focusScreen && !liveOpen) setFocusScreen(false)
+  if (focusScreen && !computerShown) setFocusScreen(false)
 
   const {
     input,
@@ -195,24 +235,44 @@ export default function App() {
     thread,
     project,
     status,
-    liveOpen,
+    liveOpen: computerShown,
     open,
     showLive: (focus = false) => {
-      setLiveOpen(true)
+      showComputer()
       if (focus) setFocusScreen(true)
     },
     refreshStatus,
     confirmControl,
     refreshConversations,
   })
+  // ⌘⏎ on a marked-up picture: its draft's message goes once the composer holds the copy, uploaded, and its comments.
+  // Not if a file failed to go up, nor once another conversation is open.
+  const sendDraft = useRef<string | null>(null)
+  const [sendsAsked, setSendsAsked] = useState(0)
+  const files = useAttachments(draftKey)
+  useEffect(() => {
+    if (sendDraft.current === null) return
+    if (
+      sendDraft.current !== draftKey ||
+      files.list.some(
+        (each) => each.state !== "uploading" && each.state !== "ready"
+      )
+    )
+      sendDraft.current = null
+    else if (files.ready) {
+      sendDraft.current = null
+      input.current?.form?.requestSubmit()
+    }
+  }, [input, draftKey, sendsAsked, files.list, files.ready])
+  const focusComposerOnClose = useRef(false)
+  useLayoutEffect(() => {
+    if (panel.open || !focusComposerOnClose.current) return
+    focusComposerOnClose.current = false
+    input.current?.focus()
+  }, [input, panel.open])
   // A conversation just started may not be read yet: its first run is all there is; a run started here comes in at once,
   // before the list has it. Kept while the conversation is the same, as is all the conversation is handed below: a new
   // copy on every keystroke or poll would draw each of its turns again.
-  // The session in progress comes in as soon as the status lists it, as one the runtime started with a message queued
-  // for it: before the list has it, and with the message it began with.
-  const session = thread === null ? null : runningOf(status, { thread })
-  const sessionRun = session?.run ?? null
-  const sessionGoal = session?.goal ?? null
   const turns = useMemo(() => {
     const runs = threadRuns?.map((run) => run.id) ?? (opened ? [opened] : [])
     const late = [
@@ -262,7 +322,7 @@ export default function App() {
   const userHasControl = status?.control.owner === "user"
   const connection = connectionOf(status, offline)
 
-  // The live view button lights up in the takeover color while the user has the desktop, which they are to hand back.
+  // The computer's tab lights up in the takeover color while the user has the desktop, which they are to hand back.
   // The agent having it is the usual state, so it is the plain icon; and nobody has a desktop that can't be reached.
   const yours = !!connection?.connected && userHasControl
   // Other conversations go on while one uses the desktop; only a service that can't be reached stops a message.
@@ -318,7 +378,7 @@ export default function App() {
       if (announced.current !== null) toast.dismiss(WAITING_NOTICE)
       return
     }
-    if (waitingThread === thread) {
+    if (waitingThread === thread && !conversationHidden) {
       announced.current = waitingId
       toast.dismiss(WAITING_NOTICE)
       return
@@ -342,12 +402,11 @@ export default function App() {
           ? say.liveView.takeOver
           : say.home.openConversation,
         onAction: () => {
+          // Asked in this conversation under an attachment's tab, it is asked over the computer's.
+          const here = waitingThread === thread
           open(waitingThread)
-          if (waitingTakeover) {
-            if (isMobile) setSheetOpen(true)
-            else setPanelOpen(true)
-            setFocusScreen(true)
-          }
+          if (waitingTakeover || here) showComputer(waitingThread)
+          if (waitingTakeover) setFocusScreen(true)
         },
       },
       { id: WAITING_NOTICE }
@@ -357,7 +416,7 @@ export default function App() {
     waitingThread,
     waitingFor,
     waitingTakeover,
-    isMobile,
+    conversationHidden,
     thread,
     say,
     open,
@@ -391,14 +450,14 @@ export default function App() {
           action: say.home.openConversation,
           onAction: () => {
             open(ended)
-            // On a phone the live view covers the conversation, where the reply is.
-            setSheetOpen(false)
+            // On a phone the panel covers the conversation, where the reply is.
+            if (isMobile) setPanelOpen(false)
           },
         },
         { id: `replied-${run}` }
       )
     }
-  }, [inProgress, thread, say, open, nameIn])
+  }, [inProgress, thread, say, open, nameIn, isMobile])
 
   // Delay permanent deletion until the undo notice closes. Undo reopens the active conversation.
   // Project deletion includes conversations not yet loaded in the sidebar. Resolves true on success.
@@ -475,7 +534,15 @@ export default function App() {
   const composer = (
     <Composer
       draftKey={draftKey}
-      onSubmit={(goal, queue, clear, attachments) => {
+      onSubmit={async (goal, queue, clear, attachments) => {
+        // A picture marked up and not put back (完成) would go as it was: its tab is shown, to finish or drop the marks.
+        const marked = markedTile(attachments.map((each) => each.key))
+        if (marked) {
+          selectTab(marked)
+          setPanelOpen(true)
+          showError(say.markup.finishFirst)
+          return false
+        }
         void preloadMarkdown()
         const draft = input.current
         const typed = draft?.value
@@ -557,6 +624,14 @@ export default function App() {
     />
   )
 
+  // The panel's own corner button, on every tab: expanding it over the conversation, or shrinking it back. Where the
+  // page has no room beside it, it covers the conversation already, so it is shown expanded and shrinks away. On a
+  // phone the panel is a sheet over the page, and the button closes it.
+  const corner = isMobile
+    ? { onClose: () => setPanelOpen(false) }
+    : cramped
+      ? { expanded: true, onExpand: () => setPanelOpen(false) }
+      : { expanded, onExpand: () => setExpanded((value) => !value) }
   const liveView = (
     <LiveView
       status={status}
@@ -567,15 +642,41 @@ export default function App() {
       onScreenFocused={() => setFocusScreen(false)}
       approval={approval}
       onAnswer={answer}
-      // On a phone it is a sheet over the page, with its own way out; elsewhere the toggle stays in reach. Where the
-      // page has no room beside it, it already covers the conversation, so there is nothing to expand.
-      {...(isMobile
-        ? { onClose: () => setLiveOpen(false) }
-        : !cramped && {
-            expanded,
-            onExpand: () => setExpanded((value) => !value),
-          })}
+      {...corner}
       className="size-full"
+    />
+  )
+  const sidePanel = (
+    <SidePanel
+      computer={liveView}
+      runs={panelRuns}
+      draft={draftKey}
+      connection={connection}
+      yours={yours}
+      place={{
+        phone: isMobile,
+        corner,
+        expanded: !isMobile && expanded,
+        // As the composer takes files (composer.tsx): with a new message or an answer, not while the agent works or
+        // waits on a step or a takeover.
+        blocked:
+          approval || asking
+            ? say.markup.answerFirst
+            : running
+              ? say.markup.busy
+              : null,
+        // Once a copy is added the cursor is back in the composer; where the panel covers the conversation, it closes.
+        onAdded: (send) => {
+          if (send) {
+            sendDraft.current = draftKey
+            setSendsAsked((count) => count + 1)
+          }
+          if (isMobile || covering) setPanelOpen(false)
+          // On desktop the composer is inert until React applies the close.
+          if (!isMobile && covering) focusComposerOnClose.current = true
+          else input.current?.focus()
+        },
+      }}
     />
   )
   // The conversation's plan, as its view reports it: shown beside the conversation unless hidden, or opened over it.
@@ -628,10 +729,9 @@ export default function App() {
     () => (current === null ? null : { run: current, messages: steering }),
     [current, steering]
   )
-  const openLive = useCallback(() => setLiveOpen(true), [setLiveOpen])
-  const showPanel = !isMobile && panelOpen
-  // The panel slides in from the window's edge and back out, as the sidebar does. Closed, it stays mounted until it
-  // is out of sight (its duration-300), then goes; opened again on its way out, it turns back from where it is.
+  const showPanel = !isMobile && panel.open
+  // The panel slides in from the window's edge and back out. Closed, it stays mounted until it is out of sight (its
+  // duration-300), then goes; opened again on its way out, it turns back from where it is.
   const [panelMounted, panelClosing] = usePresence(showPanel, 300)
   // Closed while expanded, it goes as it is and opens beside the conversation the next time.
   if (!panelMounted && expanded) setExpanded(false)
@@ -670,7 +770,7 @@ export default function App() {
           <div
             data-slot="live-gap"
             className={cn(
-              "relative flex min-w-0 flex-1 flex-col transition-[margin-right] duration-300 ease-(--ease-drawer) motion-reduce:transition-none",
+              "relative flex min-w-0 flex-1 flex-col transition-[margin-right] duration-300 ease-(--ease-panel) motion-reduce:transition-none",
               panelMounted && covering && [DIVIDER, "after:right-0"]
             )}
             style={{ marginRight: showPanel ? liveShown : 0 }}
@@ -680,7 +780,7 @@ export default function App() {
             <header
               className={cn(
                 // After the sidebar's toggle on a phone.
-                "flex h-12 shrink-0 items-center gap-2 pl-11.5 transition-[padding] duration-300 ease-(--ease-drawer) motion-reduce:transition-none md:h-13 md:pl-2",
+                "flex h-12 shrink-0 items-center gap-2 pl-11.5 transition-[padding] duration-300 ease-(--ease-panel) motion-reduce:transition-none md:h-13 md:pl-2",
                 showPanel ? "pr-2.5 md:pr-2" : "pr-13.5 md:pr-13"
               )}
             >
@@ -757,7 +857,7 @@ export default function App() {
                 offline={offline}
                 composer={composer}
                 onEnded={onRunEnded}
-                onOpenLive={openLive}
+                onOpenLive={() => showComputer()}
                 onReply={reply}
                 onAsked={setAsked}
                 planShown={planShown}
@@ -797,17 +897,25 @@ export default function App() {
           </div>
 
           {/* Mounted only while open (and sliding out): a closed live view stops the stream, so nothing is captured for
-            no one. With motion reduced it fades instead of sliding. Beside the column it draws the divider itself, so
-            the line slides in with it: the column's edge follows on the main thread and can fall behind, under it. */}
+            no one. It slides by --slide (index.css), which its tabs and corner button also follow; with motion reduced it
+            fades instead. Closing, what is on it goes at once and the empty panel slides away. Beside the column it draws
+            the divider itself, so the line slides in with it: the column's edge follows on the main thread and can fall
+            behind, under it. */}
           {panelMounted && (
             <div
               data-slot="live-panel"
               inert={panelClosing}
               className={cn(
-                "absolute inset-y-0 right-0 z-10 bg-background transition-[width,translate,opacity] duration-300 ease-(--ease-drawer) motion-safe:starting:translate-x-full motion-reduce:starting:opacity-0",
-                !covering && [DIVIDER, "after:left-0"],
+                "@container absolute inset-y-0 right-0 z-10 translate-x-[calc(var(--slide)*100%)] bg-background transition-[width,--slide,opacity] duration-300 ease-(--ease-panel) motion-safe:animate-[reveal-panel-corner_150ms_step-end] motion-reduce:transition-opacity motion-safe:starting:[--slide:1] motion-reduce:starting:opacity-0",
+                !covering && [
+                  DIVIDER,
+                  "after:left-0",
+                  // Its part in the top row goes while less of the panel shows than the corner buttons' room
+                  // (side-panel.tsx's 92px), so it never passes behind them: from 8 down to the row's end at 52.
+                  "after:top-[calc(8px_+_clamp(0px,(92px_-_(1_-_var(--slide))_*_100cqw)_*_1000,44px))]",
+                ],
                 panelClosing &&
-                  "motion-safe:translate-x-full motion-reduce:opacity-0"
+                  "*:opacity-0 motion-safe:[--slide:1] motion-reduce:opacity-0"
               )}
               style={{ width: covering ? "100%" : liveShown }}
             >
@@ -818,76 +926,62 @@ export default function App() {
                   min={LIVE_MIN}
                   max={liveMax}
                   onWidth={setLiveWidth}
-                  label={say.home.resizeLiveView}
+                  label={say.tabs.resize}
                   className="-left-1.5"
                 />
               )}
-              {liveView}
+              {sidePanel}
             </div>
           )}
-          {/* The live view's toggle, at the window's corner whether it is open or not, over the panel: pressed twice in
-            one place it opens and closes it. The panel's own corner button sits beside it. */}
+          {/* The panel's toggle, at the window's corner whether it is open or not, over the panel: pressed twice in one
+            place it opens and closes it. The left sidebar's toggle, mirrored. The panel's own corner button sits
+            beside it. */}
           <Tooltip>
             <TooltipTrigger
               render={
                 <Button
-                  variant={liveOpen ? "secondary" : "ghost"}
+                  variant="ghost"
                   size="icon"
                   className="touch-target absolute top-1.5 right-2.5 z-20 md:top-2 md:right-2"
-                  aria-label={
-                    connection
-                      ? say.home.liveViewWith(connection.label)
-                      : say.home.liveView
-                  }
-                  aria-pressed={liveOpen}
-                  onClick={() => setLiveOpen(!liveOpen)}
+                  aria-label={say.tabs.title}
+                  aria-pressed={panel.open}
+                  onClick={() => setPanelOpen(!panel.open)}
                 />
               }
             >
-              <span className="relative size-5 shrink-0">
-                <MonitorIcon
-                  className={cn(
-                    "size-5",
-                    // Its screen lit in the same color, so it shows at a glance; the stand's lines have no inside.
-                    yours &&
-                      "text-takeover-glow [fill-opacity:0.22] dark:[fill-opacity:0.3]",
-                    // Cut out the lines around the dot so the button's own background shows through.
-                    connection &&
-                      "[mask-image:radial-gradient(circle_at_80%_20%,transparent_6px,black_6.5px)]"
-                  )}
-                  style={yours ? { fill: "currentColor" } : undefined}
-                />
-                {connection && (
-                  <span
-                    aria-hidden
-                    className={cn(
-                      "absolute top-0 right-0 size-2 rounded-full",
-                      connection.connected ? "bg-success" : "bg-destructive"
-                    )}
-                  />
-                )}
-              </span>
+              <SidebarIcon open={panel.open} className="size-5 -scale-x-100" />
             </TooltipTrigger>
             <TooltipContent>
-              {liveOpen ? say.home.hideLiveView : say.home.showLiveView}
+              {panel.open ? say.tabs.hide : say.tabs.show}
             </TooltipContent>
           </Tooltip>
         </div>
       </SidebarInset>
 
       {isMobile && (
-        <Sheet open={sheetOpen} onOpenChange={setSheetOpen}>
+        <Sheet
+          open={panel.open}
+          onOpenChange={(open, details) => {
+            // Esc on a picture being marked up is the markup's own, as beside the conversation: the sheet stays and
+            // lets the key on to it.
+            const marking = panel.files.find((each) => each.key === panelTab)
+            if (details.reason === "escape-key" && marking?.markup) {
+              details.cancel()
+              details.allowPropagation()
+              return
+            }
+            setPanelOpen(open)
+          }}
+        >
           <SheetContent
             side="right"
             className="p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-none"
           >
             <SheetHeader className="sr-only">
-              <SheetTitle>{say.home.liveView}</SheetTitle>
-              <SheetDescription>
-                {say.home.liveViewDescription}
-              </SheetDescription>
+              <SheetTitle>{say.tabs.title}</SheetTitle>
+              <SheetDescription>{say.tabs.description}</SheetDescription>
             </SheetHeader>
-            {liveView}
+            {sidePanel}
           </SheetContent>
         </Sheet>
       )}

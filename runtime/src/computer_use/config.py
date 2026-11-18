@@ -43,15 +43,8 @@ class Settings(BaseSettings):
     display: str = Field(default=":1", validation_alias="RDP_DISPLAY")
     keyboard_pipe: Path = Field(default=Path("/tmp/rdp-keyboard"), validation_alias="RDP_KEYBOARD_PIPE")
 
-    # The Windows Tools host on the machine the desktop shows: commands for the desktop agent. Off with neither a
-    # path nor a token. The host is the RDP one unless named.
-    rdp_host: str | None = Field(default=None, validation_alias="RDP_HOST")
-    windows_tools_host: str | None = Field(default=None, validation_alias="WINDOWS_TOOLS_HOST")
-    windows_tools_port: int = Field(default=8767, validation_alias="WINDOWS_TOOLS_PORT")
-    # Where the host's program is on Windows: the runtime then starts it itself before a desktop task, with a token
-    # of its own making. Or the token of a host started by hand.
-    windows_tools_path: str | None = Field(default=None, validation_alias="WINDOWS_TOOLS_PATH")
-    windows_tools_token: SecretStr | None = Field(default=None, validation_alias="WINDOWS_TOOLS_TOKEN")
+    # The Windows Tools host as one URL (README: Windows machine); commands on Windows are off without one.
+    windows_tools_url: SecretStr | None = Field(default=None, validation_alias="WINDOWS_TOOLS_URL")
 
     web_url: str = "http://localhost:5173"
     # A TURN server the browser relays the live view through when it cannot reach the runtime's own addresses,

@@ -123,11 +123,12 @@ async def test_what_it_is_told_while_it_writes_its_reply_it_reads_before_ending(
     assert result.reply == "Start was opened, then closed."
 
 
-async def test_what_a_task_is_told_as_it_ends_reaches_the_main_agent_as_unread(tmp_path):
-    class Turn:
-        def task(self, *args):
-            pass
+class Turn:
+    def task(self, *_):
+        pass
 
+
+async def test_what_a_task_is_told_as_it_ends_reaches_the_main_agent_as_unread():
     background, done = Background(), asyncio.Event()
 
     async def work(_id, inbox):  # ends without reading what it is told meanwhile
@@ -144,12 +145,8 @@ async def test_what_a_task_is_told_as_it_ends_reaches_the_main_agent_as_unread(t
     assert "It ended before reading what you told it with tell_task:\nClose Start again." in report.text
 
 
-async def test_tasks_past_the_most_at_once_are_refused_until_one_ends(tmp_path):
+async def test_tasks_past_the_most_at_once_are_refused_until_one_ends():
     from computer_use.agent.background import MAX_TASKS
-
-    class Turn:
-        def task(self, *args):
-            pass
 
     background, done = Background(), asyncio.Event()
 
@@ -176,10 +173,6 @@ def test_a_task_the_model_service_failed_is_told_as_the_model_services_error():
 
 
 async def test_a_question_waits_for_the_main_agent_and_nothing_else_answers_it():
-    class Turn:
-        def task(self, *_):
-            pass
-
     background = Background()
     finish = asyncio.Event()
 
@@ -205,10 +198,6 @@ async def test_a_question_waits_for_the_main_agent_and_nothing_else_answers_it()
 
 
 async def test_a_failure_while_told_of_a_tasks_end_does_not_lose_the_end():
-    class Turn:
-        def task(self, *_):
-            pass
-
     def fail_at_the_end(job, outcome):
         if outcome is not None:
             raise RuntimeError("the log failed")
@@ -224,3 +213,21 @@ async def test_a_failure_while_told_of_a_tasks_end_does_not_lose_the_end():
     await asyncio.wait_for(background.wait(), 1)
 
     assert background.ended
+
+
+async def test_a_task_that_ends_while_its_status_is_read_is_still_told_as_running():
+    background, done = Background(), asyncio.Event()
+
+    async def work(id, inbox):
+        await done.wait()
+        return [], {}
+
+    async def steps():  # the task ends while its log is read
+        done.set()
+        await background.jobs["t1"].task
+        return []
+
+    background.start("computer", "One.", work, steps, turn=Turn(), record="r1")
+    status = await background.status()
+
+    assert status.additional_kwargs["runtime"]["ids"] == ["t1"] and not background.jobs

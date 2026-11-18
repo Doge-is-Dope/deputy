@@ -43,7 +43,7 @@ import {
  * The agent asking the user to take the desktop over, and why: answered by taking it (which opens the desktop) or by
  * skipping it (which hands it straight back, for the agent to carry on without).
  */
-export type Takeover = {
+type Takeover = {
   text: string
   onTakeOver: () => void
   onSkip: () => void
@@ -410,10 +410,12 @@ export function Composer({
     }
     if (key !== "Enter" || (approval && !declining)) return
     event.preventDefault()
+    // A held Enter sends nothing: its repeats may come from a press meant for something else, as a picture's markup.
+    if (event.repeat) return
     // With nothing written, Enter takes the recommended answer, unless files wait to go with an answer of one's own.
     if (choice && !goal.trim() && attachments.list.length === 0) {
       if (blocked) showHint()
-      else if (!event.repeat && !sending) void takeRecommended()
+      else if (!sending) void takeRecommended()
       return
     }
     if (goal.trim() && blocked) showHint()
@@ -483,6 +485,7 @@ export function Composer({
         </label>
         {listed && <AttachMenu id={menuId} onChoose={pickFiles} />}
         <AttachmentTiles
+          draft={draftKey}
           list={attachments.list}
           onRemove={attachments.remove}
           onRetry={attachments.retry}

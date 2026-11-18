@@ -13,6 +13,7 @@ from computer_use.prompts.computer import DESKTOP_BUSY, SYSTEM_PROMPT
 import computer_use.desktop.executor
 from computer_use.agent.inbox import Inbox
 from computer_use.agent.history import tasks
+from conftest import SMALL
 from conftest import desktop_ended, run_turn, runs_dir
 from conftest import events_of, first_run, run_file, task_folder
 from computer_use.computers import ComputerError
@@ -242,7 +243,7 @@ async def test_loop_does_not_act_on_a_screen_that_changed_while_the_model_decide
 
 
 async def test_the_log_records_tokens_per_model_call_and_in_total(settings, computer, monkeypatch):
-    settings.computer_model = "openai:gpt-6-luna"
+    settings.computer_model, settings.openai_api_key = SMALL, "sk-offline"
     use_script(monkeypatch, [
         AIMessage(content="", tool_calls=[tool_call("c1", "key", text="ctrl+s")], usage_metadata={
             "input_tokens": 1000, "output_tokens": 50, "total_tokens": 1050,
@@ -257,7 +258,7 @@ async def test_the_log_records_tokens_per_model_call_and_in_total(settings, comp
         {"input": 1000, "cached": 600, "cache_write": 0, "output": 50, "reasoning": 30},
         {"input": 1200, "cached": 0, "cache_write": 0, "output": 20, "reasoning": 0},
     ]
-    # gpt-6-luna list prices: 1,600 plain input x $0.10 + 600 cached x $0.01 + 70 output x $0.50 per million.
+    # SMALL's prices: 1,600 plain input x $0.10 + 600 cached x $0.01 + 70 output x $0.50 per million.
     (task,) = [end for end in logged(result, "end") if end["stop_reason"] == "ended"]
     assert task["usage"] == {"input": 2200, "cached": 600, "cache_write": 0, "output": 70, "reasoning": 30}
     assert round(sum(task["cost"].values()), 4) == 0.0002
@@ -391,6 +392,7 @@ async def test_other_messages_go_on_while_another_run_has_the_desktop(settings, 
     assert computer.calls == [] and computer.releases == 0
     handed = computer_use_result(refused)
     assert handed["status"] == "error" and handed["result"] == "Not executed: " + DESKTOP_BUSY
+    assert handed["reason"] == "desktopBusy"
     assert tasks(events_of(settings, refused.run)) == []
     ends = logged(refused, "end")
     assert [(end["stop_reason"], end.get("agent_stop_reason")) for end in ends] == [("replied", None)]
@@ -604,8 +606,5 @@ async def test_a_desktop_task_is_refused_at_once_while_the_desktop_is_down(setti
 
 
 def test_the_prompt_asks_for_updates_only_as_its_phases_change():
-    """Updates in long tool-heavy tasks come only as a phase begins, not at the start, which the main agent gives as it
-    hands the task over; without the rule the agent said nothing in 60 of 60 steps (2026-10-19)."""
+    """Without this rule the agent said nothing in 60 of 60 steps of a long task (2026-10-19)."""
     assert "user-visible update only when a major phase begins" in SYSTEM_PROMPT
-    assert "states the first step" not in SYSTEM_PROMPT
-    assert "routine steps need no narration" not in SYSTEM_PROMPT

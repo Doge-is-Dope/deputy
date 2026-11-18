@@ -14,8 +14,8 @@ import { isComposing } from "@/lib/keys"
 /**
  * Enter and Esc answer what the composer asks while the focus is in its text or on nothing, so it can stay where it is
  * as the question comes. Anything else with the focus keeps its keys: Enter on 「拒絕」 declines, on a link opens it,
- * and in the live view types on the desktop. So do the @ list, the composer's Enter that sends what is written, and
- * Chinese input.
+ * and in the live view types on the desktop. So do the @ list, the composer's Enter that sends what is written, a
+ * picture being marked up, and Chinese input. A held key answers nothing.
  */
 export function useAnswerKeys(
   keys: Partial<Record<"Enter" | "Escape", () => void>> | null,
@@ -28,7 +28,7 @@ export function useAnswerKeys(
     const answer = keys?.[event.key as "Enter" | "Escape"]
     if (!answer) return
     event.preventDefault()
-    answer()
+    if (!event.repeat) answer()
   })
   const on = keys !== null
   useEffect(() => {
@@ -38,7 +38,7 @@ export function useAnswerKeys(
   }, [on])
 }
 
-export type AnswerChoice = {
+type AnswerChoice = {
   label: ReactNode
   onClick: () => void
   disabled?: boolean

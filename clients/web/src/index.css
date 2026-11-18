@@ -128,6 +128,8 @@
        pages dark enough for small text, on dark ones bright enough to glow. */
   --takeover-glow: oklch(from var(--takeover) min(l, 0.55) max(c, 0.15) h);
   --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+  /* The side panel's slide: an ease-out cubic, gentler than the drawer's over its first frames. */
+  --ease-panel: cubic-bezier(0.33, 1, 0.68, 1);
   --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
   --ease-overshoot: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
@@ -244,19 +246,6 @@
 }
 @media (prefers-reduced-motion: reduce) {
   .sidebar-icon-edge {
-    transition: none;
-  }
-}
-/* The expand icon's arrows, each turning about its own middle to point the other way, with the panel. */
-.expand-icon-arrow {
-  transform-box: view-box;
-  transition: transform 300ms var(--ease-drawer);
-}
-.expand-icon-arrow[data-inward] {
-  transform: scale(-1);
-}
-@media (prefers-reduced-motion: reduce) {
-  .expand-icon-arrow {
     transition: none;
   }
 }
@@ -877,6 +866,25 @@
   }
 }
 
+/* How far the side panel is out of place, as a share of its width: 1 off the window's edge, 0 in place (App.tsx).
+   Registered so it animates; inherited so what is on the panel can follow it: its tabs are cut where the corner
+   buttons start (side-panel.tsx), and its corner button holds its place on screen (corner-button.tsx). */
+@property --slide {
+  syntax: "<number>";
+  inherits: true;
+  initial-value: 0;
+}
+
+/* While the panel begins sliding in, its corner button stays out of the toggle's row. */
+@keyframes reveal-panel-corner {
+  from {
+    --panel-corner-visibility: hidden;
+  }
+  to {
+    --panel-corner-visibility: visible;
+  }
+}
+
 /* A scroller whose content fades out at an edge with more beyond it, not cut off there: no fade while it all fits, and
    each grows over the first 32px scrolled away from its edge. The mask is opaque less a band at each end. Where
    scroll-driven animations are missing nothing fades; the scrollbar still shows. */
@@ -1032,7 +1040,12 @@
   transition: none;
 }
 
-/* Headless notices keep their opaque surface in the collapsed stack, but only the front one's content is visible. */
+/* Headless notices keep their opaque surface in the collapsed stack, at the front one's height, but only the front
+   one's content is visible. */
+[data-sonner-toast][data-expanded="false"][data-front="false"] [data-notice] {
+  height: var(--front-toast-height);
+  overflow: hidden;
+}
 [data-sonner-toast][data-expanded="false"][data-front="false"]
   [data-notice-content] {
   opacity: 0;

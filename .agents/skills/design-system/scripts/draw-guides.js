@@ -53,8 +53,8 @@ const columns = (edges) => {
 }
 const L = columns(left)
 const R = columns(right)
-const top = Math.min(...lines.map((l) => l.top))
-const bottom = Math.min(...lines.map((l) => l.bottom))
+const first = Math.min(...lines.map((l) => l.top)) // not `top`: the window's own
+const last = Math.min(...lines.map((l) => l.bottom))
 
 // The lines, on a layer over the box that the pointer goes through.
 window.__guidesClear?.()
@@ -73,8 +73,8 @@ for (const at of R.shared) line(`top:0;bottom:0;right:${at}px;border-right:1px d
 for (const m of L.misses) line(`top:0;bottom:0;left:${m.at}px;border-left:1px dashed`, blue)
 for (const m of R.misses) line(`top:0;bottom:0;right:${m.at}px;border-right:1px dashed`, blue)
 if (lines.length) {
-  line(`left:0;right:0;top:${top}px;border-top:1px dashed`, red)
-  line(`left:0;right:0;bottom:${bottom}px;border-bottom:1px dashed`, red)
+  line(`left:0;right:0;top:${first}px;border-top:1px dashed`, red)
+  line(`left:0;right:0;bottom:${last}px;border-bottom:1px dashed`, red)
 }
 document.body.append(layer)
 window.__guidesClear = () => layer.remove()
@@ -84,6 +84,6 @@ JSON.stringify({
   left: L.shared,
   right: R.shared,
   misses: [...L.misses.map((m) => ({ side: "left", ...m })), ...R.misses.map((m) => ({ side: "right", ...m }))],
-  firstLineTop: round(top),
-  lastLineBottom: round(bottom),
+  firstLineTop: round(first),
+  lastLineBottom: round(last),
 }, null, 1)

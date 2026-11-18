@@ -46,7 +46,10 @@ class SubagentMiddleware(AgentMiddleware):
         if isinstance(message, AIMessage):
             self.last = message
             await self.log.model(message)
-            return read_before_ending(message, self.inbox)
+            # What a call pruned stays pruned, so the state lets go of those images too; the log keeps them.
+            kept = prune_screenshots(state["messages"])
+            dropped = [new for old, new in zip(state["messages"], kept) if new is not old]
+            return ({"messages": dropped} if dropped else {}) | (read_before_ending(message, self.inbox) or {}) or None
         return None
 
     async def awrap_model_call(self, request, handler):

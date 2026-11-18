@@ -6,9 +6,9 @@ import { ApiError, api } from "@/lib/api"
 // As the runtime takes them: at most this many to a message; a photo, which a model reads, up to MAX_BYTES and this long
 // a side; any other file up to MAX_KEPT (a PDF over MAX_BYTES only code opens).
 export const MAX_FILES = 5
-export const MAX_BYTES = 5 * 1024 * 1024
-export const MAX_KEPT = 20 * 1024 * 1024
-export const MAX_SIDE = 2048
+const MAX_BYTES = 5 * 1024 * 1024
+const MAX_KEPT = 20 * 1024 * 1024
+const MAX_SIDE = 2048
 const PHOTOS = ["image/jpeg", "image/png", "image/webp"]
 
 /** A photo or screenshot a model looks at itself. Any other image (a GIF, an iPhone's HEIC) is a file like any. */
@@ -21,6 +21,45 @@ export function kindOf(name: string): string {
   return dot > 0 && name.length - dot <= 6
     ? name.slice(dot + 1).toUpperCase()
     : ""
+}
+
+// Words shown as they are, never as a page: no HTML or SVG here.
+const TEXTS = ["txt", "md", "csv", "tsv", "json", "xml", "yaml", "yml", "log"]
+
+/** How the side panel shows a file by its name: a picture to mark up, a PDF, plain text; null to download it. */
+export function previewOf(name: string): "image" | "pdf" | "text" | null {
+  const kind = kindOf(name).toLowerCase()
+  if (["png", "jpg", "jpeg", "webp"].includes(kind)) return "image"
+  if (kind === "pdf") return "pdf"
+  return TEXTS.includes(kind) ? "text" : null
+}
+
+/** `name`, numbered where another file has it, as the runtime numbers a message's files (attachments.py unique):
+ * report.xlsx, report (2).xlsx. */
+export function unique(name: string, taken: ReadonlySet<string>) {
+  const dot = name.lastIndexOf(".")
+  const [stem, extension] =
+    dot > 0 ? [name.slice(0, dot), name.slice(dot)] : [name, ""]
+  let chosen = name
+  for (let number = 2; taken.has(chosen); number++)
+    chosen = `${stem} (${number})${extension}`
+  return chosen
+}
+
+/** Words as they were saved: UTF-16 by its byte order mark, UTF-8, or else Big5, as Taiwan's Excel saves a CSV. A
+ * character cut off at the end of what was read is left out (streamed: its first bytes wait for the rest), not taken
+ * for another encoding. */
+export function decoded(bytes: ArrayBuffer): string {
+  const [first, second] = new Uint8Array(bytes.slice(0, 2))
+  const read = (encoding: string, fatal = false) =>
+    new TextDecoder(encoding, { fatal }).decode(bytes, { stream: true })
+  if (first === 0xff && second === 0xfe) return read("utf-16le")
+  if (first === 0xfe && second === 0xff) return read("utf-16be")
+  try {
+    return read("utf-8", true)
+  } catch {
+    return read("big5")
+  }
 }
 
 export type Attachment = {
@@ -56,7 +95,7 @@ export function sentWith(run: string, attached?: Attachment[]): Shown[] {
 
 /** The file as it goes: an image larger than MAX_SIDE or MAX_BYTES is turned upright and shrunk, in its own format (as
  * the model sees it), or as WebP when that is still over MAX_BYTES (a PNG photo); anything else as it is. */
-export async function prepared(file: File): Promise<Blob> {
+async function prepared(file: File): Promise<Blob> {
   if (!isPhoto(file.type)) return file
   const bitmap = await createImageBitmap(file) // turned upright by its EXIF orientation
   const scale = Math.min(1, MAX_SIDE / Math.max(bitmap.width, bitmap.height))

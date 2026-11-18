@@ -16,7 +16,7 @@ when only prompts differ between two versions.
    the version; alternate base and change task by task. Model swaps use `--main` or `--computer` instead of a code
    change.
 6. Grading is the user's: hand them `eval/results/<version>/grade.md`, or, when asked, propose grades with what you
-   saw in each run. Then `eval/ev report` and compare pass rates, endings, cost and p50/p95.
+   saw in each run. Then `eval/ev report` and compare pass rates, endings, cost and median times.
 
 **Reply:** the change, the tasks and trials, pass rates and timings for both versions, and whether the difference is
 larger than run-to-run noise.

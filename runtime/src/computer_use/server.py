@@ -25,7 +25,8 @@ from starlette.routing import Route
 
 from computer_use.agent.main_agent import SUBAGENTS, run_turn
 from computer_use.auth import Authenticate, build_authenticator
-from computer_use.agent.models import MAIN_AGENT, efforts, offered, starting
+from computer_use.agent.catalog import model_name
+from computer_use.agent.models import MAIN_AGENT, efforts, offered, starting, unavailable
 from computer_use.agent.title import MAX_CHARS, Titles, title_model
 from computer_use.adapters import (
     build_code_runner, build_computer, build_control, build_file_store, build_screen_judge, build_stores,
@@ -98,7 +99,7 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
     control = build_control(settings)
     computer = computer if computer is not None else build_computer(settings)
     code_runner = build_code_runner(settings)
-    windows = build_windows_tools(settings, control, computer)
+    windows = build_windows_tools(settings, control)
     start_turn = partial(
         run_turn, settings, computer=computer, control=control, code_runner=code_runner, memory=memory,
         judge=build_screen_judge(settings), windows=windows,
@@ -250,7 +251,10 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             # The runtime keeps no user's choices: the page works out what each agent will use from these and sends it.
             "defaults": starting(settings, AGENTS),
             "title_model": asdict(title_model(settings)),  # shown read-only in settings
-            "models": [{"id": spec, "efforts": list(efforts(spec))} for spec in offered(settings)],
+            "models": [
+                {"id": spec, "name": model_name(spec), "efforts": list(efforts(spec)), "unavailable": unavailable(settings, spec)}
+                for spec in offered(settings)
+            ],
             "max_steps": max_steps,
             "active": active(),
             "running": running(me(request)),
@@ -264,10 +268,7 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             "approval": asdict(pending) if (pending := await awaiting(request)) else None,
             "computer": {"connected": connected, "detail": detail},
             "code_runner": asdict(await code_runner.status()) if code_runner else None,
-            # None when no Windows Tools host is set; connected while its lease is held.
-            "windows_tools": (
-                {"connected": windows.lease.target is not None, "detail": windows.lease.problem} if windows else None
-            ),
+            "windows_tools": asdict(await windows.status()) if windows else None,  # None when no host is set
             "ice_servers": ice_servers,
         })
 
@@ -627,9 +628,6 @@ def create_app(settings: Settings, max_steps: int, computer: Computer | None = N
             cleanup.push_async_callback(share.close)
             if code_runner is not None:
                 cleanup.push_async_callback(code_runner.close)
-            if windows is not None:
-                await windows.lease.start()
-                cleanup.push_async_callback(windows.lease.close)
             cleanup.push_async_callback(runner.close)
             yield
 

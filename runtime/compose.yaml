@@ -15,11 +15,8 @@ services:
       - RDP_USER
       - RDP_PASSWORD
       - RDP_DOMAIN
-      # Commands on the Windows machine (README: Windows Tools); off with neither a path nor a token.
-      - WINDOWS_TOOLS_PATH
-      - WINDOWS_TOOLS_TOKEN
-      - WINDOWS_TOOLS_HOST
-      - WINDOWS_TOOLS_PORT
+      # Commands on the Windows machine (README: Windows machine); off without it.
+      - WINDOWS_TOOLS_URL
       # Runs, projects and memories go to the mongo service (files under data/ are for running outside compose).
       - CU_DATABASE_URL=mongodb://runtime:${MONGO_RUNTIME_PASSWORD}@mongo/computer_use?replicaSet=rs0
       - CU_AUTH=${CU_AUTH:-none}  # said outright: none is safe only while CU_BIND is 127.0.0.1

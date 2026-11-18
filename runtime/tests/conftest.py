@@ -7,6 +7,7 @@ import socket
 import uuid
 from pathlib import Path
 from functools import cache, partial
+from unittest.mock import patch
 from urllib.parse import urlsplit
 
 import pytest
@@ -17,6 +18,7 @@ from langchain_core.runnables import RunnableLambda
 from PIL import Image, ImageDraw, ImageFont
 from pymongo import MongoClient
 
+import computer_use.agent.coding_agent as coding_agent
 import computer_use.agent.main_agent as main_agent
 import computer_use.agent.computer_agent as computer_agent
 import computer_use.agent.subagent as subagent
@@ -31,12 +33,15 @@ from computer_use.desktop.actions import CONFIRMABLE
 from computer_use.agent.trajectory import Trajectory
 from computer_use.adapters import build_control
 from computer_use.agent.history import in_call_order, with_media
+from computer_use.middleware.common import without_screenshots
 from computer_use.computers import ComputerError, Frame, Status
 from computer_use.storage import LOCAL_USER, MAIN, TURN, Runs
 from computer_use.files.local import LocalFileStore
 from computer_use.storage.files import FileRunStore, FileRuns
 from computer_use.sandbox import CodeRunnerError, RunOutput, Status as CodeRunnerStatus
 from computer_use.config import Settings
+from computer_use.agent.catalog import LOW_TO_MAX, MODELS, Model
+from computer_use.agent.usage import Price
 from computer_use.desktop.control import ControlFile
 from computer_use.desktop.executor import Executor
 
@@ -54,6 +59,12 @@ async def main_messages(store: Runs, run: str) -> list[BaseMessage]:
     """The main agent's recorded messages in one run, in their original order."""
     return [await restore(store, run, event["message"]) for event in await store.events(run)
             if event.get("agent") == MAIN and "message" in event]
+
+
+def image(image_format: str, size: tuple[int, int] = (40, 30)) -> bytes:
+    out = io.BytesIO()
+    Image.new("RGB", size, "teal").save(out, image_format)
+    return out.getvalue()
 
 
 @cache
@@ -84,6 +95,27 @@ def no_network(request, monkeypatch):
 
     monkeypatch.setattr(socket.socket, "__init__", guarded)
     monkeypatch.setattr(socket, "getaddrinfo", offline)
+
+
+# Models of the tests' own in place of the real ones, so adding or removing a real model changes no test.
+BIG = "openai:big"  # takes no "none" effort
+SMALL = "openai:small"
+OTHER = "anthropic:other"
+FAKE_MODELS = {
+    BIG: Model("Big", Price(input=2.00, cached=0.10, cache_write=2.50, output=10.00), LOW_TO_MAX),
+    SMALL: Model("Small", Price(input=0.10, cached=0.01, cache_write=0.125, output=0.50), ("none", *LOW_TO_MAX)),
+    OTHER: Model("Other", Price(input=4.00, cached=0.20, cache_write=5.00, output=20.00), LOW_TO_MAX),
+}
+
+
+@pytest.fixture(autouse=True)
+def fake_models(request):
+    """Tests marked `model` call real models, so they keep the real ones."""
+    if request.node.get_closest_marker("model"):
+        yield
+        return
+    with patch.dict(MODELS, FAKE_MODELS, clear=True):
+        yield
 
 
 @pytest.fixture
@@ -381,6 +413,12 @@ def use_script(monkeypatch, replies, main=None) -> tuple[ScriptedModel, Scripted
     return computer_model, main_model
 
 
+def coding_script(monkeypatch, replies) -> ScriptedModel:
+    model = ScriptedModel(messages=iter(replies), received=[], bindings=[])
+    monkeypatch.setattr(coding_agent, "build_chat_model", lambda _spec, _settings: model)
+    return model
+
+
 def sent_while_pressing(computer, inbox, *texts: str | None, until=None) -> None:
     """Each key press on the desktop has the user send the next of these (None: nothing), as if they wrote while it
     ran. A press that sends one goes on once the main agent has read it, or, with `until`, once that says so."""
@@ -529,7 +567,7 @@ def desktop_ended(result) -> str | None:
 def the_log_is_the_whole_record(settings, monkeypatch):
     """Every run in a test using this also checks that its log is the record. The main agent's messages read back
     from the conversation's logs are exactly the ones its graph ended with, images included; and each computer-use
-    task's messages are in the log, in order, exactly as its graph ended with them."""
+    task's messages are in the log, in order, as its graph ended with them, less the screenshots it pruned."""
     finished = []
 
     def watched(module, agent):
@@ -575,11 +613,13 @@ async def whole_record(data_dir: Path, finished) -> None:
             replied = any(e["type"] == "end" and e["stop_reason"] == "replied" for e in events)
             assert (recorded == messages) if replied else (recorded[:len(messages)] == messages)
         else:
-            # A task's agent's messages are its log's, in order.
+            # A task's agent's messages are its log's, in order; the agent lets go of its pruned screenshots.
             recorded = [await restore(store, run, e["message"]) for e in events
                         if "message" in e and e.get("agent") is None]
             begin = next(n for n, message in enumerate(recorded) if message.id == messages[0].id)
-            assert in_call_order(recorded[begin:begin + len(messages)]) == messages
+            logged = in_call_order(recorded[begin:begin + len(messages)])
+            assert len(logged) == len(messages)
+            assert all(held in (whole, without_screenshots(whole)) for whole, held in zip(logged, messages))
 
 
 @pytest.fixture
@@ -588,8 +628,8 @@ def computer() -> FakeComputer:
 
 
 @pytest.fixture
-def control(settings) -> ControlFile:
-    return ControlFile(settings.control_path)
+def control(tmp_path) -> ControlFile:
+    return ControlFile(tmp_path / "control.json")
 
 
 @pytest.fixture

@@ -1,5 +1,4 @@
-import { useSyncExternalStore } from "react"
-
+import { store } from "@/lib/store"
 import { en } from "@/locales/en"
 import { zhHant, type Messages } from "@/locales/zh-Hant"
 
@@ -10,7 +9,7 @@ import { zhHant, type Messages } from "@/locales/zh-Hant"
 
 const MESSAGES = { "zh-Hant": zhHant, en } satisfies Record<string, Messages>
 
-export type Locale = keyof typeof MESSAGES
+type Locale = keyof typeof MESSAGES
 
 /** A word in every language the interface has, so a search finds it in any of them whichever is shown. */
 export const everyLanguage = (word: (messages: Messages) => string) =>
@@ -24,7 +23,6 @@ export const LANGUAGES: { id: Locale; name: string }[] = [
 ]
 
 const KEY = "language"
-const listeners = new Set<() => void>()
 
 /** The browser's first language that the interface has; English when it has none of them. */
 function detect(): Locale {
@@ -46,23 +44,21 @@ function stored(): Language {
   }
 }
 
-let state: { language: Language; locale: Locale }
-
-function apply(language: Language) {
+/** The language chosen and the one it comes to, put on <html>. */
+function applied(language: Language) {
   const locale = language === "auto" ? detect() : language
-  state = { language, locale }
   document.documentElement.lang = locale
-  for (const listener of listeners) listener()
+  return { language, locale }
 }
 
-apply(stored())
+const chosen = store(applied(stored()))
 // The browser's language can change while the page is open; it matters only while it is the choice.
 addEventListener("languagechange", () => {
-  if (state.language === "auto") apply("auto")
+  if (chosen.get().language === "auto") chosen.set(applied("auto"))
 })
 // A choice made in another tab applies here too.
 addEventListener("storage", (event) => {
-  if (event.key === KEY || event.key === null) apply(stored())
+  if (event.key === KEY || event.key === null) chosen.set(applied(stored()))
 })
 
 export function setLanguage(language: Language) {
@@ -72,20 +68,11 @@ export function setLanguage(language: Language) {
   } catch {
     // Not stored; the choice still holds until the page reloads.
   }
-  apply(language)
-}
-
-function subscribe(listener: () => void) {
-  listeners.add(listener)
-  return () => {
-    listeners.delete(listener)
-  }
+  chosen.set(applied(language))
 }
 
 /** The language chosen and the one it comes to. */
-export function useLanguage() {
-  return useSyncExternalStore(subscribe, () => state)
-}
+export const useLanguage = chosen.use
 
 /** The interface's words, in its language now. */
 export function useT(): Messages {
@@ -93,7 +80,7 @@ export function useT(): Messages {
 }
 
 /** The same, for code outside components: as of when it runs. */
-export const t = (): Messages => MESSAGES[state.locale]
+export const t = (): Messages => MESSAGES[chosen.get().locale]
 
 /** The interface's language as of when it runs, for Intl to say dates and times in. */
-export const locale = (): Locale => state.locale
+export const locale = (): Locale => chosen.get().locale

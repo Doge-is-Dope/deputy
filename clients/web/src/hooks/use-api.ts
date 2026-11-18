@@ -62,8 +62,6 @@ export function useStatus() {
   return { status, offline, refresh, confirmControl }
 }
 
-export type { ListKind } from "@/lib/conversation-lists"
-
 /** Sidebar pagination and lazy project reads. */
 export type Lists = {
   more: (kind: ListKind) => boolean

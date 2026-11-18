@@ -7,6 +7,7 @@ import computer_use.agent.computer_agent as computer_agent
 import computer_use.desktop.executor
 from computer_use.agent.inbox import Inbox
 from computer_use.agent.review import Verdict
+from conftest import BIG
 from conftest import desktop_ended, run_turn, runner_of
 from conftest import events_of, first_run, run_file, task_states
 from computer_use.config import RunChoices
@@ -291,6 +292,7 @@ async def test_with_auto_review_on_a_step_it_lets_through_goes_ahead_without_the
 
 
 async def test_auto_review_tokens_are_priced_as_the_main_agents_in_the_tasks_cost(settings, computer, monkeypatch):
+    settings.main_model = BIG
     reviewing(monkeypatch, allow=True, usage={"input": 900, "cached": 0, "cache_write": 0, "output": 40})
     use_script(monkeypatch, [AIMessage(content="", tool_calls=[tool_call("c1", "key", **DELETE)]),
                              AIMessage(content="Deleted it.")])

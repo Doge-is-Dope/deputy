@@ -25,7 +25,6 @@ import {
   formatDollars,
   formatDuration,
   formatNumber,
-  modelName,
   timeAgo,
 } from "@/lib/format"
 import { useT } from "@/lib/i18n"
@@ -91,7 +90,7 @@ export function UserMessage({
 /** What a run's last reply's details menu tells: what the whole run used, how long it took, and the rules it cited. */
 type About = {
   cost: Cost | null
-  agents: AgentUsage[]
+  agents: (AgentUsage & { name: string })[]
   took?: number // seconds, from the user's message to the end of the run
   cited: Remembered[] // the rules its tasks were handed over with (citedMemories)
 }
@@ -236,7 +235,7 @@ function UsageDialog({
   onOpenChange,
 }: {
   cost: Cost | null
-  agents: AgentUsage[]
+  agents: About["agents"]
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
@@ -257,6 +256,7 @@ function UsageDialog({
     return {
       agent: each.agent,
       model: each.model,
+      name: each.name,
       cost: spent ? formatCost(spent) : words.unknown,
       kinds: kinds.filter(([, tokens]) => tokens > 0),
     }
@@ -301,7 +301,7 @@ function UsageDialog({
                         {agentName(group.agent)}
                       </span>
                       <span className="truncate text-muted-foreground">
-                        {modelName(group.model)}
+                        {group.name}
                       </span>
                     </span>
                     <span className="py-1.5 text-right font-medium tabular-nums">
@@ -455,15 +455,18 @@ export function ThinkingRow({
       }}
       className="group/thinking -mt-6 grid grid-rows-[1fr] transition-[grid-template-rows,opacity,filter] duration-300 ease-(--ease-out) data-gone:grid-rows-[0fr] data-gone:opacity-0 data-gone:blur-[2px] data-swapped:transition-none motion-reduce:transition-none in-data-settled:starting:grid-rows-[0fr] in-data-settled:starting:opacity-0 in-data-settled:starting:blur-[2px]"
     >
+      {/* Empty once shut, so its endless animations don't draw every frame of the reply below. */}
       <div className="min-h-0 overflow-hidden">
-        <div className="flex items-center gap-2 pt-6 text-sm leading-6 text-muted-foreground">
-          <span aria-hidden className="thinking-wave">
-            <span />
-            <span />
-            <span />
-          </span>
-          <span className="shimmer">{t.run.thinking}</span>
-        </div>
+        {(shown || moving) && (
+          <div className="flex items-center gap-2 pt-6 text-sm leading-6 text-muted-foreground">
+            <span aria-hidden className="thinking-wave">
+              <span />
+              <span />
+              <span />
+            </span>
+            <span className="shimmer">{t.run.thinking}</span>
+          </div>
+        )}
       </div>
     </div>
   )

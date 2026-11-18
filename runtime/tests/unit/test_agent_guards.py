@@ -8,10 +8,13 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from computer_use.agent.history import in_call_order, load_conversation
 from computer_use.middleware.common import KEEP_SCREENSHOTS, PRUNE_EVERY, prune_screenshots
+from computer_use.middleware.subagent import SubagentMiddleware
+from computer_use.agent.inbox import Inbox
 from computer_use.tools.common import screenshot_blocks
 from computer_use.agent.trajectory import Trajectory
 from computer_use.agent.usage import usage_of
 from computer_use.storage import MAIN
+from conftest import BIG, SMALL
 from conftest import file_runs, main_messages, new_log, read_events, run_turn, runs_dir, tool_call, use_script
 from computer_use.computers import ComputerError
 from computer_use.desktop import executor as executor_module
@@ -324,9 +327,9 @@ async def test_the_screen_seen_is_the_last_full_screenshot_not_a_zoomed_crop(exe
 
 async def test_the_end_event_carries_the_tokens_and_cost_by_kind_in_all_and_by_agent(tmp_path):
     ends = []
-    for computer_model in ("openai:gpt-6.1-sol", "openai:unpriced"):
+    for computer_model in (BIG, "openai:unpriced"):
         log = await new_log(tmp_path)
-        log.uses("openai:gpt-6-luna", MAIN)
+        log.uses(SMALL, MAIN)
         log.uses(computer_model, name="computer")
         await log.model(AIMessage(content="saved", usage_metadata={  # the computer agent's
             "input_tokens": 1_000_000, "output_tokens": 50_000, "total_tokens": 1_050_000,
@@ -341,18 +344,18 @@ async def test_the_end_event_carries_the_tokens_and_cost_by_kind_in_all_and_by_a
 
     priced, unpriced = [event for event in ends if event["type"] == "end"]
     assert [event.get("model") for event in ends if event["type"] == "model"][:2] == [
-        "openai:gpt-6.1-sol", "openai:gpt-6-luna"
+        BIG, SMALL
     ]
     assert (priced["stop_reason"], priced["summary"]) == ("replied", "It is saved.")
     assert priced["usage"] == {"input": 1_100_000, "cached": 200_000, "cache_write": 100_000, "output": 60_000,
                                "reasoning": 40_000}
-    # gpt-6.1-sol: 700k plain x $2 + 200k cached x $0.10 + 100k written x $2.50 + 50k output x $10 per million;
-    # gpt-6-luna: 100k plain x $0.10 + 10k output x $0.50 per million.
+    # BIG: 700k plain x $2 + 200k cached x $0.10 + 100k written x $2.50 + 50k output x $10 per million;
+    # SMALL: 100k plain x $0.10 + 10k output x $0.50 per million.
     assert priced["cost"] == pytest.approx({"input": 1.41, "cached": 0.02, "cache_write": 0.25, "output": 0.505})
     assert unpriced["cost"] is None
     # And by agent and model, in the order first used; one without a known price has no cost of its own.
     assert [(each["agent"], each["model"]) for each in priced["agents"]] == [
-        ("computer", "openai:gpt-6.1-sol"), ("main", "openai:gpt-6-luna")
+        ("computer", BIG), ("main", SMALL)
     ]
     assert priced["agents"][1]["usage"] == {"input": 100_000, "cached": 0, "cache_write": 0, "output": 10_000,
                                             "reasoning": 0}
@@ -381,3 +384,17 @@ async def test_a_desktop_task_sends_its_model_only_the_latest_screenshots(settin
 
     shown = [sum(bool(screenshot_blocks(m)) for m in received) for received in computer_model.received]
     assert max(shown) < KEEP_SCREENSHOTS + PRUNE_EVERY and shown[-1] >= KEEP_SCREENSHOTS
+
+
+async def test_a_task_lets_go_of_the_screenshots_its_calls_pruned():
+    class Log:
+        async def model(self, message):
+            pass
+
+    screens = [HumanMessage(content=[{"type": "text", "text": str(n)}, IMAGE], id=f"s{n}") for n in range(9)]
+    state = {"messages": [*screens, AIMessage("Done.", id="a")]}
+
+    update = await SubagentMiddleware(Log(), Inbox()).aafter_model(state, None)
+
+    assert update == {"messages": prune_screenshots(state["messages"])[:PRUNE_EVERY]}
+    assert [m.id for m in update["messages"]] == [f"s{n}" for n in range(PRUNE_EVERY)]

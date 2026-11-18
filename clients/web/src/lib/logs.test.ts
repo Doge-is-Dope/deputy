@@ -179,7 +179,12 @@ describe("a task whose log comes before its turn hands it over", () => {
 
 describe("sameLogs", () => {
   it("keeps the logs through a frame of the reply being written, and not once an event comes", () => {
-    const state: EventState = { events: turn, draft: "", final: false, streamed: new Set() }
+    const state: EventState = {
+      events: turn,
+      draft: "",
+      final: false,
+      streamed: new Set(),
+    }
     const of = (stream: EventState): SessionLog[] => [
       { id: "turn-1", events: stream.events, streamed: stream.streamed },
     ]
@@ -190,7 +195,9 @@ describe("sameLogs", () => {
     expect(writing.draft).toBe("Hel")
     expect(sameLogs(last, of(writing))).toBe(last)
     expect(sameLogs(last, of(logged))).not.toBe(last)
-    expect(sameLogs(last, [...of(writing), { id: "task-1", events: task }])).not.toBe(last)
+    expect(
+      sameLogs(last, [...of(writing), { id: "task-1", events: task }])
+    ).not.toBe(last)
     expect(sameLogs(undefined, last)).toBe(last)
   })
 })

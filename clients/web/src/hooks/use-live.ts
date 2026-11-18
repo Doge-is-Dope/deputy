@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react"
 
 import { api } from "@/lib/api"
 
-export type LiveState = "connecting" | "live" | "retrying"
+type LiveState = "connecting" | "live" | "retrying"
 
 // How long to wait for ICE candidates (the TURN server's included) before sending the offer anyway, and
 // before trying again after a connection fails.
@@ -58,7 +58,13 @@ export function useLive(iceServers: RTCIceServer[] | null) {
     if (servers === null) return
     let closed = false
     let timer = 0
-    const peer = new RTCPeerConnection({ iceServers: JSON.parse(servers) })
+    const ice: RTCIceServer[] = JSON.parse(servers)
+    // A TURN server means the runtime's own addresses can't be reached, so only its relay is offered: the browser's
+    // own addresses would be of no use, and its masked (.local) ones hold up the runtime's answer by a second.
+    const peer = new RTCPeerConnection({
+      iceServers: ice,
+      iceTransportPolicy: ice.length ? "relay" : "all",
+    })
     const retry = () => {
       if (closed) return
       closed = true
@@ -109,6 +115,9 @@ export function useLive(iceServers: RTCIceServer[] | null) {
     async function connect() {
       await peer.setLocalDescription(await peer.createOffer())
       await gathered(peer)
+      // Without a candidate (the TURN server out of reach) the connection would never fail, only wait.
+      if (!peer.localDescription!.sdp.includes("a=candidate:"))
+        throw new Error("no ICE candidates")
       const answer = await api.live(peer.localDescription!.sdp)
       if (!closed) await peer.setRemoteDescription(answer)
     }

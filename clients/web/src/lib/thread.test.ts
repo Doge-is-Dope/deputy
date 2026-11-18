@@ -1197,12 +1197,9 @@ describe("a question to the user", () => {
     expect(openQuestion(buildThread([event]))?.multiple).toBe(false)
   })
 
-  it("closes with the user's next message", () => {
-    expect(openQuestion(buildThread([asked(1), said]))).toBeUndefined()
-  })
-
-  it("keeps the answer with the question, not as a message of its own", () => {
+  it("closes with the user's next message and keeps the answer with the question", () => {
     const thread = buildThread([asked(1), said])
+    expect(openQuestion(thread)).toBeUndefined()
     expect(thread.items.map((item) => item.kind)).toEqual(["question"])
     expect(thread.items[0]).toMatchObject({
       answered: true,

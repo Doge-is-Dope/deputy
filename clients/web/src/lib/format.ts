@@ -283,19 +283,9 @@ export function formatDuration(seconds: number): string {
   return t().duration(minutes, total % 60)
 }
 
-// Each model the runtime offers (agent/usage.py's PRICES) as its maker names it.
-const MODEL_NAMES: Record<string, string> = {
-  "openai:gpt-6-luna": "GPT-6 Luna",
-  "openai:gpt-6.1-sol": "GPT-6.1 Sol",
-  "openai:gpt-6.1-terra": "GPT-6.1 Terra",
-  "anthropic:claude-haiku-5-5": "Claude Haiku 5.5",
-  "anthropic:claude-sonnet-5-5": "Claude Sonnet 5.5",
-  "anthropic:claude-opus-5-5": "Claude Opus 5.5",
-}
-
-/** A model's name from "provider:model"; one not listed above goes by its id, without the provider. */
-export const modelName = (spec: string) =>
-  MODEL_NAMES[spec] ?? spec.split(":").pop() ?? spec
+/** A model's name from the runtime's status; one it does not offer goes by its id, without the provider. */
+export const modelName = (spec: string, models: Status["models"] = []) =>
+  models.find(({ id }) => id === spec)?.name ?? spec.split(":").pop() ?? spec
 
 /** An agent's name as the settings show it; one the runtime adds goes by its own. */
 export function agentName(agent: string): string {

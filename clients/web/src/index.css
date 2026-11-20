@@ -108,6 +108,12 @@
   /* The user's message: a tint of the accent, light enough for the ink on it and for a selection in it to show. */
   --bubble: color-mix(in srgb, var(--theme-surface) 92%, var(--theme-accent));
   --sidebar: color-mix(in srgb, var(--theme-surface) 96%, var(--theme-ink));
+  /* The sidebar gradient's top: a trace of the accent's hue, a shade darker than the sidebar in any theme. */
+  --sidebar-top: color-mix(
+    in oklch,
+    var(--sidebar) 92%,
+    oklch(from var(--theme-accent) 0.9 c h)
+  );
   --sidebar-foreground: var(--theme-ink);
   /* A hovered or chosen row: half the accent of menus and buttons. */
   --sidebar-accent: color-mix(in srgb, var(--theme-ink) 5%, transparent);
@@ -161,6 +167,11 @@
   --selection: color-mix(in srgb, black 75%, var(--theme-accent));
   --bubble: color-mix(in srgb, var(--theme-surface) 87%, var(--theme-accent));
   --sidebar: color-mix(in srgb, var(--theme-surface) 84%, black);
+  --sidebar-top: color-mix(
+    in oklch,
+    var(--sidebar) 92%,
+    oklch(from var(--theme-accent) 0.1 c h)
+  );
   --sidebar-foreground: var(--theme-ink);
   --sidebar-accent: color-mix(in srgb, var(--theme-ink) 4%, transparent);
   --sidebar-accent-solid: color-mix(
@@ -201,9 +212,10 @@
     background-color: var(--selection);
   }
   /* Inherited by all text: long URLs wrap at the edge, and the caret takes the theme's accent. From md up the page is
-     a card on the sidebar's color, which is then the window's own: what a pull past the top shows too. */
+     a card on the sidebar's color, which is then the window's own: what a pull past the top shows too, tinted
+     toward the accent at the top. */
   body {
-    @apply bg-background text-foreground md:bg-sidebar;
+    @apply bg-background text-foreground md:bg-sidebar md:bg-linear-to-b md:from-(--sidebar-top) md:to-(--sidebar);
     overflow-wrap: break-word;
     caret-color: var(--theme-accent);
     /* Grayscale antialiasing: on a Mac the default subpixel smoothing makes text read a weight heavier than it is. */

@@ -151,17 +151,20 @@ def test_resume_without_runs_or_with_an_unknown_one_says_so(api, client, capsys)
     assert "No runs" in err and "gone cannot be continued" in err
 
 
-def test_approve_and_reject_answer_the_waiting_step_from_the_command_line(api, client, capsys):
+@pytest.mark.parametrize(("command", "options", "note", "label"), [
+    ("approve", [], "", "Approved"),
+    ("reject", ["--message", "  not yet "], "not yet", "Declined"),
+])
+def test_approve_and_reject_answer_the_waiting_step_from_the_command_line(api, client, capsys, command, options, note, label):
     waiting = {"approval": {"id": "c1", "consequence": "送出表單"}}
     api.on("GET", "/api/status", json_body=waiting)
-    api.on("POST", "/api/approval", json_body={"id": "c1", "decision": "reject"})
+    api.on("POST", "/api/approval", json_body={"id": "c1", "decision": command})
 
-    assert cli.main(["reject", "--message", "  not yet "], client) == 0
+    assert cli.main([command, *options], client) == 0
 
-    assert api.sent("POST", "/api/approval")[0]["body"] == {
-        "id": "c1", "decision": "reject", "message": "not yet", "by": "cli"
-    }
-    assert "Declined: 送出表單" in capsys.readouterr().out
+    request, = api.sent("POST", "/api/approval")
+    assert request["body"] == {"id": "c1", "decision": command, "message": note, "by": "cli"}
+    assert f"{label}: 送出表單" in capsys.readouterr().out
 
 
 def test_approving_when_nothing_waits_says_so(api, client, capsys):

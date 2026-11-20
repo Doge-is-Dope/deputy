@@ -11,6 +11,7 @@ import type {
 } from "@/lib/api"
 import { describeAction, formatDuration } from "@/lib/format"
 import { t } from "@/lib/i18n"
+import type { Messages } from "@/locales/zh-Hant"
 import type { Remembered } from "@/lib/memory"
 
 export type Step = {
@@ -168,16 +169,16 @@ const REMEMBER = "remember"
 const REMEMBERED = /^Remembered as (\S+?)\.?$/
 
 // The runtime's notes, as the conversation tells them in the interface's language.
-function note(event: NoteEvent): string {
+function note(event: NoteEvent, messages: Messages): string {
   const { code, data, text } = event
-  const notes = t().notes
+  const { notes } = messages
   switch (code) {
     case "userControl":
       return notes.userControl
     case "controlReturned":
       return data?.seconds === undefined
         ? text
-        : notes.controlReturned(formatDuration(data.seconds))
+        : notes.controlReturned(formatDuration(data.seconds, messages))
     case "interrupted":
       return data?.tool === undefined ? text : notes.interrupted(data.tool)
     case "stuck":
@@ -189,7 +190,7 @@ function note(event: NoteEvent): string {
     case "gone":
       return data?.seconds === undefined
         ? text
-        : notes.gone(formatDuration(data.seconds))
+        : notes.gone(formatDuration(data.seconds, messages))
     case "unusable":
       return notes.unusable
     case "runnerUnusable":
@@ -227,7 +228,7 @@ function optionsOf(value: unknown): QuestionOption[] {
   )
 }
 
-export function buildThread(events: RunEvent[]): Thread {
+export function buildThread(events: RunEvent[], messages = t()): Thread {
   const thread: Thread = {
     goal: null,
     attachments: [],
@@ -405,9 +406,9 @@ export function buildThread(events: RunEvent[]): Thread {
               text: rule.text,
             })
         } else if (work) {
-          work.entries.push({ kind: "note", key, text: note(event) })
+          work.entries.push({ kind: "note", key, text: note(event, messages) })
         } else {
-          add({ kind: "note", key, text: note(event) }, index)
+          add({ kind: "note", key, text: note(event, messages) }, index)
         }
         break
       }
@@ -509,6 +510,14 @@ export function buildThread(events: RunEvent[]): Thread {
         }
         work.entries.push({ kind: "step", key, step })
         open.set(work, step)
+        // finish_step with a reply ends the work with it (runtime middleware/subagent.py).
+        if (
+          call.name === FINISH_STEP &&
+          event.tool_calls.length === 1 &&
+          typeof call.args.reply === "string" &&
+          call.args.reply.trim()
+        )
+          work.result = call.args.reply.trim()
         break
       }
       case "action": {
@@ -610,7 +619,7 @@ export function buildThread(events: RunEvent[]): Thread {
         if (event.screenshot) {
           thread.screenshots.push({
             name: event.screenshot,
-            label: `#${event.n} ${describeAction(event.tool, event.args).label}`,
+            label: `#${event.n} ${describeAction(event.tool, event.args, messages.actions).label}`,
           })
         }
         break

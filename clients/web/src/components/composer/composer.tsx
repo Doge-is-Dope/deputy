@@ -21,6 +21,7 @@ import { AttachmentTiles, DropOverlay } from "@/components/attachments"
 import { AttachMenu } from "@/components/composer/attach-menu"
 import { ArrowUpIcon, PlusIcon, StopIcon } from "@/components/icons"
 import { preloadMarkdown } from "@/components/markdown/markdown"
+import { showError } from "@/components/notice"
 import { ScreenshotViewer } from "@/components/screenshot-viewer"
 import { useAttachments, useFileDrop } from "@/hooks/use-attachments"
 import { setDraft, useDraft } from "@/hooks/use-drafts"
@@ -239,7 +240,18 @@ export function Composer({
     setMenu(false)
     picker.current?.click()
   }
-  const dragging = useFileDrop(attachable, attachments.add)
+  // Files dropped, picked or pasted: whatever fails before they upload is said in a notice, as a failed upload is.
+  function attach(files: File[]) {
+    try {
+      attachments.add(files)
+    } catch (error) {
+      console.error(error)
+      showError(
+        t.composer.attachments.failed(files.map((file) => file.name).join(", "))
+      )
+    }
+  }
+  const dragging = useFileDrop(attachable, attach)
   const picker = useRef<HTMLInputElement>(null)
   // What the composer asks, in the row over its text: a step to approve, or the takeover the agent asks.
   const question = approval
@@ -545,7 +557,7 @@ export function Composer({
             multiple
             hidden
             onChange={(event) => {
-              attachments.add([...(event.target.files ?? [])])
+              attach([...(event.target.files ?? [])])
               event.target.value = ""
             }}
           />
@@ -580,7 +592,7 @@ export function Composer({
                 const pasted = [...event.clipboardData.files]
                 if (!attachable || pasted.length === 0) return
                 event.preventDefault()
-                attachments.add(pasted)
+                attach(pasted)
               }}
               placeholder={placeholder}
               autoFocus={autoFocus}

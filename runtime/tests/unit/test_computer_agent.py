@@ -12,6 +12,7 @@ from computer_use.prompts import notes
 from computer_use.prompts.computer import DESKTOP_BUSY, SYSTEM_PROMPT
 import computer_use.desktop.executor
 from computer_use.agent.inbox import Inbox
+from computer_use.middleware.subagent import SubagentMiddleware
 from computer_use.agent.history import tasks
 from conftest import SMALL
 from conftest import desktop_ended, run_turn, runs_dir
@@ -57,9 +58,10 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
 
     assert (result.reply, desktop_ended(result)) == ("Done.", "replied")
     assert handed_back(result)["reply"] == "Typed the note."
-    # A model may ignore the request for one call per turn; its calls then run at once, in no promised order.
-    assert computer.calls[0] == ("press", [["win"]]) and computer.calls[3] == ("type_text", "會議紀錄")
-    assert sorted(computer.calls[1:3]) == [("press", [["enter"]]), ("type_text", "notepad")]
+    # Desktop calls of one reply run in the order the model wrote them.
+    assert computer.calls[:4] == [
+        ("press", [["win"]]), ("type_text", "notepad"), ("press", [["enter"]]), ("type_text", "會議紀錄"),
+    ]
     actions = {event["id"]: event for event in logged(result, "action")}
     assert {call_id: event["status"] for call_id, event in actions.items()} == {
         "c1": "success", "c2": "success", "c3": "success", "c4": "error", "c5": "error", "c6": "success",
@@ -72,15 +74,40 @@ async def test_loop_executes_every_allowed_tool_call_of_a_turn(settings, compute
     assert '1. Open Start. -> key {"text": "win"} -> success' in computer_use_result(result)["result"]
 
 
-async def test_a_desktop_task_asks_for_one_tool_call_per_turn(settings, computer, monkeypatch):
+async def test_a_desktop_task_lets_the_model_send_several_calls_and_stops_after_one_fails(
+    settings, computer, monkeypatch,
+):
     computer_model, _ = use_script(monkeypatch, [
-        AIMessage(content="", tool_calls=[tool_call("c1", "key", text="win")]),
+        AIMessage(content="", tool_calls=[
+            tool_call("c1", "key", text="win"),
+            tool_call("c2", "key", text="ctrl+alt+delete"),  # refused
+            tool_call("c3", "type", text="notepad"),
+        ]),
         AIMessage(content="Opened Start."),
     ])
 
-    await run_turn(settings, "open start", max_steps=10, computer=computer)
+    result = await run_turn(settings, "open start", max_steps=10, computer=computer)
 
-    assert [binding.get("parallel_tool_calls") for binding in computer_model.bindings] == [False, False]
+    assert not any("parallel_tool_calls" in binding for binding in computer_model.bindings)
+    assert computer.calls == [("press", [["win"]])]
+    actions = {event["id"]: event for event in logged(result, "action")}
+    assert actions["c3"]["reason"] == "earlierFailed" and actions["c3"]["status"] == "error"
+    assert sorted(event["n"] for event in actions.values()) == [1, 2, 3]
+
+
+async def test_a_step_needing_approval_is_not_sent_with_other_calls(settings, computer, monkeypatch):
+    use_script(monkeypatch, [
+        AIMessage(content="", tool_calls=[
+            tool_call("c1", "key", text="win"),
+            tool_call("c2", "left_click", coordinate=[10, 10], needs_confirmation=True, consequence="送出"),
+        ]),
+        AIMessage(content="Stopped."),
+    ])
+
+    result = await run_turn(settings, "send it", max_steps=10, computer=computer)
+
+    actions = {event["id"]: event for event in logged(result, "action")}
+    assert actions["c2"]["reason"] == "batched" and computer.calls == [("press", [["win"]])]
 
 
 async def test_loop_runs_a_batch_as_one_tool_call(settings, computer, monkeypatch):
@@ -608,3 +635,39 @@ async def test_a_desktop_task_is_refused_at_once_while_the_desktop_is_down(setti
 def test_the_prompt_asks_for_updates_only_as_its_phases_change():
     """Without this rule the agent said nothing in 60 of 60 steps of a long task (2026-10-19)."""
     assert "user-visible update only when a major phase begins" in SYSTEM_PROMPT
+
+
+async def test_a_task_ends_on_finish_step_with_its_final_reply(settings, computer, monkeypatch):
+    computer_model, _ = use_script(monkeypatch, [
+        AIMessage(content="Opening Start.", tool_calls=[tool_call("c1", "key", text="win")]),
+        AIMessage(content="", tool_calls=[tool_call("c2", "finish_step", steps=["1"], reply="Start is open.")]),
+        AIMessage(content="never reached"),
+    ])
+
+    result = await run_turn(settings, "open start", max_steps=10, computer=computer)
+
+    assert len(computer_model.received) == 2  # no reply after the one finish_step carried
+    assert handed_back(result)["reply"] == "Start is open." and desktop_ended(result) == "replied"
+
+
+async def test_finish_step_without_a_reply_or_beside_another_call_goes_on(settings, computer, monkeypatch):
+    computer_model, _ = use_script(monkeypatch, [
+        AIMessage(content="", tool_calls=[tool_call("c1", "finish_step", steps=["1"])]),
+        AIMessage(content="", tool_calls=[
+            tool_call("c2", "key", text="win"), tool_call("c3", "finish_step", steps=["2"], reply="Done."),
+        ]),
+        AIMessage(content="Start is open."),
+    ])
+
+    result = await run_turn(settings, "open start", max_steps=10, computer=computer)
+
+    assert len(computer_model.received) == 3 and handed_back(result)["reply"] == "Start is open."
+
+
+def test_a_closing_finish_step_waits_while_the_main_agent_has_said_something_unread():
+    inbox = Inbox()
+    guard = SubagentMiddleware(log=None, inbox=inbox)
+    guard.last = AIMessage(content="", tool_calls=[tool_call("c1", "finish_step", steps=["1"], reply="Done.")])
+    assert guard.closes()
+    inbox.put("and save it as well")
+    assert not guard.closes()  # read first: the next model call hears it

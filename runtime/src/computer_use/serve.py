@@ -25,8 +25,13 @@ def build_parser() -> argparse.ArgumentParser:
 def open_to_anyone(settings: Settings, host: str) -> str | None:
     """Why the runtime will not serve with no sign-in on an address other machines can reach; None when it will.
     Setting CU_AUTH=none explicitly says the address is reachable only from this machine, as a container's port
-    published on the host's loopback address is."""
-    if settings.auth != "none" or loopback(host) or "auth" in settings.model_fields_set:
+    published on the host's loopback address is; it says nothing for a port published elsewhere (CU_BIND)."""
+    if settings.auth != "none":
+        return None
+    if not loopback(settings.bind):
+        return (f"Refusing to serve with no sign-in while CU_BIND={settings.bind} lets other machines in: set "
+                "CU_AUTH=token with CU_AUTH_TOKEN, or CU_AUTH=proxy behind a sign-in proxy.")
+    if loopback(host) or "auth" in settings.model_fields_set:
         return None
     return (f"Refusing to serve {host} with no sign-in: set CU_AUTH=token with CU_AUTH_TOKEN, or CU_AUTH=proxy behind a "
             "sign-in proxy; or CU_AUTH=none if only this machine can reach that address.")

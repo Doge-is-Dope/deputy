@@ -59,6 +59,13 @@ from the diff since the merge base with `main`, including untracked files. Use a
   runtime, run `uv run --project clients/cli computer-use status --idle` and stop if it fails. Never send input while
   the user has control. Other sessions may share this checkout: before committing, run `git branch --show-current`
   and `git log --oneline main..HEAD`, and stage only your own files.
+- **Test a regression you can name.** Describe a change that would break the promised behaviour and make the
+  assertion fail. Extend an existing case if it already exercises that path. Assert the result a caller can observe
+  (output, stored state or a request at a boundary). Check call counts or ordering when duplicates or reordering
+  would themselves be bugs. Exercise the real code under test and control its external dependencies.
+- **Synchronize on the behaviour under test.** For races, use an event or a controlled promise to hold one operation
+  while the other reaches the point being checked. Bound waits that could hang. When elapsed time is the feature,
+  control the clock where practical. Investigate intermittent failures before changing retries or timeout budgets.
 - **Unit tests stay offline**, loopback included (the `no_network` fixtures enforce it). Fake the transport and the
   clock. The explicitly marked `model` and `mongo` tests are exceptions; the default runtime checks exclude both.
   Setting `CU_TEST_MONGO_URL` enables the MongoDB contract tests, which create and drop temporary databases.

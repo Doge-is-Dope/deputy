@@ -375,29 +375,11 @@ export function AppSidebar({
     null
   )
   const [asking, setAsking] = useState(false)
-  const [scrolled, setScrolled] = useState(false) // the list scrolled down from its top
-  const [below, setBelow] = useState(false) // more of the list below, under the account row
+  const list = useRef<HTMLDivElement>(null)
   const [starting, setStarting] = useState(true) // the placeholder's delayed entrance still has its time to run
   useEffect(() => {
     const timer = window.setTimeout(() => setStarting(false), 500)
     return () => window.clearTimeout(timer)
-  }, [])
-  const list = useRef<HTMLDivElement>(null)
-  const rows = useRef<HTMLDivElement>(null) // everything in the list, which grows and folds within it
-  const measure = () => {
-    const at = list.current
-    if (!at) return
-    setScrolled(at.scrollTop > 0)
-    setBelow(at.scrollHeight - at.scrollTop - at.clientHeight > 1)
-  }
-  // Also as the list grows or folds, or the window changes, without a scroll: what it holds or the list resizing.
-  useEffect(() => {
-    const at = list.current
-    if (!at) return
-    const observer = new ResizeObserver(measure)
-    observer.observe(at)
-    if (rows.current) observer.observe(rows.current)
-    return () => observer.disconnect()
   }, [])
 
   useEffect(() => {
@@ -549,9 +531,8 @@ export function AppSidebar({
       <ResizableSidebar finalFocus={sheetFocus}>
         {/* The toggle sits on the page card's header line: 36px with its center 30px from the top, like the header's
             buttons. In the closed rail it is a 32px square like the commands under it, so their tooltips and hover marks
-            line up; the margins keep its icon, and the rows under it, where they were. New and search above the list. A
-            hairline under them shows while the list is scrolled, fading in and out, so the top of the list reads as
-            passing under them. */}
+            line up; the margins keep its icon, and the rows under it, where they were. New and search above the list,
+            which fades at an edge with more beyond it. */}
         <SidebarHeader className="relative pt-1 pb-2 md:pt-2.5">
           <SidebarTrigger className="m-0.5 size-9 transition-[width,height,margin] duration-300 ease-(--ease-drawer) group-data-[collapsible=icon]:my-1 group-data-[collapsible=icon]:ml-1 group-data-[collapsible=icon]:size-8 hover:bg-sidebar-accent hover:text-sidebar-accent-foreground dark:hover:bg-sidebar-accent" />
           <SidebarMenu className="gap-0.5">
@@ -573,13 +554,6 @@ export function AppSidebar({
               }}
             />
           </SidebarMenu>
-          <span
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute inset-x-0 bottom-0 h-px bg-sidebar-border transition-opacity duration-200 ease-(--ease-out) group-data-[collapsible=icon]:hidden motion-reduce:transition-none",
-              scrolled ? "opacity-100" : "opacity-0"
-            )}
-          />
         </SidebarHeader>
 
         <SidebarContent
@@ -588,13 +562,12 @@ export function AppSidebar({
           // them otherwise. The drag itself does not need them: dnd-kit's sensors listen on the document, and where
           // the row would land comes from the rows' rectangles, not from what is under the pointer.
           className={cn(
-            "overflow-x-hidden pt-2 group-data-[collapsible=icon]:*:hidden",
+            "scroll-fade overflow-x-hidden pt-2 group-data-[collapsible=icon]:*:hidden",
             (carried || sorting) && "pointer-events-none"
           )}
           ref={list}
-          onScroll={measure}
         >
-          <div ref={rows} className="flex flex-1 flex-col gap-4">
+          <div className="flex flex-1 flex-col gap-4">
             {notice && (
               // Alone in the list's space, so in the middle of it. As wide as the open sidebar, so while it opens the
               // edge uncovers the notice where it ends up, as it does the labels, instead of wrapping it anew each frame. The
@@ -741,16 +714,8 @@ export function AppSidebar({
           </div>
         </SidebarContent>
 
-        {/* Who is signed in, and the settings beside them, where signing out is too. Its hairline shows while more of
-            the list is below. */}
+        {/* Who is signed in, and the settings beside them, where signing out is too. */}
         <SidebarFooter className="relative overflow-hidden">
-          <span
-            aria-hidden
-            className={cn(
-              "pointer-events-none absolute inset-x-0 top-0 h-px bg-sidebar-border transition-opacity duration-200 ease-(--ease-out) group-data-[collapsible=icon]:hidden motion-reduce:transition-none",
-              below ? "opacity-100" : "opacity-0"
-            )}
-          />
           <SidebarMenu>
             <SidebarMenuItem>
               {/* The circle a size up from the icons above, its middle on theirs and the name where their words begin.

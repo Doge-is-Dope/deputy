@@ -13,7 +13,7 @@ from computer_use.agent.plan import Plan, PlanError, Step
 from computer_use.agent.trajectory import Trajectory
 from computer_use.prompts import notes
 from computer_use.prompts.main import (
-    ASK_QUESTION_TO_MAIN, ASK_TOOL, FINISH_STEP_TOOL, FINISHED_STEPS, PLAN_STEPS, READ_BLACKBOARD_TOOL, STEP_DONE,
+    ASK_QUESTION_TO_MAIN, ASK_TOOL, FINAL_REPLY, FINISH_STEP_TOOL, FINISHED_STEPS, PLAN_STEPS, READ_BLACKBOARD_TOOL, STEP_DONE,
     STEP_DONE_WHEN, STEP_ID, STEP_NEEDS, STEP_REOPEN, STEP_TITLE, WRITE_PLAN_TOOL,
 )
 from computer_use.tools.common import CallId
@@ -63,7 +63,10 @@ def task_tools(board: Blackboard, task_id: str, told: Inbox, log: Trajectory) ->
         return (await board.read(task_id)).text or notes.EMPTY_BOARD
 
     @tool(FINISH_STEP, description=FINISH_STEP_TOOL)
-    async def finish_step(steps: Annotated[list[str], Field(description=FINISHED_STEPS)]) -> str:
+    async def finish_step(
+        steps: Annotated[list[str], Field(description=FINISHED_STEPS)],
+        reply: Annotated[str | None, Field(description=FINAL_REPLY)] = None,  # ends the task (middleware.subagent)
+    ) -> str:
         unknown = board.plan.finish(steps)
         board.show(log)
         return notes.steps_finished(unknown)

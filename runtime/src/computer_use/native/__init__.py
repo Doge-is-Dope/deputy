@@ -18,3 +18,9 @@ class Channel(Protocol):
     a call for another is refused there rather than run."""
 
     async def call(self, method: str, target: dict | None = None, args: dict | None = None, *, timeout: float = 5) -> dict: ...
+
+    async def call_tool(self, name: str, target: dict | None, args: dict, *, timeout: float) -> dict:
+        """A tool the host lists by `name`, its result as the host returned it."""
+
+    async def tools(self, *, timeout: float = 5) -> list[dict]:
+        """The tools the host lists, as MCP describes them."""

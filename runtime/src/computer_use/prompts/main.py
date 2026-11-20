@@ -103,6 +103,10 @@ FINISH_STEP_TOOL = (
     "marks a step done for you. Do not report one you did not finish or that was called off."
 )
 FINISHED_STEPS = "The ids of the steps you have finished."
+FINAL_REPLY = (
+    "Only when these are your task's last steps and its work is checked: your final reply. Your task then ends with "
+    "it, so you need no further reply. Otherwise omit."
+)
 ASK_TOOL = (
     "Ask the main agent, when you disagree with the plan or your task, or are blocked and cannot decide without it. "
     "It stops your work until the main agent answers, which can take long if the user must decide. Try first, and ask "

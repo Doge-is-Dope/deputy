@@ -10,6 +10,7 @@ import json
 import socket
 import importlib.util
 import os
+import shutil
 import sys
 import tempfile
 import threading
@@ -376,6 +377,25 @@ async def test_the_coding_agent_keeps_only_its_latest_images(settings, computer,
     assert len(images) == 3  # as with screenshots: the oldest go five at a time, three at least stay
     opening = next(message for message in coder.received[0] if isinstance(message, HumanMessage))
     assert f"Your working folder is /workspace/{result.run}:" in opening.content  # so a file it made comes with its full path
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the runner is Linux")
+def test_a_folder_swapped_for_a_symlink_after_its_check_takes_no_write(server, tmp_path, monkeypatch):
+    server.write("t1", "sub/a.txt", "mine")
+    server.write("t2", "b.txt", "theirs")
+    inside = server.inside
+
+    def swapped(base, name):  # what a running command does between the check and the write
+        path = inside(base, name)
+        shutil.rmtree(tmp_path / "t1" / "sub")
+        os.symlink(tmp_path / "t2", tmp_path / "t1" / "sub")
+        return path
+
+    monkeypatch.setattr(server, "inside", swapped)
+    with pytest.raises(OSError):  # the handler says it in a 400
+        server.put("t1", "sub/b.txt", b"planted")
+    assert sorted(path.name for path in (tmp_path / "t2").iterdir()) == ["b.txt"]
+    assert (tmp_path / "t2" / "b.txt").read_text() == "theirs"
 
 
 @pytest.mark.skipif(sys.platform == "win32", reason="the runner is Linux")

@@ -8,28 +8,20 @@ import {
   PersonIcon,
   ShieldCheckIcon,
   SparkleIcon,
-  SunIcon,
 } from "@/components/icons"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { type Status } from "@/lib/api"
 import { useT } from "@/lib/i18n"
 import { closeSettings, useOpenedSettings } from "@/lib/settings"
 import { General } from "@/components/settings/general"
-import { Appearance } from "@/components/settings/appearance"
-import { Desktop } from "@/components/settings/desktop"
+import { Connections } from "@/components/settings/connections"
 import { Model } from "@/components/settings/model"
 import { Permissions } from "@/components/settings/permissions"
 import { Account } from "@/components/settings/account"
 import { MemoryPage } from "@/components/settings/memory"
 
 type SettingsPage =
-  | "general"
-  | "appearance"
-  | "desktop"
-  | "model"
-  | "permissions"
-  | "memory"
-  | "account"
+  "general" | "model" | "permissions" | "memory" | "connections" | "account"
 
 // Pages are named in the interface's language. A page is its entry here: its icon, and what it shows. The search
 // finds them by name too.
@@ -43,12 +35,11 @@ export const PAGES: {
   }>
 }[] = [
   { id: "general", icon: GearIcon, Content: General },
-  { id: "appearance", icon: SunIcon, Content: Appearance },
-  { id: "desktop", icon: MonitorIcon, Content: Desktop },
-  { id: "account", icon: PersonIcon, Content: Account },
   { id: "model", icon: SparkleIcon, Content: Model },
   { id: "permissions", icon: ShieldCheckIcon, Content: Permissions },
   { id: "memory", icon: MemoryIcon, Content: MemoryPage },
+  { id: "connections", icon: MonitorIcon, Content: Connections },
+  { id: "account", icon: PersonIcon, Content: Account },
 ]
 
 /** Browser settings for language, appearance, models, approvals and memory.

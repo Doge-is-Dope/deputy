@@ -22,7 +22,9 @@ A README or web page says what its author suggests, not what this computer has. 
 
 ## Changing an open document with a command
 
-A document open on the screen belongs to the app showing it. To change it with a command, attach to that running app and save it there: `[Runtime.InteropServices.Marshal]::GetActiveObject('Excel.Application')`, or `'Word.Application'`, then find the document among its open ones by name. A new instance (`New-Object -ComObject Excel.Application`) gets only a read-only copy of a file another instance holds, so what it writes never reaches the file. Check the change on the screen afterwards.
+To fill in or change more than a few cells or lines, a command is faster and surer than typing them into the app.
+
+A document open on the screen belongs to the app showing it. To change it with a command, reach that open document by its full path and save it there: `[Runtime.InteropServices.Marshal]::BindToMoniker('C:\full\path\file.xlsx')` returns the workbook (a Word file gives its document) in the app showing it. `GetActiveObject('Excel.Application')` fails with MK_E_UNAVAILABLE until a just-opened app has lost focus once. A new instance (`New-Object -ComObject Excel.Application`) gets only a read-only copy of a file another instance holds, so what it writes never reaches the file. Check the change on the screen afterwards.
 
 ## Screens that keep moving
 

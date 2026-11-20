@@ -81,6 +81,7 @@ class Executor:
         self.repeats = 0  # of those, the latest action and its repeats right before it
         self._last_unchanged: str | None = None  # that action, as JSON
         self.approved = False  # the next action was approved on the screen it was decided from (middleware.approvals)
+        self.unshown = False  # a call changed the screen without showing it; the next model call gets it first
         self._actions: dict[str, Callable[..., Awaitable[ActionResult]]] = {
             "screenshot": self._screenshot,
             "zoom": self._zoom,
@@ -109,8 +110,14 @@ class Executor:
     async def observe(self, note: str, shot: Shot | None = None) -> ActionResult:
         """A note and the screen (fresh unless given), which the model decides its next action from."""
         frame, self._seen = shot or await capture(self.computer)
-        self.shown, self.shown_at = frame, time.time()
+        self.shown, self.shown_at, self.unshown = frame, time.time(), False
         return ActionResult(True, describe(note, frame, await self.computer.status()), frame)
+
+    async def settled(self, seconds: float) -> Shot:
+        """The screen once a change since the one last shown has drawn, waited for at most `seconds`."""
+        if self._seen is None:
+            return await capture(self.computer)
+        return await settle(self.computer, self._seen, seconds)
 
     async def wait_for_connection(self) -> float | None:
         """Block while the desktop is disconnected and until its session has drawn; return how long it was gone, or
@@ -242,7 +249,8 @@ class Executor:
         after = shot[1]
         if await diff(now, after) < NOISE:
             # Windows panels can take seconds to open; without this the model repeats toggles like "win".
-            note += " The screen has not changed yet; it may still be loading. Use wait and look again before repeating it."
+            note += (" The screen has not changed yet. If you expected it to change, it may still be loading: look again "
+                     "before you repeat it.")
         result = replace(await self.observe(note, shot), judged=judged)
         return result if seen is None else replace(result, changed=await diff(seen, after) >= NOISE)
 

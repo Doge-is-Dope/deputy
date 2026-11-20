@@ -1,14 +1,12 @@
 // Each theme as the three colors it takes from its editor theme: the background (surface), the text (ink) and the
-// accent, for the modes it has. Every other color is worked out from these three (index.css). The default is the
+// accent, in light and in dark. Every other color is worked out from these three (index.css). The default is the
 // first; index.css starts from its colors too.
 
 export type Variant = "light" | "dark"
 
 export type Seed = { surface: string; ink: string; accent: string }
 
-export type Preset = { id: string; name: string | null } & Partial<
-  Record<Variant, Seed>
->
+export type Preset = { id: string; name: string | null } & Record<Variant, Seed>
 
 const seed = (surface: string, ink: string, accent: string): Seed => ({
   surface,
@@ -43,7 +41,13 @@ export const PRESETS: Preset[] = [
     light: seed("#fcfcfd", "#1b1b1b", "#5e6ad2"),
     dark: seed("#0f0f11", "#e3e4e6", "#606acc"),
   },
-  { id: "nord", name: "Nord", dark: seed("#2e3440", "#d8dee9", "#88c0d0") },
+  // Light: Nord's Snow Storm and Polar Night, with the darker Frost blue to read on it.
+  {
+    id: "nord",
+    name: "Nord",
+    light: seed("#eceff4", "#2e3440", "#5e81ac"),
+    dark: seed("#2e3440", "#d8dee9", "#88c0d0"),
+  },
   // Our own, for long reading: graphite ink on barely warm paper, softer than black on white (about 12:1 either way).
   {
     id: "paper",

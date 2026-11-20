@@ -4,13 +4,13 @@ version = "0.1.0"
 description = "A computer use agent that operates a Windows desktop"
 requires-python = ">=3.15"
 dependencies = [
-    "aiortc==1.15.0",
-    "langchain==1.4.7",
-    "langchain-anthropic==1.7.6",
-    "langchain-openai==1.7.2",
+    "aiortc==1.16.0",
+    "langchain==1.5.2",
+    "langchain-anthropic==1.7.12",
+    "langchain-openai==1.8.5",
     "pillow==13.0.0",
     "pydantic-settings==2.16.3",
-    "pymongo==4.20.0",
+    "pymongo==4.20.1",
     "pypdfium2==5.15.2",
     "python-xlib==0.33",
     "pyyaml==6.0.3",
@@ -22,14 +22,14 @@ dependencies = [
 computer-use-runtime = "computer_use.serve:main"
 
 [build-system]
-requires = ["uv_build>=0.13.5,<0.14.0"]
+requires = ["uv_build>=0.13.9,<0.14.0"]
 build-backend = "uv_build"
 
 [dependency-groups]
 dev = [
     "pytest==9.2.0",
     "pytest-asyncio==1.5.0",
-    "ruff==0.17.5",
+    "ruff==0.17.6",
 ]
 
 [tool.ruff.lint]

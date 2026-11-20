@@ -25,8 +25,9 @@ def launch(tmp_path):
         path.chmod(0o755)
 
     executable("hostname", "echo 127.0.0.1\n")
-    for name in ("turnserver", "Xvfb", "xdotool", "python", "rm"):
+    for name in ("Xvfb", "xdotool", "python", "rm"):
         executable(name, "exit 0\n")
+    executable("turnserver", 'printf "%s\\n" "$@" > "$CAPTURE/turn.args"\n')
     executable("xfreerdp3", '''
 printf "%s\\n" "$@" > "$CAPTURE/rdp.args"
 echo attempt >> "$CAPTURE/attempts"
@@ -36,6 +37,7 @@ exec sleep 30
 ''')
     executable("computer-use-runtime", '''
 test -n "$CU_TURN_PASSWORD"
+until [ -s "$CAPTURE/turn.args" ]; do sleep 0.01; done
 printf "%s\\n" "$@" > "$CAPTURE/api.args"
 echo "$$" > "$CAPTURE/api.pid"
 if [ "${EXPECT_RDP:-}" = 1 ]; then
@@ -76,6 +78,8 @@ def test_common_entrypoint_needs_no_rdp_configuration_and_execs_the_api(launch):
     assert (captured / "api.pid").read_text().strip() == str(pid)
     assert (captured / "api.args").read_text().splitlines() == ["--host", "0.0.0.0", "--port", "8123"]
     assert not (captured / "rdp.args").exists()
+    relay = (captured / "turn.args").read_text().splitlines()
+    assert "--no-tcp-relay" in relay  # a TCP relay would reach the API's port from the container's own address
 
 
 def test_rdp_launcher_prepares_the_shared_session_then_execs_the_common_entrypoint(launch):

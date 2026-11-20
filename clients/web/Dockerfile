@@ -1,6 +1,6 @@
 # The page, built once and served with /api passed on to the runtime.
 FROM node:24-slim AS build
-COPY --from=oven/bun:1.4.4 /usr/local/bin/bun /usr/local/bin/bun
+COPY --from=oven/bun:1.4.5 /usr/local/bin/bun /usr/local/bin/bun
 WORKDIR /web
 COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile

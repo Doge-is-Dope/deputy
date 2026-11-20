@@ -20,6 +20,7 @@ services:
       # Runs, projects and memories go to the mongo service (files under data/ are for running outside compose).
       - CU_DATABASE_URL=mongodb://runtime:${MONGO_RUNTIME_PASSWORD}@mongo/computer_use?replicaSet=rs0
       - CU_AUTH=${CU_AUTH:-none}  # said outright: none is safe only while CU_BIND is 127.0.0.1
+      - CU_BIND=${CU_BIND:-127.0.0.1}  # so the runtime refuses to start with none on any other address
       - CU_AUTH_TOKEN
       - CU_AUTH_HEADER
       - CU_AUTH_PROXIES

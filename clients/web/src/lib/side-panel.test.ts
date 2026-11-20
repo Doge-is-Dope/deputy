@@ -46,7 +46,8 @@ const line: Mark = {
   to: [9, 9],
 }
 const drawn = applied(EMPTY, [line])
-const openAll = (panel: Panel, source: Source) => opened(panel, source)
+const panelWith = (...files: Source[]) =>
+  files.reduce((panel, file) => opened(panel, file), CLOSED)
 const keys = (panel: Panel) => panel.files.map((each) => each.key)
 
 describe("opened", () => {
@@ -75,10 +76,7 @@ describe("opened", () => {
 })
 
 describe("closing a tab", () => {
-  const three = [sent("a.png"), sent("b.png"), sent("c.png")].reduce(
-    openAll,
-    CLOSED
-  )
+  const three = panelWith(sent("a.png"), sent("b.png"), sent("c.png"))
   const [a, b, c] = keys(three)
 
   it("chooses the one to its right, else its left, else the computer", () => {
@@ -169,13 +167,13 @@ describe("the computer and the panel", () => {
 
 describe("tiles sent or removed", () => {
   // Another conversation's tab, out of sight, between this one's.
-  const panel = [
+  const panel = panelWith(
     sent("a.png", "r1"),
     draft("k", "t1"),
     sent("b.png", "r9"),
     draft("j", "t1"),
-    draft("i", "t1"),
-  ].reduce(openAll, CLOSED)
+    draft("i", "t1")
+  )
   const [a, k, , j, i] = keys(panel)
   const shown = [a, k, j, i]
 
@@ -221,12 +219,12 @@ describe("tiles sent or removed", () => {
 })
 
 describe("what a conversation shows", () => {
-  const panel = [
+  const panel = panelWith(
     sent("a.png", "r1"),
     sent("b.png", "r9"),
     draft("k", "t1"),
-    draft("j", "t2"),
-  ].reduce(openAll, CLOSED)
+    draft("j", "t2")
+  )
 
   it("shows its messages' attachments and its own draft's tiles", () => {
     expect(shownFiles(panel, ["r1"], "t1").map((each) => each.key)).toEqual([

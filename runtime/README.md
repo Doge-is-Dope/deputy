@@ -20,7 +20,7 @@ The API server and the agents reach everything outside the runtime through six i
 ## How it works
 
 - **Agents.** The main agent answers, or starts background tasks (up to six, one on the desktop): `computer` uses the mouse and keyboard, `coding` runs code in the code runner, which has no network and no access to Windows.
-- **Windows Tools** (optional). The desktop agent can also run PowerShell with `run_command`. A running command stops when the user takes the desktop.
+- **Windows Tools** (optional). The desktop agent can also run PowerShell with `run_command`, and act on web pages in Chrome with `browser_*` tools when the host has them installed. A running command or browser call stops when the user takes the desktop; a stopped browser call closes that Chrome. The agent may send several calls in one reply: they run in the order it wrote them and stop at the first that fails. A browser call returns text; the screen follows once before the agent's next step.
 - **Takeover.** The user takes the desktop from the web live view or `computer-use takeover`; the agent asks for it for passwords, CAPTCHAs, administrator prompts and payments.
 - **Approvals.** A step the agent flags waits for the user's approval; **Settings → Permissions** can send it to an auto reviewer first.
 - **Models.** Defaults come from `.env` (`CU_MAIN_MODEL`, `CU_COMPUTER_MODEL`); **Settings → Model** overrides them.
@@ -47,13 +47,15 @@ The web page is at <http://localhost:8080> and the API at <http://localhost:8000
 
 ### Windows machine
 
-Optional: Windows Tools v0.3.1, for `run_command`.
+Optional: Windows Tools v0.3.1 or later, for `run_command`.
 
 1. On Windows, as the RDP account, run its `install-windows-tools.cmd` while no task runs and the live view is closed: the line it prints is the key to that computer.
 2. Put that line in `.env` as `WINDOWS_TOOLS_URL`.
 3. Run `docker compose up -d runtime`.
 
 **Settings → Desktop** shows whether it answers. With no **Windows commands** row there, the runtime has no URL: check `.env` and run step 3 again. To update, run the new release's installer: the line stays the same.
+
+For the browser tools, Windows Tools v0.4.0 or later: install Google Chrome, run its `install-browser-tools.ps1` as the same account, and restart the host. Each desktop task offers them once the host lists them. They drive a Chrome profile of their own, without the user's tabs or sign-ins.
 
 Also optional: Python with pypdf and openpyxl, for PDFs and spreadsheets. On Windows, as the RDP account:
 
@@ -78,7 +80,7 @@ runtime/
 │   ├── skills/           # Instructions an agent reads when needed, a folder for each agent
 │   ├── desktop/          # Screenshots, input and live view
 │   ├── computers/        # The desktop port and its RDP backend
-│   ├── native/           # Commands on Windows through the Windows Tools host
+│   ├── native/           # Commands and browser tools on Windows through the Windows Tools host
 │   ├── sandbox/          # The code runner client
 │   ├── storage/          # The run store: files or MongoDB
 │   ├── files/            # The file store: screenshots and attachments

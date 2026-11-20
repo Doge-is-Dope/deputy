@@ -21,7 +21,7 @@ from computer_use.desktop.executor import Executor
 from computer_use.desktop.screen import mark
 from computer_use.events import shown_args
 from computer_use.prompts.computer import BATCHED, TOOK_CONTROL, UNEXPLAINED, declined
-from computer_use.tools.common import not_executed
+from computer_use.tools.common import confirmation, not_executed
 
 MAX_DECLINES = 3
 
@@ -58,11 +58,17 @@ class Confirmations:
         approved it, or its arguments are wrong, which the tool itself reports without sending anything."""
         call = request.tool_call
         # A tool that takes the flag is one that can be held: the desktop's (actions.CONFIRMABLE) and any beside them.
-        if request.tool is None or "needs_confirmation" not in request.tool.tool_call_schema.model_fields:
+        schema = request.tool.tool_call_schema if request.tool is not None else {}
+        fields = schema.get("properties", {}) if isinstance(schema, dict) else schema.model_fields
+        if "needs_confirmation" not in fields:
             return None
         try:
-            args = request.tool.tool_call_schema.model_validate(call["args"]).model_dump()
-        except ValidationError:
+            if isinstance(schema, dict):  # a relayed tool's JSON schema, which validates nothing here
+                needed, consequence = confirmation(call["args"])
+                args = {**call["args"], "needs_confirmation": needed, "consequence": consequence}
+            else:
+                args = schema.model_validate(call["args"]).model_dump()
+        except (ValidationError, ValueError):
             return None
         if not args["needs_confirmation"]:
             return None

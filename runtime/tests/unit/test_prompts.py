@@ -70,6 +70,7 @@ RENDERS = [
     (memory.recalled, (RULES,)),
     (memory.handed, (RULES,)),
     (skills.section, ([("windows", "Starting apps on Windows.")],)),
+    *[(computer.system_prompt, (browser,)) for browser in (True, False)],
 ]
 
 

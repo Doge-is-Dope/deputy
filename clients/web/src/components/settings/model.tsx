@@ -16,7 +16,7 @@ import { type Choice, type Status } from "@/lib/api"
 import { chooseModel, resetModels, resolve, useChoices } from "@/lib/choices"
 import { agentName, effortName, modelName } from "@/lib/format"
 import { useT } from "@/lib/i18n"
-import { Card, Row, Section } from "@/components/settings/layout"
+import { Card, Group, Row, Section } from "@/components/settings/layout"
 
 // The agents whose models are chosen here, in this order: the main agent's are every other's default. One the runtime
 // adds is shown after them, by its own name.
@@ -43,8 +43,16 @@ export function Model({ status }: { status: Status | null }) {
     })
 
   return (
-    <>
-      <Section>
+    <Section>
+      <Group
+        title={t.settings.agents}
+        note={t.settings.agentsFollow}
+        action={
+          <Button variant="ghost" disabled={atDefaults} onClick={resetModels}>
+            {t.settings.resetModels}
+          </Button>
+        }
+      >
         <Card>
           {status &&
             order.map((agent) => {
@@ -62,7 +70,11 @@ export function Model({ status }: { status: Status | null }) {
                 </Row>
               )
             })}
-          {status?.title_model && (
+        </Card>
+      </Group>
+      {status?.title_model && (
+        <Group title={t.settings.other}>
+          <Card>
             <Row label={t.settings.titleGeneration}>
               <span className="inline-flex items-center gap-2 text-sm">
                 <ProviderIcon
@@ -75,20 +87,10 @@ export function Model({ status }: { status: Status | null }) {
                 </span>
               </span>
             </Row>
-          )}
-        </Card>
-      </Section>
-      {/* Beside the dialog's close button and level with it (8 down), placed against the dialog rather than this page,
-          so it stays there as the page scrolls. */}
-      <Button
-        variant="ghost"
-        className="absolute top-2 right-12"
-        disabled={atDefaults}
-        onClick={resetModels}
-      >
-        {t.settings.resetModels}
-      </Button>
-    </>
+          </Card>
+        </Group>
+      )}
+    </Section>
   )
 }
 

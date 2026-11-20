@@ -12,6 +12,14 @@ from computer_use.agent.inbox import SUBAGENT, Inbox
 from computer_use.agent.trajectory import Trajectory
 from computer_use.middleware.common import prune_screenshots
 from computer_use.prompts import notes
+from computer_use.tools.plan import FINISH_STEP
+
+
+def closing(message: AIMessage | None) -> str | None:
+    """The final reply a turn ended its task with: finish_step alone, with a reply (tools.plan)."""
+    calls = message.tool_calls if message is not None else []
+    reply = calls[0]["args"].get("reply") if len(calls) == 1 and calls[0]["name"] == FINISH_STEP else None
+    return reply.strip() or None if isinstance(reply, str) else None
 
 
 def read_before_ending(message: AIMessage, inbox: Inbox) -> dict | None:
@@ -32,7 +40,14 @@ class SubagentMiddleware(AgentMiddleware):
         self.last: AIMessage | None = None  # the agent's own latest turn; the closing messages below are not its own
         self.stopped: str | None = None  # why a guard ended the task, if it did
 
+    def closes(self) -> bool:
+        """Whether the agent's last turn ended its task (closing), with nothing the main agent said left to read."""
+        return closing(self.last) is not None and not self.inbox.unread(SUBAGENT)
+
+    @hook_config(can_jump_to=["end"])
     async def abefore_model(self, state, runtime) -> dict | None:
+        if self.closes():
+            return {"jump_to": "end"}
         sent = self.inbox.take(SUBAGENT)
         if not sent:
             return None

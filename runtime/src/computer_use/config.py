@@ -31,6 +31,8 @@ class Settings(BaseSettings):
     auth_token: SecretStr | None = None
     auth_header: str = "X-Forwarded-User"
     auth_proxies: str = "127.0.0.1/32,::1/128"
+    # The host address the deployment publishes the page and the live view on (compose.yaml's ports).
+    bind: str = "127.0.0.1"
 
     data_dir: Path = Path("data")
     # Runs, projects and memories: empty for files under data_dir, else a database URL whose scheme picks the store.

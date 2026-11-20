@@ -15,6 +15,7 @@ import { TrashIcon } from "@/components/icons"
 import { Button } from "@/components/ui/button"
 import { useAppearance } from "@/lib/appearance"
 import { useT } from "@/lib/i18n"
+import { randomId } from "@/lib/id"
 import {
   COLORS,
   MAX_SCALE,
@@ -345,7 +346,7 @@ export function MarkupStage({
       if (text)
         change([
           ...marks,
-          { id: crypto.randomUUID(), kind: "comment", at: note.at, text },
+          { id: randomId(), kind: "comment", at: note.at, text },
         ])
       return
     }
@@ -511,7 +512,7 @@ export function MarkupStage({
       return
     }
     const at = onPicture(event.clientX, event.clientY)
-    const id = crypto.randomUUID()
+    const id = randomId()
     if (tool === "pen")
       setLive({
         id,

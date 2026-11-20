@@ -163,9 +163,12 @@ async def test_stopping_a_run_while_it_waits_for_approval_sends_nothing(settings
     use_script(monkeypatch, [asking()])
     approvals = ApprovalFile(settings.approval_path)
 
+    async def asked():
+        while approvals.read() is None:
+            await asyncio.sleep(0.01)
+
     run = asyncio.create_task(run_turn(settings, "寄出週報", max_steps=10, computer=computer))
-    while approvals.read() is None:
-        await asyncio.sleep(0.01)
+    await asyncio.wait_for(asked(), timeout=20)
     run.cancel()
     with pytest.raises(asyncio.CancelledError):
         await run

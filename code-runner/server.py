@@ -172,11 +172,32 @@ def put(thread: str, path: str, data: bytes, source: str | None = None) -> dict:
         shown = str(target.relative_to(base.resolve()))
         if source is not None and current(thread, target, source):
             return {"path": shown, "bytes": target.stat().st_size, "written": False}
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        write_beneath(thread, shown, data)
         if source is not None:
             sources.setdefault(thread, {})[str(target)] = source
         return {"path": shown, "bytes": len(data), "written": True}
+
+
+def write_beneath(thread: str, name: str, data: bytes) -> None:
+    """Write a file in the conversation's folder by its checked path there, making its folders.
+
+    Like `read`, open each component relative to the preceding directory descriptor, following no symlink: a running
+    command that swaps a checked folder for a symlink has the write refused, not sent where the symlink leads.
+    """
+    *folders, last = name.split("/")
+    directory = os.open(WORKSPACE, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        for part in [thread, *folders]:
+            with contextlib.suppress(FileExistsError):
+                os.mkdir(part, dir_fd=directory)
+            child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=directory)
+            os.close(directory)
+            directory = child
+        flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW
+        with os.fdopen(os.open(last, flags, 0o666, dir_fd=directory), "wb") as file:
+            file.write(data)
+    finally:
+        os.close(directory)
 
 
 def stop(task: str) -> bool:

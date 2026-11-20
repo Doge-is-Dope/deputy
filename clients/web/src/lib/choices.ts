@@ -9,7 +9,7 @@ import { store } from "@/lib/store"
 /** A subagent's model or effort that is the main agent's, whatever that is (the runtime's config.FOLLOW). */
 const FOLLOW = "follow"
 const MAIN = "main"
-const LEVELS = EFFORTS.map((effort) => effort.id)
+const LEVELS: readonly string[] = EFFORTS
 
 /** By agent, the model and effort the user chose, a subagent's either FOLLOW; what is not here is as it starts. */
 export type Chosen = Record<string, Partial<Choice>>

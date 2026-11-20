@@ -1,7 +1,15 @@
 import { useState } from "react"
+import { cn } from "cn"
 import { Radio } from "@base-ui/react/radio"
 import { RadioGroup } from "@base-ui/react/radio-group"
 
+import { ChevronDownIcon } from "@/components/icons"
+import { FOLD } from "@/components/sidebar/motion"
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "@/components/ui/collapsible"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -11,12 +19,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
-import {
-  presetsFor,
   seedStyle,
   setColor,
   setMode,
@@ -29,7 +31,7 @@ import {
 } from "@/lib/appearance"
 import { PRESETS } from "@/lib/themes"
 import { useT } from "@/lib/i18n"
-import { Card, Row, Section } from "@/components/settings/layout"
+import { Card, Group, Row } from "@/components/settings/layout"
 
 const MODES: Mode[] = ["system", "light", "dark"]
 
@@ -131,22 +133,21 @@ function ThemeName({
   )
 }
 
-/** Light or dark, then the theme of the mode the page is in: a theme from the list, and its three colors one by
-    one. */
+/** Under its heading on the general page: light or dark, then the theme of the mode the page is in, a theme from the
+    list, and its three colors one by one. */
 export function Appearance() {
   const t = useT()
   const { mode, resolved, themes } = useAppearance()
   const choice = themes[resolved]
-  const presets = presetsFor(resolved)
   const colors: { role: ColorRole; label: string }[] = [
     { role: "accent", label: t.settings.accent },
     { role: "surface", label: t.settings.background },
     { role: "ink", label: t.settings.foreground },
   ]
   return (
-    <Section>
+    <Group title={t.settings.appearance}>
       <Card>
-        {/* The picture chosen is ringed, and each is named on hover. */}
+        {/* The picture chosen is ringed, each named under it. */}
         <Row label={t.settings.mode}>
           <RadioGroup
             aria-label={t.settings.mode}
@@ -155,32 +156,30 @@ export function Appearance() {
             className="grid grid-cols-3 gap-2 sm:flex sm:gap-3"
           >
             {MODES.map((value) => (
-              <Tooltip key={value}>
-                <TooltipTrigger
-                  render={
-                    <Radio.Root
-                      value={value}
-                      aria-label={t.settings.modes[value]}
-                      className="rounded-xl p-1 ring-2 ring-transparent transition-[box-shadow,scale] duration-150 ease-(--ease-out) outline-none not-data-checked:hover:ring-foreground/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-[0.97] data-checked:ring-link"
-                    />
-                  }
+              <label
+                key={value}
+                className="flex cursor-pointer flex-col gap-1.5 text-center text-xs text-muted-foreground has-data-checked:text-foreground"
+              >
+                {/* Named for itself too: the radio is not a native input, so the label around it does not name it. */}
+                <Radio.Root
+                  value={value}
+                  aria-label={t.settings.modes[value]}
+                  className="rounded-xl p-1 ring-2 ring-transparent transition-[box-shadow,scale] duration-150 ease-(--ease-out) outline-none not-data-checked:hover:ring-foreground/15 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring active:scale-[0.97] data-checked:ring-link"
                 >
                   <span className="block overflow-hidden rounded-lg ring-1 ring-foreground/10">
                     <ModePicture mode={value} themes={themes} />
                   </span>
-                </TooltipTrigger>
-                <TooltipContent>{t.settings.modes[value]}</TooltipContent>
-              </Tooltip>
+                </Radio.Root>
+                {t.settings.modes[value]}
+              </label>
             ))}
           </RadioGroup>
         </Row>
-      </Card>
-      <Card>
         <Row label={t.settings.theme}>
           <Select
             value={choice.id}
             onValueChange={(id) => {
-              const preset = presets.find((each) => each.id === id)
+              const preset = PRESETS.find((each) => each.id === id)
               if (preset) setTheme(resolved, preset)
             }}
           >
@@ -192,7 +191,7 @@ export function Appearance() {
               </SelectValue>
             </SelectTrigger>
             <SelectContent>
-              {presets.map((preset) => (
+              {PRESETS.map((preset) => (
                 <SelectItem key={preset.id} value={preset.id}>
                   <ThemeName
                     id={preset.id}
@@ -204,17 +203,26 @@ export function Appearance() {
             </SelectContent>
           </Select>
         </Row>
-        {colors.map(({ role, label }) => (
-          <Row key={role} label={label}>
-            <ColorField
-              label={label}
-              value={choice[role]}
-              onChange={(color) => setColor(resolved, role, color)}
-            />
-          </Row>
-        ))}
+        {/* The theme's three colors, one by one, folded away: most choose a theme and stop there. */}
+        <Collapsible>
+          <CollapsibleTrigger className="group flex min-h-14 w-full items-center justify-between gap-6 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+            {t.settings.customColors}
+            <ChevronDownIcon className="size-4 shrink-0 text-muted-foreground transition-[rotate] duration-200 ease-(--ease-out) group-data-panel-open:rotate-180 motion-reduce:transition-none" />
+          </CollapsibleTrigger>
+          <CollapsibleContent className={cn(FOLD, "divide-y border-t")}>
+            {colors.map(({ role, label }) => (
+              <Row key={role} label={label}>
+                <ColorField
+                  label={label}
+                  value={choice[role]}
+                  onChange={(color) => setColor(resolved, role, color)}
+                />
+              </Row>
+            ))}
+          </CollapsibleContent>
+        </Collapsible>
       </Card>
-    </Section>
+    </Group>
   )
 }
 

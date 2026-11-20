@@ -28,8 +28,11 @@ logger = logging.getLogger(__name__)
 # Capture on screen changes, capped by ownership mode; a fixed polling tick adds latency.
 WATCH_FPS = 30
 CONTROL_FPS = 60
-# Refresh quiet screens often enough to keep sparse updates moving through browser playback.
+# Resend a still screen often for a moment after it changes, which keeps sparse updates moving through browser
+# playback and lets the encoder sharpen the picture, then rarely: every resend is a full encode.
 KEEPALIVE_SECONDS = 0.1
+KEEPALIVE_RESENDS = 8
+IDLE_KEEPALIVE_SECONDS = 1.0
 TEXT_BATCH_SECONDS = 0.02
 CLOCK_RATE = 90_000  # RTP's video clock
 # Use a fixed bitrate on this local path: aiortc's REMB ramp repeatedly rebuilds the encoder.
@@ -41,7 +44,7 @@ for codec in (vpx, h264):
 
 class ScreenEncoder(vpx.Vp8Encoder):
     """aiortc's VP8 encoder with the settings libwebrtc uses to share a screen instead of aiortc's camera ones: no
-    noise reduction, which smears small text, and blocks that barely change are skipped. aiortc 1.15 keeps a codec
+    noise reduction, which smears small text, and blocks that barely change are skipped. aiortc 1.16 keeps a codec
     that is already open at the frame's size and bitrate, so this opens it with those settings."""
 
     def encode(self, frame: VideoFrame, force_keyframe: bool = False) -> tuple[list[bytes], int]:
@@ -96,6 +99,7 @@ class ScreenTrack(MediaStreamTrack):
         self.due = 0.0
         self.seen = 0  # the screen's change count at the last frame (Computer.next_change)
         self.image: Image.Image | None = None  # the last capture, sent again while the screen stays as it was
+        self.resends = 0  # times the last capture has been sent again
 
     async def recv(self) -> VideoFrame:
         changed = True
@@ -104,8 +108,10 @@ class ScreenTrack(MediaStreamTrack):
         else:
             self.due += 1 / (CONTROL_FPS if self.control.read().owner == "user" else WATCH_FPS)
             await asyncio.sleep(max(0.0, self.due - time.monotonic()))
-            seen, self.seen = self.seen, await self.computer.next_change(self.seen, KEEPALIVE_SECONDS)
+            wait = KEEPALIVE_SECONDS if self.resends < KEEPALIVE_RESENDS else IDLE_KEEPALIVE_SECONDS
+            seen, self.seen = self.seen, await self.computer.next_change(self.seen, wait)
             changed = self.seen != seen
+            self.resends = 0 if changed else self.resends + 1
             self.due = max(self.due, time.monotonic())  # a late frame does not set off a burst to catch up
         while changed or self.image is None:
             try:

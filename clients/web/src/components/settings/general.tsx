@@ -12,9 +12,10 @@ import {
   useT,
   type Language,
 } from "@/lib/i18n"
+import { Appearance } from "@/components/settings/appearance"
 import { Card, Row, Section } from "@/components/settings/layout"
 
-/** The interface's language: the browser's, or one named in itself. */
+/** The interface's language, the browser's or one named in itself; then its appearance. */
 export function General() {
   const t = useT()
   const { language } = useLanguage()
@@ -44,6 +45,7 @@ export function General() {
           </Select>
         </Row>
       </Card>
+      <Appearance />
     </Section>
   )
 }

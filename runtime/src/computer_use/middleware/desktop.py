@@ -1,6 +1,7 @@
 """A desktop task's guard: it holds steps that need approval, stops a task that is stuck, declined or disconnected,
 waits while the user has control, re-observes after either, and prunes old screenshots."""
 
+import asyncio
 from typing import Literal
 
 from langchain.agents.middleware import hook_config
@@ -14,12 +15,34 @@ from computer_use.events import NoteCode
 from computer_use.middleware.approvals import Confirmations
 from computer_use.middleware.subagent import SubagentMiddleware
 from computer_use.prompts import notes
-from computer_use.prompts.computer import DECIDE_AGAIN, disconnected_for, user_had_control
+from computer_use.prompts.computer import (
+    BATCHED, DECIDE_AGAIN, EARLIER_FAILED, SCREEN_NOW, disconnected_for, user_had_control,
+)
+from computer_use.tools.common import not_executed
 from computer_use.tools.desktop import content
 
 # Why this guard ended a task: its actions kept leaving the screen as it was, the desktop did not reconnect, or the user
 # declined MAX_DECLINES of its steps (middleware.approvals).
 Stop = Literal["stuck", "disconnected", "declined"]
+
+
+class Turn:
+    """One reply's calls, run one after another in the order the model sent them; one whose earlier call failed or did
+    not run does not run either."""
+
+    def __init__(self, calls: list[dict]):
+        loop = asyncio.get_running_loop()
+        self.ok = {call["id"]: loop.create_future() for call in calls}
+        self.before = dict(zip(self.ok, [None, *self.ok]))  # each call's id, the call right before it
+
+    async def ready(self, call: dict) -> bool:
+        """Wait for the call before this one; whether every call before it succeeded."""
+        before = self.before.get(call["id"])
+        return before is None or await self.ok[before]
+
+    def finish(self, call: dict, ok: bool) -> None:
+        if (done := self.ok.get(call["id"])) is not None and not done.done():
+            done.set_result(ok)
 
 
 class DesktopMiddleware(SubagentMiddleware):
@@ -42,6 +65,7 @@ class DesktopMiddleware(SubagentMiddleware):
         self.control = control
         self.web_url = web_url
         self.confirm = confirm
+        self.turn: Turn | None = None
 
     @hook_config(can_jump_to=["end"])
     async def abefore_model(self, state, runtime) -> dict | None:
@@ -49,6 +73,8 @@ class DesktopMiddleware(SubagentMiddleware):
         has control; after either, hand the model a fresh screen with what the main agent told it meanwhile. The
         desktop comes first: one that does not reconnect ends the task whoever has control. Once the user hands
         control back, wait for the desktop again: it may have gone meanwhile."""
+        if self.closes():
+            return {"jump_to": "end"}
         if self.executor.stuck:
             return await self.stop(f"Stopped: the last {self.executor.repeats} actions did not change the screen.", "stuck",
                              count=self.executor.repeats)
@@ -70,16 +96,38 @@ class DesktopMiddleware(SubagentMiddleware):
                 lost = await self.reconnect(changes) or lost
         except Disconnected as gone:
             return await self.stop(f"Stopped: {gone}.", "disconnected", seconds=gone.seconds)
-        if not changes:
+        if not changes and not self.executor.unshown:
             return await super().abefore_model(state, runtime)
         sent = self.inbox.take(SUBAGENT)
         self.executor.clear_unchanged()
-        note = " ".join([*changes, DECIDE_AGAIN])
+        note = " ".join([*changes, DECIDE_AGAIN]) if changes else SCREEN_NOW
         if sent:
             note = f"{notes.told([each.text for each in sent])}\n\n{note}"
         message = HumanMessage(content=content(await self.executor.observe(note)))
-        await self.log.input(message, "reconnected" if lost else "returned")
+        await self.log.input(message, ("reconnected" if lost else "returned") if changes else "observe")
         return {"messages": [message]}
+
+    @hook_config(can_jump_to=["model"])
+    async def aafter_model(self, state, runtime) -> dict | None:
+        message = state["messages"][-1]
+        self.turn = Turn(message.tool_calls) if isinstance(message, AIMessage) else None
+        return await super().aafter_model(state, runtime)
+
+    async def awrap_tool_call(self, request, handler):
+        call, turn, ok = request.tool_call, self.turn, False
+        try:
+            if not await turn.ready(call):
+                result = not_executed(call, EARLIER_FAILED, "earlierFailed")
+            elif len(turn.ok) > 1 and (call.get("args") or {}).get("needs_confirmation") is True:
+                result = not_executed(call, BATCHED, "batched")
+            else:
+                result = await super().awrap_tool_call(request, handler)
+                ok = getattr(result, "status", "success") != "error"
+                return result
+            await self.log.action(call, result)
+            return result
+        finally:  # one that was cancelled or failed lets the calls after it go, as not run
+            turn.finish(call, ok)
 
     async def reconnect(self, changes: list[str]) -> bool:
         """Wait for a disconnected desktop to come back, saying so in the log and in `changes`; whether it was gone.
@@ -102,11 +150,6 @@ class DesktopMiddleware(SubagentMiddleware):
         message = AIMessage(content=summary)
         await self.log.input(message, reason)
         return {"messages": [message], "jump_to": "end"}
-
-    async def awrap_model_call(self, request, handler):
-        # Calls of one turn run at once, but a desktop takes input in order; computer_batch is how to send several.
-        one_call = request.override(model_settings={**request.model_settings, "parallel_tool_calls": False})
-        return await super().awrap_model_call(one_call, handler)
 
     async def held(self, request) -> ToolMessage | None:
         """A step that needs the user's approval runs only once they give it; a refusal is its result, logged in its

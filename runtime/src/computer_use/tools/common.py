@@ -61,3 +61,11 @@ def not_executed(call: dict, reason: str, code: ActionReason) -> ToolMessage:
         content=f"Not executed: {reason}", tool_call_id=call["id"], name=call["name"], status="error",
         artifact={"reason": code},
     )
+
+
+def confirmation(args: dict) -> tuple[bool, str | None]:
+    """A JSON-schema tool's needs_confirmation and consequence, checked as a typed tool's would be."""
+    needed, consequence = args.get("needs_confirmation"), args.get("consequence")
+    if type(needed) is not bool or not isinstance(consequence, str | None):
+        raise ValueError("needs_confirmation must be true or false, and consequence text or null.")
+    return needed, consequence

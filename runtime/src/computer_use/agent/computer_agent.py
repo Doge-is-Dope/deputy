@@ -21,18 +21,23 @@ from computer_use.middleware.approvals import MAX_DECLINES, Confirmations
 from computer_use.middleware.chat import Mention
 from computer_use.middleware.desktop import DesktopMiddleware
 from computer_use.middleware.skills import SkillsMiddleware
+from computer_use.native import HostError
 from computer_use.native.execution import Commands
 from computer_use.native.lease import Lease
 from computer_use.prompts import notes
 from computer_use.prompts.computer import (
     ABOUT, DESKTOP_ASKED, DESKTOP_BUSY, DESKTOP_HANDED, FIRST_SCREEN, LAST_SCREEN, computer_in_use, desktop_offline,
-    SYSTEM_PROMPT, stopped, typed_on,
+    stopped, system_prompt, typed_on,
 )
 from computer_use.prompts.review import review_context
 from computer_use.storage import MAIN
 from computer_use.tools.common import image_block
 from computer_use.tools.desktop import content, desktop_tools, takeover_tool
-from computer_use.tools.native import command_tools
+from computer_use.tools.native import BROWSER_PREFIX, browser_tools, command_tools
+
+
+# The host lists its browser tools once their server has started, which takes seconds after the host itself starts.
+LIST_SECONDS = 35
 
 
 def text_entry_screens(events: Iterable[dict], limit: int = 2) -> list[tuple[int, str]]:
@@ -143,7 +148,7 @@ class ComputerAgent(Subagent):
             return await review_step(build_chat_model(reviewer, settings), context, step, png, sources)
 
         executor = Executor(self.computer, self.control, self.judge)  # fresh for each task, so nothing carries over
-        tools, guard = self._equipped(executor, told, review)
+        tools, guard = self._equipped(executor, told, review, await self._host_tools())
         try:
             if self.windows is not None:
                 await self.windows.start()
@@ -156,7 +161,7 @@ class ComputerAgent(Subagent):
             reply = await self.invoke(
                 build_chat_model(choice, settings),
                 tools,
-                SYSTEM_PROMPT, guard, start,
+                system_prompt(any(tool.name.startswith(BROWSER_PREFIX) for tool in tools)), guard, start,
                 middleware=[SkillsMiddleware(self.agent)],
             )
             return reply, await self._after(executor)
@@ -165,19 +170,30 @@ class ComputerAgent(Subagent):
             if self.windows is not None:
                 await self.windows.close()
 
+    async def _host_tools(self) -> list[dict]:
+        """The tools the Windows host lists; none when it does not answer, and the task goes on without them."""
+        if self.windows is None:
+            return []
+        try:
+            return await self.windows.channel.tools(timeout=LIST_SECONDS)
+        except HostError:
+            return []
+
     def _equipped(
         self, executor: Executor, told: Inbox, review: Callable[[str, bytes | None], Awaitable[Verdict]],
+        listed: list[dict],
     ) -> tuple[list[BaseTool], DesktopMiddleware]:
         """A task's tools, and the guard that holds, stops and re-observes around them."""
         settings = self.context.settings
         confirm = Confirmations(ApprovalFile(settings.approval_path), self.control, executor, self.log, review,
                                 lambda: self.approvals() == "auto")
-        commands = command_tools(Commands(self.windows, executor)) if self.windows else []
+        commands = Commands(self.windows, executor) if self.windows else None
+        native = [*command_tools(commands), *browser_tools(listed, commands)] if commands else []
 
         def announce(reason: str) -> None:
             self.log.note(f"Agent requests a takeover: {reason}\nOpen {settings.web_url}", "takeoverRequested")
 
-        tools = [*desktop_tools(executor), *commands, takeover_tool(self.control, self.computer, announce)]
+        tools = [*desktop_tools(executor), *native, takeover_tool(self.control, self.computer, announce)]
         return tools, DesktopMiddleware(executor, self.control, self.log, settings.web_url, confirm, told)
 
     async def _after(self, executor: Executor) -> ActionResult:

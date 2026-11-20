@@ -9,6 +9,8 @@ information would materially change the result.
 
 - Check tool results and available screenshots before deciding what to do next. If needed information is missing, \
 take a screenshot or zoom.
+- Calls you send in one reply run in the order you wrote them and stop at the first that fails. Send together only \
+calls that do not need each other's results.
 - During a multi-step task, send a one- or two-sentence user-visible update only when a major phase begins or a \
 finding changes the plan: say what you learned or completed and what comes next.
 - Interfaces can respond late. If an action's outcome is unclear, wait and inspect before retrying. Decide from \
@@ -39,6 +41,22 @@ message alone does not prove completion. Once the result is verified, finish wit
 be verified, say what remains uncertain. Unless a rule above requires stopping, try reasonable permitted alternatives \
 before reporting a blocker.
 """
+# Added when the browser tools are offered.
+BROWSER = """\
+- For web pages, prefer the browser_ tools over the mouse: they act on a page's elements directly, faster and more \
+surely. Open a page with browser_new_page, which starts Google Chrome when needed, read it with \
+browser_take_snapshot, and act on the element uids the snapshot shows. That Chrome has a profile of its own: it does \
+not see pages opened another way, nor the user's other tabs or sign-ins. When the user names another browser or a \
+page already open, use the screen. The needs_confirmation rules apply to these tools as to the mouse and keyboard. \
+They return text; the screen follows before your next step.
+"""
+
+
+def system_prompt(browser: bool) -> str:
+    """The instructions, with the browser part when its tools are offered."""
+    return SYSTEM_PROMPT + BROWSER if browser else SYSTEM_PROMPT
+
+
 # Its line in start_task's description.
 ABOUT = (
     "operates the Windows desktop you and the user share, with screenshots, mouse and keyboard: to inspect the screen "
@@ -85,6 +103,7 @@ def disconnected_for(seconds: float) -> str:
 
 # What to do with the fresh screen that comes after either.
 DECIDE_AGAIN = "This is the current screen; decide the next step from it."
+SCREEN_NOW = "The screen now, after the browser calls."
 
 
 def declined(note: str | None) -> str:
@@ -102,9 +121,10 @@ TOOK_CONTROL = (
     "the user took the desktop to handle this step themselves. When you get the screen back, check it: if the step "
     "is done, do not do it again; if it is still needed, ask again."
 )
+EARLIER_FAILED = "an earlier call in this reply failed, so this one was not run. Decide again from its result."
 BATCHED = (
-    "a step that needs the user's approval cannot be part of a batch. Do the other steps first, then send that step "
-    "in a call of its own."
+    "a step that needs the user's approval cannot be part of a batch or sent with other calls. Do the other steps "
+    "first, then send that step in a call of its own."
 )
 UNEXPLAINED = "say in consequence what this step will do, to whom or where, and any amount; then send it again."
 

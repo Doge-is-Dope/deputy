@@ -1,6 +1,9 @@
-"""Commands on Windows through the Windows Tools host: the transport, the lease and what the model is told."""
+"""Commands and browser tools on Windows through the Windows Tools host: the transport, the lease and what the
+model is told."""
 
+import asyncio
 import hashlib
+from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
@@ -9,16 +12,28 @@ from computer_use.adapters import build_windows_tools
 from computer_use.computers import Status
 from computer_use.config import RunChoices, Settings
 from computer_use.native import HostError
-from computer_use.native.execution import MAX_OUTPUT_CHARACTERS, Commands, report
+from computer_use.desktop.screen import capture
+from computer_use.native.execution import MAX_OUTPUT_CHARACTERS, PROGRAM_SECONDS, Commands, page_report, report
 from computer_use.native import lease as leases
 from computer_use.native.lease import Lease
 from computer_use.native.mcp import Connection, McpChannel, check_certificate
-from computer_use.tools.native import command_tools
+from computer_use.prompts.computer import BROWSER
+from computer_use.tools.native import browser_tools, command_tools
 
+from computer_use.desktop.control import ApprovalFile
 from conftest import run_turn, use_script
 
 TARGET = {"environmentGeneration": "g", "hostInstance": "h", "sessionId": 1, "controlEpoch": 1}
 RAN = {"state": "succeeded", "exitCode": 0, "error": None, "durationMs": 340, "output": "22\r\n", "outputTruncated": False}
+PAGE = {"content": [{"type": "text", "text": "Successfully clicked on the element"}]}
+FORM = {"type": "object", "properties": {"pageId": {"type": "number"}, "uid": {"type": "string"},
+        "includeSnapshot": {"type": "boolean"}, "filePath": {"type": "string"}}, "required": ["pageId", "uid"]}
+LISTED = [
+    {"name": "windows_exec_run", "inputSchema": {"type": "object"}},
+    {"name": "browser_click", "description": "Clicks on the provided element", "inputSchema": FORM},
+    {"name": "browser_take_snapshot", "description": "Take a text snapshot", "inputSchema": FORM},
+    {"name": "browser_take_screenshot", "description": "Take a screenshot", "inputSchema": FORM},
+]
 
 
 class Host:
@@ -28,6 +43,7 @@ class Host:
         self.calls: list[tuple[str, dict | None, dict | None]] = []
         self.fail: HostError | None = None
         self.result = RAN
+        self.listed = LISTED[:1]
 
     async def call(self, method, target=None, args=None, *, timeout=5):
         self.calls.append((method, target, args))
@@ -36,6 +52,16 @@ class Host:
         if method == "exec.run":
             return self.result
         return {"target": TARGET, "controlOwner": "human" if method == "control.takeover" else "agent"}
+
+    async def call_tool(self, name, target, args, *, timeout):
+        self.calls.append((name, target, args))
+        if self.fail:
+            raise self.fail
+        return PAGE
+
+    async def tools(self, *, timeout=5):
+        self.calls.append(("tools/list", None, None))
+        return self.listed
 
     def sent(self) -> list[str]:
         return [method for method, _, _ in self.calls]
@@ -249,7 +275,148 @@ async def test_a_task_has_commands_unless_the_user_turned_them_off(settings, com
         return {tool.name for tool in model.bindings[0]["tools"]}
 
     assert "run_command" in await offered()
-    assert host.sent() == ["describe", "control.resume", "control.takeover"]
+    assert host.sent() == ["tools/list", "describe", "control.resume", "control.takeover"]
     host.calls.clear()
     assert "run_command" not in await offered(choices=RunChoices(commands=False))
     assert not host.calls
+
+
+def test_a_channel_lists_the_hosts_tools_and_calls_one_by_its_name():
+    posted = []
+
+    def post(path, body, timeout):
+        posted.append(body)
+        if body["method"] == "tools/list":
+            return {"id": body["id"], "result": {"tools": LISTED}}
+        if body["method"] == "tools/call":
+            return {"id": body["id"], "result": {"structuredContent": {"id": "x", "result": PAGE, "error": None}}}
+        return {"id": body.get("id"), "result": {}}
+
+    async def both():
+        channel = McpChannel(post)
+        return await channel.tools(), await channel.call_tool("browser_click", TARGET, {"uid": "1_2"}, timeout=5)
+
+    assert asyncio.run(both()) == (LISTED, PAGE)
+    assert posted[-1]["params"] == {"name": "browser_click", "arguments": {"uid": "1_2"}, "_meta": {"windows-tools/target": TARGET}}
+
+
+def test_only_the_offered_browser_tools_are_given_and_those_that_act_ask_like_other_input(executor, control):
+    tools = {tool.name: tool.tool_call_schema for tool in browser_tools(LISTED, commands(Host(), control, executor)[0])}
+    assert set(tools) == {"browser_click", "browser_take_snapshot"}
+    click, snapshot = tools["browser_click"], tools["browser_take_snapshot"]
+    assert "needs_confirmation" in click["required"] and "consequence" in click["properties"]
+    assert "needs_confirmation" not in snapshot["properties"]
+    assert "filePath" not in click["properties"] and click["required"] == ["pageId", "uid", "needs_confirmation"]
+
+
+async def test_a_browser_call_goes_to_the_host_without_the_flags_and_says_what_the_page_did(executor, control):
+    host = Host()
+    run, lease = commands(host, control, executor)
+    [click, _] = browser_tools(LISTED, run)
+    await lease.step()
+    args = {"pageId": 1, "uid": "1_2", "includeSnapshot": None, "needs_confirmation": False, "consequence": None}
+    runtime = SimpleNamespace(tool_call_id="c1")  # what the agent's tool node passes
+    message = await click.coroutine(runtime, **args)
+    assert host.calls[-1] == ("browser_click", TARGET, {"pageId": 1, "uid": "1_2"})
+    # The text alone: the screen comes once before the next model call.
+    assert message.status == "success" and message.content == "Successfully clicked on the element"
+    assert executor.unshown
+    host.fail = HostError("cancelled", "Stopped: the desktop changed hands.")
+    lost = await click.coroutine(runtime, **args)
+    assert "Outcome unknown" in lost.content and "its pages are gone" in lost.content
+    bad = await click.coroutine(runtime, pageId=1, uid="1")
+    assert bad.status == "error" and bad.content.startswith("Not executed") and len(host.calls) == 4
+
+
+def test_a_page_report_keeps_the_start_and_says_when_a_call_failed():
+    assert page_report(PAGE) == "Successfully clicked on the element"
+    assert page_report({"content": [], "isError": True}).startswith("The browser call failed.")
+    long = page_report({"content": [{"type": "text", "text": "start" + "x" * MAX_OUTPUT_CHARACTERS}]})
+    assert long.startswith("start") and long.endswith("(Only the start is shown.)")
+
+
+async def test_a_browser_step_that_commits_waits_for_the_users_approval(settings, computer, control, monkeypatch):
+    host = Host()
+    host.listed = LISTED
+    windows = Lease(host, control)
+    args = {"pageId": 1, "uid": "2_27", "needs_confirmation": True, "consequence": "送出訂單"}
+    call = AIMessage(content="", tool_calls=[{"id": "c1", "name": "browser_click", "args": args, "type": "tool_call"}])
+    model, _ = use_script(monkeypatch, [call, AIMessage(content="Submitted.")])
+    approvals = ApprovalFile(settings.approval_path)
+
+    async def approve():
+        while (pending := approvals.read()) is None:
+            await asyncio.sleep(0.01)
+        assert "browser_click" not in host.sent()
+        approvals.decide(pending.id, "approve", "", "web")
+
+    user = asyncio.create_task(approve())
+    await asyncio.wait_for(run_turn(settings, "submit the order", max_steps=5, computer=computer, windows=windows), 20)
+    await user
+    assert ("browser_click", TARGET, {"pageId": 1, "uid": "2_27"}) in host.calls
+    assert BROWSER in model.received[0][0].text
+
+
+async def test_browser_calls_of_one_reply_run_in_order_stop_at_a_failure_and_the_screen_follows_once(
+    settings, computer, control, monkeypatch,
+):
+    host = Host()
+    host.listed = LISTED
+    failed = {"content": [{"type": "text", "text": "No such element"}], "isError": True}
+
+    async def call_tool(name, target, args, *, timeout):
+        host.calls.append((name, target, args))
+        return failed if args["uid"] == "bad" else PAGE
+
+    host.call_tool = call_tool
+    clicks = [
+        {"id": f"c{n}", "name": "browser_click", "type": "tool_call",
+         "args": {"pageId": 1, "uid": uid, "needs_confirmation": False}}
+        for n, uid in enumerate(("1_2", "bad", "1_3"))
+    ]
+    model, _ = use_script(monkeypatch, [AIMessage(content="", tool_calls=clicks), AIMessage(content="Done.")])
+    await asyncio.wait_for(run_turn(settings, "click", max_steps=5, computer=computer, windows=Lease(host, control)), 20)
+    assert [args["uid"] for name, _, args in host.calls if name == "browser_click"] == ["1_2", "bad"]
+    second = model.received[1]
+    assert sum("after the browser calls" in message.text for message in second) == 1
+
+
+
+async def test_a_command_that_opens_a_window_is_shown_once_it_has_drawn(executor, control, monkeypatch):
+    host = Host()
+    run, lease = commands(host, control, executor)
+    await lease.step()
+    waited = []
+
+    async def settled(seconds):
+        waited.append(seconds)
+        return await capture(executor.computer)
+
+    monkeypatch.setattr(executor, "settled", settled)
+    await run.run("hostname", 30)
+    assert waited == []  # a command that starts nothing is shown at once
+    result = await run.run("Start-Process notepad", 30, opens=True)
+    assert waited == [PROGRAM_SECONDS] and result.ok and result.frame is not None
+
+
+async def test_opening_a_page_brings_its_snapshot(executor, control):
+    host = Host()
+    run, lease = commands(host, control, executor)
+    opened = {"content": [{"type": "text", "text": "## Pages\n1: about:blank\n2: https://example.com [selected]"}]}
+    snapshot = {"content": [{"type": "text", "text": "## Latest page snapshot\nuid=2_0 RootWebArea"}]}
+    replies = iter([opened, snapshot])
+
+    async def call_tool(name, target, args, *, timeout):
+        host.calls.append((name, target, args))
+        return next(replies)
+
+    host.call_tool = call_tool
+    listed = [{"name": "browser_new_page", "description": "Open a page", "inputSchema": {
+        "type": "object", "properties": {"url": {"type": "string"}}, "required": ["url"]}}]
+    [new_page] = browser_tools(listed, run)
+    assert "The page's snapshot comes with the result." in new_page.description
+    await lease.step()
+    message = await new_page.coroutine(SimpleNamespace(tool_call_id="c1"), url="https://example.com",
+                                       needs_confirmation=False)
+    assert [call[0] for call in host.calls[-2:]] == ["browser_new_page", "browser_take_snapshot"]
+    assert host.calls[-1][2] == {"pageId": 2} and "RootWebArea" in message.content

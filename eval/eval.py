@@ -11,6 +11,7 @@ import io
 import json
 import re
 import shutil
+import signal
 import statistics
 import subprocess
 import sys
@@ -215,6 +216,13 @@ def version_server(code: str):
         if (status := served.status())["active"] or status["running"]:
             raise SystemExit(f"the server on port {EVAL_PORT} has a run going, perhaps another eval's; let it end first")
     stop_server()
+    # One no pidfile names would answer for this version, which then could not take the port.
+    try:
+        served.status()
+    except ApiError:
+        pass
+    else:
+        raise SystemExit(f"a server no eval started holds port {EVAL_PORT}; stop it first")
     serve = f"echo $$ > {SERVER_PID}; exec python -m computer_use.serve --host 0.0.0.0 --port {EVAL_PORT} " \
             f">{SERVER_LOG} 2>&1"
     compose("sh", "-c", serve, timeout=60, env={"PYTHONPATH": code}, detach=True)
@@ -755,6 +763,8 @@ def main() -> None:
     what.add_argument("--close", action="store_true", help="close what is open WITHOUT SAVING, by an agent run")
     what.add_argument("--accept", action="store_true", help="make the current screen the clean desktop")
     args = parser.parse_args()
+    # Stopped from outside, it still stops the server it started (version_server), which would hold the port.
+    signal.signal(signal.SIGTERM, lambda *_: sys.exit(143))
     {"run": cmd_run, "serve": cmd_serve, "report": cmd_report, "tasks": cmd_tasks, "reset": cmd_reset}[args.command](args)
 
 

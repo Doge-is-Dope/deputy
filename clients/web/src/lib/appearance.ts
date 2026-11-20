@@ -3,7 +3,6 @@ import { type CSSProperties } from "react"
 import { store } from "@/lib/store"
 import {
   DEFAULT_THEME,
-  PRESETS,
   type Preset,
   type Seed,
   type Variant,
@@ -31,7 +30,7 @@ const systemDark = matchMedia("(prefers-color-scheme: dark)")
 
 const defaultChoice = (variant: Variant): ThemeChoice => ({
   id: DEFAULT_THEME.id,
-  ...DEFAULT_THEME[variant]!,
+  ...DEFAULT_THEME[variant],
 })
 
 const isChoice = (value: unknown): value is ThemeChoice => {
@@ -129,9 +128,9 @@ function setChoice(variant: Variant, choice: ThemeChoice) {
   apply(mode, { ...themes, [variant]: choice })
 }
 
-/** Start a mode's theme over from one of the list, which has that mode. */
+/** Start a mode's theme over from one of the list. */
 export function setTheme(variant: Variant, preset: Preset) {
-  setChoice(variant, { id: preset.id, ...preset[variant]! })
+  setChoice(variant, { id: preset.id, ...preset[variant] })
 }
 
 /** Change one of a mode's three colors; the theme keeps its name. */
@@ -150,9 +149,5 @@ function isDefault(choice: ThemeChoice, variant: Variant) {
     choice.accent === start.accent
   )
 }
-
-/** The themes there are for a mode. */
-export const presetsFor = (variant: Variant) =>
-  PRESETS.filter((preset) => preset[variant])
 
 export const useAppearance = appearance.use

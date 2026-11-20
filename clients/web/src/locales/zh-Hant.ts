@@ -2,6 +2,7 @@
 // shape (Messages), so one missing a word fails to compile.
 
 import type { ErrorCode, ModelUnavailable } from "@/lib/api"
+import type { Effort } from "@/lib/efforts"
 
 // Which way a scroll goes, as the phrase puts it.
 const SCROLL: Record<string, string> = {
@@ -80,6 +81,10 @@ export const zhHant = {
     // A project's menu: the rules the agent keeps for its conversations only, in a dialog titled with its name.
     projectMemory: "記憶",
     projectMemoryTitle: (project: string) => `${project} 的記憶`,
+    projectMemoryNote: "只用在這個專案的對話。",
+    projectMemoryEmpty: "這個專案還沒有記住任何規則",
+    projectMemoryEmptyHint:
+      "在這個專案的對話裡糾正、拒絕或接管，agent 會記下只用在這裡的規則。",
     deleteProject: "刪除",
     deleteProjectAsk: (project: string) => `刪除 ${project} 與其中所有對話？`,
     resize: "調整側欄寬度",
@@ -467,11 +472,11 @@ export const zhHant = {
     general: "一般",
     account: "帳號",
     userId: "使用者 ID",
-    signInNone: "只限這台電腦",
+    signInNone: "本機使用，不需登入",
     signInToken: "存取權杖",
     signInProxy: "登入代理",
     appearance: "外觀",
-    desktop: "桌面",
+    connections: "連線",
     model: "模型",
     language: "語言",
     autoLanguage: "自動偵測",
@@ -482,13 +487,15 @@ export const zhHant = {
     // A theme's three colors: the accent, the surface (background) and the ink (foreground).
     accent: "強調色",
     background: "背景",
-    foreground: "前景",
+    foreground: "文字",
+    customColors: "自訂顏色",
     windowsDesktop: "Windows 桌面",
     codeRunner: "程式執行環境",
     windowsCommands: "Windows 指令",
+    windows: "Windows",
     runCommands: {
-      label: "讓 agent 執行指令",
-      description: "搜尋檔案等工作，通常比逐步點選更快、更穩定",
+      label: "允許執行 Windows 指令",
+      description: "搜尋檔案等工作，通常比點選畫面更快、更穩定",
     },
     connected: "已連線",
     disconnected: "未連線",
@@ -496,36 +503,50 @@ export const zhHant = {
     mainAgent: "主 agent",
     computerAgent: "電腦 agent",
     codingAgent: "程式 agent",
-    titleGeneration: "標題生成",
+    agents: "Agent",
+    agentsFollow: "電腦和程式 agent 沒有另外設定時，跟主 agent 一樣。",
+    other: "其他",
+    titleGeneration: "對話標題",
     effort: "推理強度",
+    efforts: {
+      none: "無",
+      minimal: "最小",
+      low: "低",
+      medium: "中",
+      high: "高",
+      xhigh: "極高",
+      max: "最高",
+    } satisfies Record<Effort, string>,
     byDefault: "（預設）",
     modelUnavailable: { no_api_key: "未設定 API key" } satisfies Record<
       ModelUnavailable,
       string
     >,
-    resetModels: "重設",
+    resetModels: "恢復預設",
     // The memory page: what the agent learned from the user's interventions (lib/memory.ts), and its two switches, one
     // for writing and one for reading.
     memory: "記憶",
     memoryModes: {
       learn: {
         label: "從我的糾正中學習",
-        description: "你糾正、拒絕或接管時，記下規則",
+        description: "你糾正、拒絕或接管時，記下一條規則",
       },
       use: {
         label: "使用記憶",
-        description: "遵守記住的規則",
+        description: "做事時遵守記住的規則",
       },
     },
     resetMemory: "刪除全部記憶",
     resetMemoryAsk: "要刪除所有記憶嗎？",
-    resetMemoryDetail: "無法復原。",
-    memoryEmpty: "還沒有記憶。",
+    resetMemoryDetail: "專案的記憶不受影響。這個動作無法復原。",
+    memoryEmpty: "還沒有記住任何規則",
+    memoryEmptyHint: "你糾正、拒絕或接管時，agent 會記下一條規則，之後照著做。",
+    memoryRules: "記住的規則",
     memoryLoadFailed: "無法載入記憶。",
     memoryRule: "規則",
     memoryWhy: "原因",
     memoryApplies: "適用於",
-    memoryFrom: "來源",
+    memoryFrom: "學自",
     memorySource: "對話",
     editMemory: "編輯",
     memoryDeleted: "已刪除記憶",
@@ -535,15 +556,15 @@ export const zhHant = {
     // How a step the agent flags for approval is answered (agent/review.py), each with one general line and no
     // examples. Both name the same steps, the risky ones the agent flags
     // (computer_agent.py), so the lines differ only in who decides.
-    approvals: "執行前確認",
+    approvals: "有風險的操作",
     approvalModes: {
       ask: {
         label: "每次問我",
-        description: "有風險的操作全部先詢問",
+        description: "每一次都等你核准",
       },
       auto: {
         label: "自動審查",
-        description: "有風險的操作先由 AI 審查，必要時才詢問",
+        description: "AI 先審查，必要時才問你",
       },
     },
   },

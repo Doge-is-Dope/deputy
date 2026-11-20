@@ -1,7 +1,12 @@
-import { useEffect, useRef, useState, type ReactNode } from "react"
+import { useEffect, useRef, useState } from "react"
 import { cn } from "cn"
 
-import { ChevronDownIcon, PencilIcon, TrashIcon } from "@/components/icons"
+import {
+  EllipsisIcon,
+  MemoryIcon,
+  PencilIcon,
+  TrashIcon,
+} from "@/components/icons"
 import { memoryDeleted, memoryFailed } from "@/components/memory/notices"
 import { FOLD } from "@/components/sidebar/motion"
 import { Button } from "@/components/ui/button"
@@ -10,14 +15,16 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import { Input } from "@/components/ui/input"
 import {
-  Tooltip,
-  TooltipContent,
-  TooltipTrigger,
-} from "@/components/ui/tooltip"
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
+import { Input } from "@/components/ui/input"
 import { api, MAX_PAGE } from "@/lib/api"
 import { nameOf } from "@/lib/conversations"
+import { timeAgo } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import {
   editMemory,
@@ -27,18 +34,18 @@ import {
 } from "@/lib/memory"
 import { runHref } from "@/lib/route"
 
-/** Rules as a plain list, no card: a line between them, each one line until opened (MemoryRow); `item` opened at,
- * from the conversation. Their source conversations named as the sidebar names them, generically until known. */
+/** The rules, one row each: its rule and, muted under it, when it applies and when it was learned; `item` opened at,
+ * from the conversation. Rows only: where they are shown draws the lines between them (a settings card, the project's
+ * dialog). Their source conversations named as the sidebar names them, generically
+ * until known. */
 export function MemoryList({
   memories,
   item,
   onClose,
-  className,
 }: {
   memories: Memory[]
   item: string | null
   onClose?: () => void
-  className?: string
 }) {
   const [titles, setTitles] = useState(new Map<string, string>())
   useEffect(() => {
@@ -49,24 +56,31 @@ export function MemoryList({
       () => {}
     )
   }, [])
+  return memories.map((memory) => (
+    <MemoryRow
+      key={memory.id}
+      memory={memory}
+      source={titles.get(memory.source.thread)}
+      focused={item === memory.id}
+      onClose={onClose}
+    />
+  ))
+}
+
+/** No rules yet, where they would be: what it holds, and how a rule comes. */
+export function MemoryEmpty({ title, hint }: { title: string; hint: string }) {
   return (
-    <div className={cn("divide-y px-1", className)}>
-      {memories.map((memory) => (
-        <MemoryRow
-          key={memory.id}
-          memory={memory}
-          source={titles.get(memory.source.thread)}
-          focused={item === memory.id}
-          onClose={onClose}
-        />
-      ))}
+    <div className="flex flex-col items-center gap-1.5 py-7 text-center">
+      <MemoryIcon className="mb-0.5 size-6 text-muted-foreground" />
+      {title}
+      <p className="max-w-80 text-xs text-muted-foreground">{hint}</p>
     </div>
   )
 }
 
-/** One rule, the rule alone; opened, why, when it applies and where it was learned, to
- * edit in place or delete to a line that puts it back. Opened at from the conversation, it is open, scrolls into view
- * and lights up a moment. */
+/** One rule, with when it applies and when it was learned under it; opened, its whole text, why, and the conversation
+ * it was learned in. Its menu edits it in place, or deletes it to a notice that puts it back. Opened at from the
+ * conversation, it is open, scrolls into view and lights up a moment. */
 function MemoryRow({
   memory,
   source,
@@ -117,19 +131,23 @@ function MemoryRow({
     setEditing(false)
   }
 
-  const label = "w-16 shrink-0 text-muted-foreground"
+  const remove = async () => {
+    if (await act(() => forgetMemory(memory.id))) memoryDeleted(t, memory.id)
+  }
+
   // The card's divider is on the outer box, square; the light, rounded, on the inner one, so the line runs straight.
   return (
     <div ref={row} data-memory={memory.id} className="py-1">
       <div
         className={cn(
-          "-mx-2 rounded-lg px-2 py-3 transition-colors duration-500 ease-(--ease-out) motion-reduce:transition-none",
+          "-mx-2 rounded-lg px-2 py-2 transition-colors duration-500 ease-(--ease-out) motion-reduce:transition-none",
           lit && "bg-muted"
         )}
       >
         {editing ? (
+          // Each field under its name, the buttons after them at the right.
           <form
-            className="flex flex-col gap-2 py-1 text-sm"
+            className="flex flex-col gap-3 py-1"
             onSubmit={(event) => {
               event.preventDefault()
               void save()
@@ -142,8 +160,8 @@ function MemoryRow({
                 ["applies", t.settings.memoryApplies],
               ] as const
             ).map(([key, name]) => (
-              <label key={key} className="flex items-center gap-3">
-                <span className={label}>{name}</span>
+              <label key={key} className="flex flex-col gap-1">
+                <span className="text-xs text-muted-foreground">{name}</span>
                 <Input
                   value={draft[key]}
                   autoFocus={key === "text"}
@@ -153,7 +171,7 @@ function MemoryRow({
                 />
               </label>
             ))}
-            <div className="flex justify-end gap-2 pt-1">
+            <div className="flex justify-end gap-2">
               <Button
                 type="button"
                 variant="ghost"
@@ -175,112 +193,85 @@ function MemoryRow({
             </div>
           </form>
         ) : (
-          <Collapsible open={open} onOpenChange={setOpen}>
-            <CollapsibleTrigger className="flex w-full items-center gap-3 rounded-sm text-left text-sm outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
-              {/* One line, cut short, until opened. */}
-              <span
-                className={cn(
-                  "min-w-0 flex-1",
-                  open ? "break-words" : "truncate"
-                )}
-              >
-                {memory.text}
-              </span>
-              <ChevronDownIcon
-                className={cn(
-                  "size-4 shrink-0 text-muted-foreground transition-[rotate] duration-200 ease-(--ease-out) motion-reduce:transition-none",
-                  open && "rotate-180"
-                )}
-              />
-            </CollapsibleTrigger>
-            <CollapsibleContent className={FOLD}>
-              <div className="flex items-start gap-4 pt-1.5">
-                <dl className="flex min-w-0 flex-1 flex-col gap-0.5 text-xs">
-                  {(
-                    [
-                      [t.settings.memoryWhy, memory.why],
-                      [t.settings.memoryApplies, memory.applies],
-                    ] as const
-                  ).map(
-                    ([name, value]) =>
-                      value && (
-                        <div key={name} className="flex gap-3">
-                          <dt className={label}>{name}</dt>
-                          <dd className="min-w-0 break-words">{value}</dd>
-                        </div>
-                      )
+          <div className="flex items-start gap-3">
+            <Collapsible
+              open={open}
+              onOpenChange={setOpen}
+              className="min-w-0 flex-1"
+            >
+              {/* Two lines at most until opened. */}
+              <CollapsibleTrigger className="block w-full rounded-sm text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/50">
+                <span
+                  className={cn("block break-words", !open && "line-clamp-2")}
+                >
+                  {memory.text}
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  {memory.applies} · {timeAgo(memory.updated)}
+                </span>
+              </CollapsibleTrigger>
+              <CollapsibleContent className={FOLD}>
+                <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-3 gap-y-1 pt-2 text-xs">
+                  {memory.why && (
+                    <>
+                      <dt className="text-muted-foreground">
+                        {t.settings.memoryWhy}
+                      </dt>
+                      <dd className="break-words">{memory.why}</dd>
+                    </>
                   )}
-                  <div className="flex gap-3">
-                    <dt className={label}>{t.settings.memoryFrom}</dt>
-                    <dd className="min-w-0 text-muted-foreground">
-                      <a
-                        href={runHref(memory.source.thread)}
-                        onClick={onClose}
-                        className="break-words underline decoration-dotted underline-offset-2 hover:text-foreground"
-                      >
-                        {source ?? t.settings.memorySource}
-                      </a>
-                    </dd>
-                  </div>
+                  <dt className="text-muted-foreground">
+                    {t.settings.memoryFrom}
+                  </dt>
+                  <dd>
+                    <a
+                      href={runHref(memory.source.thread)}
+                      onClick={onClose}
+                      className="break-words underline decoration-dotted underline-offset-2 hover:text-muted-foreground"
+                    >
+                      {source ?? t.settings.memorySource}
+                    </a>
+                  </dd>
                 </dl>
-                <div className="flex shrink-0 items-center gap-0.5">
-                  <RowButton
-                    label={t.settings.editMemory}
-                    onClick={() => {
-                      setDraft(memory)
-                      setEditing(true)
-                    }}
-                  >
-                    <PencilIcon className="size-4" />
-                  </RowButton>
-                  <RowButton
-                    label={t.settings.deleteMemory}
-                    disabled={busy}
-                    onClick={async () => {
-                      if (await act(() => forgetMemory(memory.id)))
-                        memoryDeleted(t, memory.id)
-                    }}
-                  >
-                    <TrashIcon className="size-4" />
-                  </RowButton>
-                </div>
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
+              </CollapsibleContent>
+            </Collapsible>
+            {/* Its icon ends where the card's words do. */}
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="ghost"
+                    size="icon-xs"
+                    aria-label={t.sidebar.more}
+                    className="-mt-1 -mr-1.5 text-muted-foreground"
+                  />
+                }
+              >
+                <EllipsisIcon className="size-4" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent>
+                <DropdownMenuItem
+                  onClick={() => {
+                    setDraft(memory)
+                    setEditing(true)
+                  }}
+                >
+                  <PencilIcon />
+                  {t.settings.editMemory}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  variant="destructive"
+                  disabled={busy}
+                  onClick={() => void remove()}
+                >
+                  <TrashIcon />
+                  {t.settings.deleteMemory}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         )}
       </div>
     </div>
-  )
-}
-
-function RowButton({
-  label,
-  disabled,
-  onClick,
-  children,
-}: {
-  label: string
-  disabled?: boolean
-  onClick: () => void
-  children: ReactNode
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger
-        render={
-          <Button
-            variant="ghost"
-            size="icon-xs"
-            aria-label={label}
-            className="text-muted-foreground"
-            disabled={disabled}
-            onClick={onClick}
-          />
-        }
-      >
-        {children}
-      </TooltipTrigger>
-      <TooltipContent side="bottom">{label}</TooltipContent>
-    </Tooltip>
   )
 }

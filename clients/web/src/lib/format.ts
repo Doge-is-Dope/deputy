@@ -1,7 +1,6 @@
 import type { ComponentType, SVGProps } from "react"
 
 import type { Cost, ErrorCode, Status } from "@/lib/api"
-import { EFFORTS } from "@/lib/efforts"
 import { locale, t } from "@/lib/i18n"
 import {
   CheckCircleIcon,
@@ -54,9 +53,9 @@ const keys = (text: unknown) =>
  * its target marked: coordinates mean nothing to whoever reads them. */
 export function describeAction(
   tool: string,
-  args: Args
+  args: Args,
+  say = t().actions
 ): { icon: Icon; label: string } {
-  const say = t().actions
   if (tool in say.clicks) {
     return {
       icon: ClickIcon,
@@ -107,11 +106,11 @@ export function describeAction(
       const steps = Array.isArray(args.actions) ? (args.actions as Args[]) : []
       return {
         icon: steps.length
-          ? describeAction(String(steps[0].action), steps[0]).icon
+          ? describeAction(String(steps[0].action), steps[0], say).icon
           : ToolIcon,
         label:
           steps
-            .map((step) => describeAction(String(step.action), step).label)
+            .map((step) => describeAction(String(step.action), step, say).label)
             .join(" → ") || tool,
       }
     }
@@ -275,12 +274,12 @@ export const formatNumber = (count: number) =>
     count
   )
 
-export function formatDuration(seconds: number): string {
+export function formatDuration(seconds: number, messages = t()): string {
   const total = Math.max(0, Math.round(seconds))
   const minutes = Math.floor(total / 60)
   if (minutes >= 60)
-    return t().durationHours(Math.floor(minutes / 60), minutes % 60)
-  return t().duration(minutes, total % 60)
+    return messages.durationHours(Math.floor(minutes / 60), minutes % 60)
+  return messages.duration(minutes, total % 60)
 }
 
 /** A model's name from the runtime's status; one it does not offer goes by its id, without the provider. */
@@ -298,9 +297,9 @@ export function agentName(agent: string): string {
   return names[agent] ?? agent
 }
 
-/** A reasoning effort's name; one not in EFFORTS goes by its id. */
+/** A reasoning effort's name; one the interface does not name goes by its id. */
 export const effortName = (effort: string) =>
-  EFFORTS.find(({ id }) => id === effort)?.name ?? effort
+  (t().settings.efforts as Record<string, string | undefined>)[effort] ?? effort
 
 /** US dollars: to the cent, or to a hundredth of one under a dollar; an amount that would round to nothing is under
  * that hundredth, not zero. */

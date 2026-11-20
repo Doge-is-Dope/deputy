@@ -3,6 +3,8 @@
 
 import { getStroke } from "perfect-freehand"
 
+import { randomId } from "@/lib/id"
+
 export type Point = [number, number]
 
 // Fixed sRGB colours, not the theme's: they go into the file.
@@ -190,7 +192,7 @@ function placeOf(lines: string[], name: string) {
  * was changed there is what shows. */
 export function commentsIn(draft: string, name: string): Comment[] {
   return placeOf(draft.split("\n"), name).found.map(({ x, y, text }) => ({
-    id: crypto.randomUUID(),
+    id: randomId(),
     kind: "comment",
     at: [within(x / 100), within(y / 100)], // on the picture, wherever a hand put it
     text,

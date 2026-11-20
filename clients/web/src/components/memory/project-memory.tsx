@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 
-import { MemoryList } from "@/components/memory/list"
+import { MemoryEmpty, MemoryList } from "@/components/memory/list"
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
 import { useT } from "@/lib/i18n"
 import {
@@ -11,7 +11,8 @@ import {
 } from "@/lib/memory"
 
 /** A project's rules, those only its conversations are told, from its menu or a line in the conversation: listed as
- * the settings list the user's own (MemoryList), to edit or delete. Outside the sidebar, beside the settings. */
+ * the settings list the user's own (MemoryList), to edit or delete, under a line saying where they are used. Outside
+ * the sidebar, beside the settings. */
 export function ProjectMemoryDialog({
   names,
 }: {
@@ -29,28 +30,38 @@ export function ProjectMemoryDialog({
   }, [opened.project])
   const rows = (list ?? []).filter((memory) => memory.project === shown)
   const close = () => openProjectMemory(null)
+  // Opened, the focus is on the window itself, as the settings' is, so the close button shows no ring until Tab.
+  const popup = useRef<HTMLDivElement>(null)
 
   return (
     <Dialog
       open={opened.project !== null}
       onOpenChange={(open) => !open && close()}
     >
-      {/* pb-1: the last rule's light 8px from the bottom (with its own 4), as from the sides, concentric (12 in 20). */}
-      <DialogContent className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col pt-2.5 pb-1 sm:max-w-lg">
+      <DialogContent
+        ref={popup}
+        initialFocus={popup}
+        className="flex max-h-[min(36rem,calc(100dvh-2rem))] flex-col gap-0 pt-2.5 sm:max-w-lg"
+      >
         <DialogTitle className="flex h-8 items-center pr-8">
           {t.sidebar.projectMemoryTitle(shown ? (names[shown] ?? "") : "")}
         </DialogTitle>
-        {list === null || rows.length === 0 ? (
+        <p className="mb-3 text-muted-foreground">
+          {t.sidebar.projectMemoryNote}
+        </p>
+        {list === null ? (
           <p className="text-muted-foreground">
-            {list !== null
-              ? t.settings.memoryEmpty
-              : failed
-                ? t.settings.memoryLoadFailed
-                : t.common.loading}
+            {failed ? t.settings.memoryLoadFailed : t.common.loading}
           </p>
+        ) : rows.length === 0 ? (
+          <MemoryEmpty
+            title={t.sidebar.projectMemoryEmpty}
+            hint={t.sidebar.projectMemoryEmptyHint}
+          />
         ) : (
-          // Scrolled within, the rules' light reaching into the dialog's padding, their words under its title's.
-          <div className="-mx-4 min-h-0 overflow-y-auto px-3">
+          // No card: the rules' words on the dialog's 16 column, under its title's. Scrolled within, the box reaches
+          // into the dialog's padding so a lit rule's light, 8 past its words, is not cut off.
+          <div className="-mx-4 min-h-0 divide-y overflow-y-auto px-4">
             <MemoryList memories={rows} item={opened.item} onClose={close} />
           </div>
         )}

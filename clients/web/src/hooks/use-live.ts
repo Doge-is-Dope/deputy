@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react"
 
 import { api } from "@/lib/api"
 
@@ -8,6 +14,13 @@ type LiveState = "connecting" | "live" | "retrying"
 // before trying again after a connection fails.
 const GATHER_MS = 3000
 const RETRY_MS = 3000
+
+function onVisibility(change: () => void) {
+  document.addEventListener("visibilitychange", change)
+  return () => document.removeEventListener("visibilitychange", change)
+}
+
+const pageVisible = () => document.visibilityState === "visible"
 
 /** Resolves once the browser has all its candidates, so one offer carries them (no trickle ICE). */
 function gathered(peer: RTCPeerConnection) {
@@ -41,8 +54,9 @@ export type ScreenPoint = { x: number; y: number }
 /**
  * The desktop over WebRTC: its video, and a channel for the user's input (which the runtime applies only
  * while the user has control) that also brings where the agent's pointer is, for the page to draw: screen
- * captures leave the pointer out. Reconnects on its own when the connection drops. `iceServers` is null until
- * the runtime's status says which to use.
+ * captures leave the pointer out. Reconnects on its own when the connection drops. Closes while the page is
+ * hidden, so the runtime encodes no video nobody sees. `iceServers` is null until the runtime's status says
+ * which to use.
  */
 export function useLive(iceServers: RTCIceServer[] | null) {
   const [stream, setStream] = useState<MediaStream | null>(null)
@@ -53,9 +67,10 @@ export function useLive(iceServers: RTCIceServer[] | null) {
   const channel = useRef<RTCDataChannel | null>(null)
   // A new array arrives with every status poll; reconnect only when the servers themselves change.
   const servers = iceServers === null ? null : JSON.stringify(iceServers)
+  const visible = useSyncExternalStore(onVisibility, pageVisible)
 
   useEffect(() => {
-    if (servers === null) return
+    if (servers === null || !visible) return
     let closed = false
     let timer = 0
     const ice: RTCIceServer[] = JSON.parse(servers)
@@ -129,7 +144,7 @@ export function useLive(iceServers: RTCIceServer[] | null) {
       channel.current = null
       peer.close()
     }
-  }, [servers, attempt])
+  }, [servers, attempt, visible])
 
   const send = useCallback((event: LiveInput) => {
     if (channel.current?.readyState === "open")

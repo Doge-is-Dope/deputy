@@ -237,17 +237,20 @@ class Trajectory:
         self.cut_calls += 1
 
     async def action(self, call: dict, result: ToolMessage, agent: str | None = None) -> None:
+        # Numbered before the record is written: calls of one turn can finish while another writes.
         if agent == MAIN:
             self.main_actions += 1
+            n = self.main_actions
         else:
             self.actions += 1
+            n = self.actions
         record = await self._record(result, self._named(agent, call["name"]))
         content = record["data"]["content"]
         screenshot = next((block["file"] for block in content if is_screenshot(block)), None) if isinstance(content, list) else None
         artifact = result.artifact if isinstance(result.artifact, dict) else {}
         self._event(
             "action", agent,
-            n=self.main_actions if agent == MAIN else self.actions,
+            n=n,
             id=call["id"],
             tool=call["name"],
             args=call["args"],

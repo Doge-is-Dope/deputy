@@ -2,7 +2,7 @@
 # relays the live view's WebRTC stream to the browser.
 FROM python:3.15-slim-trixie
 
-COPY --from=ghcr.io/astral-sh/uv:0.13.5 /uv /bin/
+COPY --from=ghcr.io/astral-sh/uv:0.13.9 /uv /bin/
 
 # FreeRDP comes from backports: trixie's 3.15 doesn't tell Windows the clipboard changed when the new text has
 # the same formats as the last, so Windows pastes the old text (fixed in 3.27).

@@ -1,8 +1,8 @@
 import { useEffect, useId, useState } from "react"
 
-import { MemoryList } from "@/components/memory/list"
+import { MemoryEmpty, MemoryList } from "@/components/memory/list"
 import { memoryFailed } from "@/components/memory/notices"
-import { Card, Section } from "@/components/settings/layout"
+import { Card, Group, Section } from "@/components/settings/layout"
 import { Button } from "@/components/ui/button"
 import { ActionDialog } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
@@ -62,22 +62,40 @@ export function MemoryPage({ onClose }: { onClose?: () => void }) {
         </Card>
 
         {list === null ? (
-          <p className="px-5 text-sm text-muted-foreground">
+          <p className="border-l border-transparent px-5 text-sm text-muted-foreground">
             {failed ? t.settings.memoryLoadFailed : t.common.loading}
           </p>
         ) : rows.length === 0 ? (
-          <p className="px-5 text-sm text-muted-foreground">
-            {t.settings.memoryEmpty}
-          </p>
+          <Group title={t.settings.memoryRules}>
+            <Card>
+              <MemoryEmpty
+                title={t.settings.memoryEmpty}
+                hint={t.settings.memoryEmptyHint}
+              />
+            </Card>
+          </Group>
         ) : (
           <>
+            <Group
+              title={
+                <>
+                  {t.settings.memoryRules}
+                  <span className="font-normal text-muted-foreground">
+                    {" "}
+                    · {rows.length}
+                  </span>
+                </>
+              }
+            >
+              <Card>
+                <MemoryList
+                  memories={rows}
+                  item={opened.item}
+                  onClose={onClose}
+                />
+              </Card>
+            </Group>
             <ResetMemory />
-            <MemoryList
-              className="px-5"
-              memories={rows}
-              item={opened.item}
-              onClose={onClose}
-            />
           </>
         )}
       </Section>
@@ -85,7 +103,7 @@ export function MemoryPage({ onClose }: { onClose?: () => void }) {
   )
 }
 
-/** 刪除全部記憶, between the switches and the rules while there are any: asked about first, as it cannot be undone.
+/** 刪除全部記憶, after the rules while there are any: asked about first, as it cannot be undone.
  * The user's own only: a project's are kept, in its menu. */
 function ResetMemory() {
   const t = useT()

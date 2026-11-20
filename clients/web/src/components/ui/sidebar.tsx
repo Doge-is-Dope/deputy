@@ -206,10 +206,11 @@ function Sidebar({
         )}
         {...props}
       >
+        {/* Clear, so the card's shadow shows through: the page is the sidebar's color already. */}
         <div
           data-sidebar="sidebar"
           data-slot="sidebar-inner"
-          className="flex size-full flex-col bg-sidebar"
+          className="flex size-full flex-col"
         >
           {children}
         </div>
@@ -263,9 +264,9 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        // Beside the sidebar, a card 4 from the window's other edges (layout.md). Its edge is drawn over its contents:
-        // a border would push them 1 in.
-        "relative isolate flex w-full flex-1 flex-col bg-background md:my-1 md:mr-1 md:h-[calc(100svh-0.5rem)] md:rounded-2xl md:after:pointer-events-none md:after:absolute md:after:inset-0 md:after:z-30 md:after:rounded-2xl md:after:border md:after:border-border",
+        // Beside the sidebar, a card 4 from the window's other edges (layout.md): a shadow in light, a line over its
+        // contents in dark. Squircle corners take a larger radius to look as round.
+        "relative isolate flex w-full flex-1 flex-col bg-background md:my-1 md:mr-1 md:h-[calc(100svh-0.5rem)] md:rounded-2xl md:shadow-[0_0_0_0.5px_rgb(0_0_0/0.05),0_0_8px_rgb(0_0_0/0.06)] md:[corner-shape:squircle] md:after:pointer-events-none md:after:absolute md:after:inset-0 md:after:z-30 md:after:rounded-[inherit] md:after:[corner-shape:inherit] md:supports-[corner-shape:squircle]:rounded-[2rem] dark:md:shadow-none dark:md:after:border dark:md:after:border-border",
         className
       )}
       {...props}

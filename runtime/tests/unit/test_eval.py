@@ -124,6 +124,15 @@ def test_a_version_server_never_replaces_one_with_a_run_going(evaluator, monkeyp
             pass
 
 
+def test_a_version_server_refuses_a_port_held_by_a_server_it_cannot_stop(evaluator, monkeypatch):
+    idle = {"active": None, "running": []}
+    monkeypatch.setattr(evaluator.Client, "status", lambda self: idle)  # still answering after stop_server
+    monkeypatch.setattr(evaluator, "stop_server", lambda: None)
+    with pytest.raises(SystemExit, match="holds port"):  # before it starts its own, which could not take the port
+        with evaluator.version_server("/tmp/ev-x/src"):
+            pass
+
+
 class SetupDesktop:
     """The Windows desktop as winsetup sees it: each screen differs, and each key pressed or text typed records who
     held the run lock then."""

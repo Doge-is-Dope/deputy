@@ -1482,6 +1482,24 @@ async def test_a_frame_waits_for_the_screen_to_change(owner, computer, control, 
     assert changed - still == pytest.approx(interval + 0.05, abs=1e-4)
 
 
+async def test_a_still_screen_is_resent_often_for_a_moment_then_rarely(computer, control, clock):
+    still = webrtc.KEEPALIVE_RESENDS + 2
+    changes = iter([False] * still + [True, False])
+    waits = []
+
+    async def next_change(seen, timeout):
+        waits.append(timeout)
+        return seen + 1 if next(changes) else seen
+
+    computer.next_change = next_change
+    track = ScreenTrack(computer, control)
+    for _ in range(still + 3):
+        await track.recv()
+
+    often, rarely = webrtc.KEEPALIVE_SECONDS, webrtc.IDLE_KEEPALIVE_SECONDS
+    assert waits == [often] * webrtc.KEEPALIVE_RESENDS + [rarely] * 2 + [rarely, often]
+
+
 def test_vp8_video_is_encoded_with_screen_settings_that_aiortc_keeps():
     encoder = rtcrtpsender.get_encoder(RTCRtpCodecParameters(mimeType="video/VP8", clockRate=90_000, payloadType=96))
     frame = VideoFrame.from_image(Image.new("RGB", (320, 200), "white"))

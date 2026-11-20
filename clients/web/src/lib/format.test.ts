@@ -16,13 +16,9 @@ vi.mock("@/lib/i18n", async () => {
 
 describe("formatDuration", () => {
   it("rounds to the second and leaves a whole minute's or hour's zero out", () => {
-    expect([4.6, 60, 75, 3600, 3660].map(formatDuration)).toEqual([
-      "5s",
-      "1m",
-      "1m 15s",
-      "1h",
-      "1h 1m",
-    ])
+    expect(
+      [4.6, 60, 75, 3600, 3660].map((seconds) => formatDuration(seconds))
+    ).toEqual(["5s", "1m", "1m 15s", "1h", "1h 1m"])
   })
 })
 

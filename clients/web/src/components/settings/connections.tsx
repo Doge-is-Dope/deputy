@@ -1,4 +1,3 @@
-import { useId } from "react"
 import { cn } from "cn"
 
 import { MonitorIcon, TerminalIcon } from "@/components/icons"
@@ -7,17 +6,14 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
-import { Switch } from "@/components/ui/switch"
 import { useCopy } from "@/hooks/use-copy"
 import { type Status } from "@/lib/api"
-import { setCommands, useChoices } from "@/lib/choices"
 import { connectionOf } from "@/lib/format"
 import { useT } from "@/lib/i18n"
 import { Card, Section } from "@/components/settings/layout"
 
-/** Show desktop, Windows-command and code-runner connection status, with copyable failure details; and whether the
- * agent may run commands on Windows (kept in this browser and sent with each message, lib/choices.ts). */
-export function Desktop({
+/** Show desktop, Windows-command and code-runner connection status, with copyable failure details. */
+export function Connections({
   status,
   offline,
 }: {
@@ -25,8 +21,6 @@ export function Desktop({
   offline: boolean
 }) {
   const t = useT()
-  const id = useId()
-  const { commands: allowed } = useChoices()
   const desktop = connectionOf(status, offline)
   const runner = status?.code_runner && !offline ? status.code_runner : null
   const commands =
@@ -53,29 +47,6 @@ export function Desktop({
             name={t.settings.windowsCommands}
             state={{ ...commands, label: state(commands.connected) }}
           />
-        )}
-        {commands && (
-          // Named, then what it does in a muted line under it, as the memory modes are; under the connection's name,
-          // which it belongs to.
-          <label className="flex min-h-14 cursor-pointer items-center gap-6 py-3">
-            <span className="ml-6.5 flex-1">
-              <span id={`${id}-commands`} className="block">
-                {t.settings.runCommands.label}
-              </span>
-              <span
-                id={`${id}-commands-description`}
-                className="mt-0.5 block text-xs text-muted-foreground"
-              >
-                {t.settings.runCommands.description}
-              </span>
-            </span>
-            <Switch
-              checked={allowed}
-              onCheckedChange={setCommands}
-              aria-labelledby={`${id}-commands`}
-              aria-describedby={`${id}-commands-description`}
-            />
-          </label>
         )}
         {runner && (
           <Connection

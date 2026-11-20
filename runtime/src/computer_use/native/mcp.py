@@ -101,16 +101,27 @@ class McpChannel:
         self._starting = asyncio.Lock()
 
     async def call(self, method: str, target: dict | None = None, args: dict | None = None, *, timeout: float = 5) -> dict:
-        identity = uuid.uuid4().hex
         if method in CONTROL:
-            message = {"version": 1, "id": identity, "method": method, "target": target, "args": {}}
+            message = {"version": 1, "id": uuid.uuid4().hex, "method": method, "target": target, "args": {}}
             return _result(await self._post("/connector/control", message, timeout))
-        await self._initialize(timeout)
         name = "windows_" + re.sub("[A-Z]", lambda upper: "_" + upper[0].lower(), method.replace(".", "_"))
-        params: dict = {"name": name, "arguments": args or {}}
+        return await self.call_tool(name, target, args or {}, timeout=timeout)
+
+    async def call_tool(self, name: str, target: dict | None, args: dict, *, timeout: float) -> dict:
+        await self._initialize(timeout)
+        params: dict = {"name": name, "arguments": args}
         if target is not None:
             params["_meta"] = {"windows-tools/target": target}
-        return _result(_reply(await self._rpc("tools/call", params, identity, timeout)).get("structuredContent"))
+        reply = await self._rpc("tools/call", params, uuid.uuid4().hex, timeout)
+        return _result(_reply(reply).get("structuredContent"))
+
+    async def tools(self, *, timeout: float = 5) -> list[dict]:
+        """The tools the host offers, as MCP lists them. Listing runs nothing."""
+        await self._initialize(timeout)
+        listed = _reply(await self._rpc("tools/list", {}, uuid.uuid4().hex, timeout)).get("tools")
+        if not isinstance(listed, list):
+            raise HostError("protocol_error", "The Windows Tools host listed no tools.", sent=False)
+        return listed
 
     async def _initialize(self, timeout: float) -> None:
         async with self._starting:

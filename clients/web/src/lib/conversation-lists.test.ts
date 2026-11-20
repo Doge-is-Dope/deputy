@@ -81,31 +81,42 @@ describe("lazy conversation lists", () => {
     await loader.refresh()
     expect(loader.get().pages?.get("p1")?.items).toEqual(items.slice(0, 10))
   })
-  it("loads opened lists together, and refreshes only once they are in", async () => {
-    const { source, loader } = fixture()
-    const fetch = source.conversations.getMockImplementation()!
-    const order: string[] = []
-    source.conversations.mockImplementation(async (query) => {
-      order.push(`${query?.project} asked`)
-      await new Promise((resolve) => setTimeout(resolve))
-      order.push(`${query?.project} answered`)
-      return fetch(query)
-    })
-    await loader.refresh()
-    order.length = 0
-    const reads = [loader.read("p1"), loader.read("p2")]
-    const refreshed = loader.refresh()
-    await Promise.all([...reads, refreshed])
-    expect(order.slice(0, 5)).toEqual([
-      "p1 asked",
-      "p2 asked",
-      "p1 answered",
-      "p2 answered",
-      "null asked",
-    ])
-    expect(loader.get().pages?.get("p1")?.items).toHaveLength(5)
-    expect(loader.get().pages?.get("p2")?.items).toHaveLength(5)
-  })
+  it.each([
+    ["p1", "p2"],
+    ["p2", "p1"],
+  ] as const)(
+    "refreshes only once both opened lists are in, %s answering first",
+    async (first, second) => {
+      const { loader, source, projects } = fixture()
+      await loader.refresh()
+      const fetch = source.conversations.getMockImplementation()!
+      const answer = new Map<string, () => void>()
+      const asked = new Promise<void>((bothAsked) =>
+        source.conversations.mockImplementation(async (query) => {
+          const project = query?.project
+          if (project && !answer.has(project))
+            await new Promise<void>((go) => {
+              answer.set(project, go)
+              if (answer.size === 2) bothAsked()
+            })
+          return fetch(query)
+        })
+      )
+      let loaded: string[] = []
+      source.projects.mockImplementationOnce(async () => {
+        loaded = [...loader.get().pages!.keys()].filter(Boolean) as string[]
+        return projects
+      })
+      const reads = { p1: loader.read("p1"), p2: loader.read("p2") }
+      const refreshed = loader.refresh()
+      await asked
+      answer.get(first)!()
+      await reads[first]
+      answer.get(second)!()
+      await refreshed
+      expect(loaded.sort()).toEqual(["p1", "p2"])
+    }
+  )
   it("asks for the recents together with the project names", async () => {
     const { source, loader, projects } = fixture()
     let answer: (projects: Project[]) => void = () => {}

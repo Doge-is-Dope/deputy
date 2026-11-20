@@ -63,6 +63,9 @@ def test_it_will_not_serve_another_address_with_no_sign_in_unless_told_to(settin
     assert "CU_AUTH" in open_to_anyone(settings, "0.0.0.0")
     told = type(settings)(_env_file=None, auth="none")  # CU_AUTH=none in so many words, as compose.yaml says it
     assert open_to_anyone(told, "0.0.0.0") is None
+    published = type(settings)(_env_file=None, auth="none", bind="0.0.0.0")  # CU_BIND set, CU_AUTH left as it was
+    assert "CU_BIND=0.0.0.0" in open_to_anyone(published, "0.0.0.0")
+    assert "CU_BIND" in open_to_anyone(published, "127.0.0.1")  # the web container still passes requests on
     token = settings.model_copy(update={"auth": "token", "auth_token": SecretStr("s3cret")})
     assert open_to_anyone(token, "0.0.0.0") is None
 

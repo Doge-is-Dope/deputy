@@ -6,11 +6,12 @@ set -euo pipefail
 # TURN server, which the browser reaches over one published TCP port. Browsers use a TURN server only with
 # credentials; a new password each start reaches the page through the API. It relays only to this container's own
 # addresses, where the live view's peer is: anyone with the password could otherwise send through it to any address.
+# And only over UDP, as that peer takes it: a TCP relay would open connections to the API's own port from here.
 export CU_TURN_PASSWORD="$(od -An -N16 -tx1 /dev/urandom | tr -d ' \n')"
 peers=(--denied-peer-ip=0.0.0.0-255.255.255.255 --denied-peer-ip=::-ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff)
 for address in $(hostname -i); do peers+=(--allowed-peer-ip="$address"); done
 turnserver -n --no-cli --no-tls --no-dtls --lt-cred-mech --user="live:$CU_TURN_PASSWORD" --realm=computer-use \
-  --listening-port=3478 --fingerprint --simple-log --log-file=/tmp/turnserver.log "${peers[@]}" &
+  --listening-port=3478 --no-tcp-relay --fingerprint --simple-log --log-file=/tmp/turnserver.log "${peers[@]}" &
 
 # The container lives as long as the API. init forwards stop signals and reaps helper processes.
 exec computer-use-runtime --host 0.0.0.0 "$@"

@@ -90,13 +90,6 @@ export const GearIcon = (props: IconProps) => (
   </Icon>
 )
 
-export const SunIcon = (props: IconProps) => (
-  <Icon {...props}>
-    <circle cx="12" cy="12" r="4" />
-    <path d="M12 2.75v1.5M12 19.75v1.5M2.75 12h1.5M19.75 12h1.5M5.46 5.46l1.06 1.06M17.48 17.48l1.06 1.06M5.46 18.54l1.06-1.06M17.48 6.52l1.06-1.06" />
-  </Icon>
-)
-
 export const SparkleIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M12 3.5Q13 11 20.5 12Q13 13 12 20.5Q11 13 3.5 12Q11 11 12 3.5Z" />

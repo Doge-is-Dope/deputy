@@ -149,6 +149,7 @@ export type ActionReason =
   | "tookControl"
   | "batched"
   | "unexplained"
+  | "earlierFailed"
   | "desktopBusy"
   | "taskLimit"
   | "computerInUse"

@@ -8,7 +8,7 @@ NoteCode = Literal[
 ]
 ActionReason = Literal[
     "userControl", "userActed", "screenChanged", "disconnected", "declined", "tookControl", "batched",
-    "unexplained", "desktopBusy", "taskLimit", "computerInUse", "tooManyTasks", "noTask",
+    "unexplained", "earlierFailed", "desktopBusy", "taskLimit", "computerInUse", "tooManyTasks", "noTask",
 ]
 
 CONFIRM_FIELDS = ("needs_confirmation", "consequence")

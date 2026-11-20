@@ -34,13 +34,13 @@ The eval and web servers share stored runs and the desktop lock. Only one run ca
 
 ## Tasks
 
-[tasks.jsonl](tasks.jsonl) holds 22 tasks, one per line. `eval/ev tasks excel-sort` shows one task in full, with the
+[tasks.jsonl](tasks.jsonl) holds 24 tasks, one per line. `eval/ev tasks excel-sort` shows one task in full, with the
 PowerShell that sets it up.
 
 | Kind | Tasks |
 |---|---|
 | Windows Agent Arena | notepad-count, calc-days, paint-canvas, explorer-archive, explorer-restore, storage-sense, chrome-pdf |
-| Back-office web pages | web-form, web-reconcile (a page against a spreadsheet), web-paged-lookup (an ID from one page, its phone from a 250-page table) |
+| Back-office web pages | web-form, web-form-chrome (the same in Chrome, for the browser tools), web-reconcile (a page against a spreadsheet), web-multi-page (four facts from four pages), web-paged-lookup (an ID from one page, its phone from a 250-page table) |
 | OSWorld Windows (Office) | excel-sort, excel-dropdown, word-subscript, ppt-duplicate, bookkeeping, paper-authors |
 | Typing Traditional Chinese | word-zh |
 | Infeasible: the right answer is "this cannot be done" | missing-file, calc-lunar; scored apart |

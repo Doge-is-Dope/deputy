@@ -10,7 +10,7 @@ from langchain_core.messages import HumanMessage
 
 from computer_use.agent.inbox import Inbox
 from computer_use.middleware.common import raise_if_stopped, retrying_failed_streams
-from computer_use.middleware.subagent import HandOverAtLimit, SubagentMiddleware
+from computer_use.middleware.subagent import closing, HandOverAtLimit, SubagentMiddleware
 from computer_use.agent.trajectory import Trajectory
 from computer_use.config import RunChoices, Settings
 from computer_use.agent.blackboard import Blackboard, Board
@@ -118,7 +118,9 @@ class Subagent:
             self.stop_reason = guard.stopped
         else:
             self.stop_reason = "replied"
-        return own.text.strip() if own is not None and self.stop_reason in ("replied", "step_limit") else ""
+        if self.stop_reason not in ("replied", "step_limit") or own is None:
+            return ""
+        return closing(own) or own.text.strip()
 
     def how(self) -> str:
         """How the task ended, in the main agent's words."""

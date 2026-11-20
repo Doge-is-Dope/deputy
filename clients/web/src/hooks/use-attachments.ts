@@ -8,6 +8,7 @@ import {
 import { showError } from "@/components/notice"
 import { editDraft } from "@/hooks/use-drafts"
 import { useT } from "@/lib/i18n"
+import { randomId } from "@/lib/id"
 import {
   MAX_FILES,
   failure,
@@ -88,7 +89,7 @@ export function useAttachments(draft: string) {
   }
 
   // A tile for the file, as it starts to upload; its preview comes once made.
-  function taken(file: File, key: string = crypto.randomUUID()): Attachment {
+  function taken(file: File, key: string = randomId()): Attachment {
     files.set(key, file)
     const image = isPhoto(file.type)
     if (image)

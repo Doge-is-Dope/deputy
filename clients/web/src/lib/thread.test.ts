@@ -862,6 +862,31 @@ describe("v4 event projection", () => {
       expect(doingNow(task)).toBe("Waiting for an answer")
     })
 
+    it("takes a task's result from finish_step's reply, which ends it", () => {
+      const thread = buildThread([
+        fixture[0],
+        {
+          type: "task",
+          state: "started",
+          id: "t1",
+          agent: "computer",
+          brief: "B",
+          title: "",
+          time: 95,
+        },
+        {
+          type: "model",
+          text: "",
+          tool_calls: [
+            { name: "finish_step", args: { steps: ["1"], reply: "Saved it." } },
+          ],
+          task: "t1",
+          time: 101,
+        },
+      ])
+      expect([...thread.tasks.values()][0].result).toBe("Saved it.")
+    })
+
     it("reads the plan from its newest snapshot, in any order of logs, not as work handed over", () => {
       const thread = buildThread([
         fixture[0],

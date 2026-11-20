@@ -58,8 +58,9 @@ const memories = store<Store>({
   loading: false,
   forgotten: new Map(),
 })
-const byCreated = (list: Memory[]) =>
-  list.toSorted((a, b) => a.created - b.created)
+// Newest first, as the lists show them.
+const newestFirst = (list: Memory[]) =>
+  list.toSorted((a, b) => b.created - a.created)
 let loading: Promise<void> | null = null
 
 /** Loads the list again; one load at a time, which every caller meanwhile waits for. */
@@ -69,7 +70,7 @@ export function loadMemories(): Promise<void> {
   loading = memoryApi
     .list()
     .then(
-      (list) => ({ list, failed: false }),
+      (list) => ({ list: newestFirst(list), failed: false }),
       () => ({ failed: true })
     )
     .then((loaded) => {
@@ -113,7 +114,7 @@ export async function restoreMemory(id: string) {
   forgotten.delete(id)
   memories.set({
     ...now,
-    list: byCreated([
+    list: newestFirst([
       ...(now.list ?? []).filter((each) => each.id !== id),
       restored,
     ]),
